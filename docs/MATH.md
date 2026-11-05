@@ -147,3 +147,6 @@ recovery_factor     = net / (max_dd × starting_balance)
 20. R multiple ของ paper broker ใช้ SL ที่ถูกเลื่อน (trailing/BE) เป็นตัวหาร → ใช้ SL ตอนเปิดไม้ ✅
 21. ถ้าราคา fill gap ไปจนชิด stop หรือเลย TP1 → ข้ามไม้นั้นและรายงานจำนวนที่ข้าม ✅
 22. `max_spread` ใน gate เทียบกับ spread ปัจจุบัน แต่ spread ใน backtest ถูก fix ค่าเดียว → ระบุใน assumptions
+23. `total_costs` รายงานแค่ค่าคอมมิชชั่น (XAUUSD = 0) ทั้งที่ราคา fill มี spread 12.5 points ฝังอยู่
+    → บันทึกต้นทุนฝั่งเข้าเป็นเงินด้วย ทำให้ `gross_pnl − pnl == costs` เสมอ (ทั้ง paper และ backtest) ✅
+    ข้อควรระวัง: ต้นทุนนี้อยู่ในราคาแล้ว จึงหักจาก balance ซ้ำไม่ได้ (มี test ล็อกไว้)

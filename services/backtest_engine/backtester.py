@@ -68,6 +68,7 @@ class SimPosition:
     signal_id: str
     realized: float = 0.0
     costs: float = 0.0
+    entry_cost: float = 0.0
     weighted_exit: float = 0.0
     closed_volume: float = 0.0
     mfe_points: float = 0.0
@@ -283,7 +284,12 @@ class Backtester:
                 risk_amount=round(actual_risk, 2) or plan.risk_amount,
                 trade_mode=TradeMode.manual, strategy=signal.strategy,
                 signal_id=signal.id,
+                # The spread half and the slippage are already inside `entry`, so
+                # the money they cost is invisible unless it is booked here.
+                entry_cost=round((spread_price / 2 + request.slippage_points * spec.point)
+                                 / spec.point * spec.value_per_point_per_lot * qty, 2),
             )
+            pos.costs += pos.entry_cost
             sim["trades_today"] += 1
             sim["trades_week"] += 1
 
@@ -491,7 +497,10 @@ class Backtester:
         avg_exit = pos.weighted_exit / pos.closed_volume if pos.closed_volume else pos.entry
         sign = 1 if pos.direction == Direction.up else -1
         points = (avg_exit - pos.entry) * sign / spec.point
-        gross = (avg_exit - pos.entry) * sign * spec.contract_size * pos.closed_volume
+        # Net P&L already carries the spread inside the entry price; adding the
+        # booked costs back gives the cost-free result, so gross - pnl == costs.
+        net = pos.realized
+        gross = net + pos.costs
         return TradeRecord(
             ticket=f"BT{pos.entry_bar}-{pos.signal_id[-6:]}",
             symbol=spec.symbol, direction=pos.direction, volume=round(pos.closed_volume, 4),

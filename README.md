@@ -34,7 +34,7 @@
 ## Quickstart (Linux/macOS/Windows, ไม่ต้องมี MT5)
 
 ```bash
-python3 -m pip install fastapi uvicorn pydantic numpy pandas scikit-learn lightgbm PyJWT joblib pyyaml pytest httpx
+python3 -m pip install -r requirements.txt   # เวอร์ชันที่ใช้จริงตอนพัฒนา
 
 cd apps/web-dashboard && npm install && npm run build && cd ../..
 

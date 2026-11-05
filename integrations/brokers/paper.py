@@ -62,6 +62,7 @@ class PaperPosition:
     closed_volume: float = 0.0
     weighted_exit: float = 0.0
     max_favorable_points: float = 0.0
+    entry_cost: float = 0.0
     breakeven_done: bool = False
     trailing_active: bool = False
     partials_done: int = 0
@@ -237,6 +238,10 @@ class PaperBroker(BrokerAdapter):
             ticket=ticket, symbol=request.symbol, spec=spec, direction=direction, volume=volume,
             initial_volume=volume, entry=price, sl=sl, tp=tp, sl_initial=sl,
             open_time=int(self.clock()),
+            # Half the spread plus the slippage is already inside `price`; book the
+            # money here so `costs` means the same thing live as in the backtest.
+            entry_cost=round((spec.spread_typical_points / 2.0 * spec.point + slip)
+                             / spec.point * spec.value_per_point_per_lot * volume, 2),
             comment=request.comment, signal_id=request.signal_id, mode=request.mode.value,
         )
         self._positions[ticket] = pos
@@ -315,8 +320,11 @@ class PaperBroker(BrokerAdapter):
     def _realize(self, pos: PaperPosition, price: float, volume: float, reason: str) -> TradeRecord | None:
         price = pos.spec.round_price(price)
         pnl = gross_pnl(pos.direction, pos.entry, price, volume, pos.spec)
-        costs = commission_for(volume, pos.spec) if self.commission_enabled else 0.0
-        net = pnl - costs
+        # Only the commission actually leaves the account: the spread/slippage is
+        # already baked into `pos.entry`, so it is reported as a cost but must not
+        # be deducted a second time here.
+        commission = commission_for(volume, pos.spec) if self.commission_enabled else 0.0
+        net = pnl - commission
         self.balance += net
         pos.realized_pnl += net
         pos.closed_volume += volume
@@ -327,6 +335,7 @@ class PaperBroker(BrokerAdapter):
         if pos.volume <= 1e-6:
             avg_exit = pos.weighted_exit / pos.closed_volume if pos.closed_volume else price
             total_costs = commission_for(pos.closed_volume, pos.spec) if self.commission_enabled else 0.0
+            total_costs += pos.entry_cost
             sign = 1.0 if pos.direction == Direction.up else -1.0
             points = (avg_exit - pos.entry) * sign / pos.spec.point
             # R is measured against the stop the trade was opened with; once

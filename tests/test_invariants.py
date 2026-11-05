@@ -242,3 +242,31 @@ def test_gateway_close_contract_is_uniform(tmp_path, monkeypatch):
     rows = gw.db.query("SELECT ticket FROM trades WHERE ticket = ?", (ticket,))
     assert len(rows) == 1, "a closed trade must be journaled exactly once"
     rt.stop()
+
+
+def test_costs_are_reported_and_gross_minus_net_equals_costs():
+    """Spread + slippage must show up as money. The simulated broker used to
+    report $0.00 of costs because only commission was counted, while the fill
+    price silently carried 12.5 points of spread."""
+    from packages.shared_schemas.models import OrderRequest, OrderSide
+    from services.api_gateway.state import TradingRuntime
+
+    rt = TradingRuntime()
+    adapter = rt.registry.get("connext-demo")
+    spec = adapter.symbol_spec("XAUUSD")
+    tick = adapter.ticker("XAUUSD")
+    before = adapter.account_info().balance
+    opened = adapter.order_send(OrderRequest(
+        symbol="XAUUSD", side=OrderSide.buy, volume=0.2,
+        sl=round(tick.bid - 3.0, spec.digits), tp=round(tick.bid + 3.0, spec.digits)))
+    assert opened.ticket
+    trade = adapter.close_position(opened.ticket, comment="test")
+    expected = (spec.spread_typical_points / 2 * spec.point
+                + abs(trade.entry - (tick.bid + 0.0)) * 0)  # spread half at minimum
+    assert trade.costs > 0.0, "spread cost must not be reported as zero"
+    # 12.5 points of spread x $1/point/lot x 0.2 lot = $2.50 (+ slippage)
+    assert trade.costs >= expected / spec.point * spec.value_per_point_per_lot * 0.2 * 0.9
+    assert trade.gross_pnl - trade.pnl == pytest.approx(trade.costs, abs=0.02)
+    assert adapter.account_info().balance == pytest.approx(before + trade.pnl, abs=0.02), \
+        "the spread is already inside the fill price; it must not be charged twice"
+    rt.stop()
