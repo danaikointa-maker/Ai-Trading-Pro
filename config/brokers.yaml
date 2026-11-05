@@ -1,0 +1,169 @@
+# ---------------------------------------------------------------------------
+# Broker profiles + real symbol contract specifications.
+#
+# IMPORTANT: point size / tick size / contract size / stops level are NOT
+# universal. They are read from the live MT5 account when the adapter is
+# connected (symbol_info). The values below are the *declared* specs used by
+# the offline simulator and as a sanity baseline. The UI always shows which
+# source produced the numbers (declared vs broker).
+# ---------------------------------------------------------------------------
+default_broker: connext-demo
+
+brokers:
+  - id: connext-demo
+    label: Connext (Demo)
+    adapter: simulated_mt5            # simulated_mt5 | mt5 | generic_mt5
+    server: Connext-Demo
+    account_type: demo
+    regulated_note: >
+      Connext states its FSA (St. Vincent & the Grenadines) licence does not
+      directly regulate Forex activity, and the Bank of Thailand has warned
+      about unlicensed offshore FX platforms. Demo only until legal and
+      compensation status are verified for Thailand.
+    live_allowed: false
+    leverage: 500
+    symbols:
+      XAUUSD:
+        description: Gold vs US Dollar
+        digits: 2
+        point: 0.01
+        tick_size: 0.01
+        contract_size: 100
+        min_lot: 0.01
+        max_lot: 50.0
+        lot_step: 0.01
+        stops_level_points: 0
+        freeze_level_points: 0
+        spread_typical_points: 25
+        commission_per_lot_round_turn: 0.0
+        swap_long_per_lot: -21.4
+        swap_short_per_lot: 9.1
+        margin_currency: USD
+        profit_currency: USD
+        trading_allowed: true
+      XAGUSD:
+        description: Silver vs US Dollar
+        digits: 3
+        point: 0.001
+        tick_size: 0.001
+        contract_size: 5000
+        min_lot: 0.01
+        max_lot: 20.0
+        lot_step: 0.01
+        stops_level_points: 0
+        freeze_level_points: 0
+        spread_typical_points: 30
+        commission_per_lot_round_turn: 0.0
+        swap_long_per_lot: -3.2
+        swap_short_per_lot: 1.1
+        margin_currency: USD
+        profit_currency: USD
+        trading_allowed: true
+      EURUSD:
+        description: Euro vs US Dollar
+        digits: 5
+        point: 0.00001
+        tick_size: 0.00001
+        contract_size: 100000
+        min_lot: 0.01
+        max_lot: 100.0
+        lot_step: 0.01
+        stops_level_points: 0
+        freeze_level_points: 0
+        spread_typical_points: 8
+        commission_per_lot_round_turn: 7.0
+        swap_long_per_lot: -7.6
+        swap_short_per_lot: 2.4
+        margin_currency: USD
+        profit_currency: USD
+        trading_allowed: true
+
+  - id: connext-live
+    label: Connext (Live)
+    adapter: mt5
+    server: Connext-Live
+    account_type: live
+    regulated_note: Live trading is disabled by policy until an explicit legal review is signed off.
+    live_allowed: false
+    leverage: 500
+    symbols:
+      XAUUSD:
+        description: Gold vs US Dollar
+        digits: 2
+        point: 0.01
+        tick_size: 0.01
+        contract_size: 100
+        min_lot: 0.01
+        max_lot: 50.0
+        lot_step: 0.01
+        stops_level_points: 0
+        freeze_level_points: 0
+        spread_typical_points: 25
+        commission_per_lot_round_turn: 0.0
+        swap_long_per_lot: -21.4
+        swap_short_per_lot: 9.1
+        margin_currency: USD
+        profit_currency: USD
+        trading_allowed: true
+    symbol_mapping:
+      XAUUSD: GOLD
+
+  # Second broker used to demonstrate that "500 points" is not universal:
+  # point = 0.001 here, so 500 points is only $0.50 of price movement.
+  - id: broker-b-demo
+    label: Broker B (Demo)
+    adapter: simulated_mt5
+    server: BrokerB-Demo
+    account_type: demo
+    regulated_note: Placeholder for an additional MT5 broker profile.
+    live_allowed: false
+    leverage: 200
+    symbols:
+      XAUUSDm:
+        description: Gold micro (alternate point size)
+        digits: 3
+        point: 0.001
+        tick_size: 0.001
+        contract_size: 100
+        min_lot: 0.01
+        max_lot: 20.0
+        lot_step: 0.01
+        stops_level_points: 0
+        freeze_level_points: 0
+        spread_typical_points: 28
+        commission_per_lot_round_turn: 6.0
+        swap_long_per_lot: -18.0
+        swap_short_per_lot: 6.0
+        margin_currency: USD
+        profit_currency: USD
+        trading_allowed: true
+
+  - id: generic-mt5
+    label: Generic MT5 (template)
+    adapter: generic_mt5
+    server: YourBroker-Demo
+    account_type: demo
+    regulated_note: Template profile — fill in your broker's server and symbol specs.
+    live_allowed: false
+    leverage: 100
+    symbol_mapping:
+      XAUUSD: XAUUSD
+    symbols:
+      XAUUSD:
+        description: Gold vs US Dollar
+        digits: 2
+        point: 0.01
+        tick_size: 0.01
+        contract_size: 100
+        min_lot: 0.01
+        max_lot: 50.0
+        lot_step: 0.01
+        stops_level_points: 0
+        freeze_level_points: 0
+        spread_typical_points: 30
+        commission_per_lot_round_turn: 0.0
+        swap_long_per_lot: -20.0
+        swap_short_per_lot: 8.0
+        margin_currency: USD
+        profit_currency: USD
+        trading_allowed: true

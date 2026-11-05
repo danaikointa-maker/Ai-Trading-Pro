@@ -1,0 +1,96 @@
+# ---------------------------------------------------------------------------
+# Strategy catalogue + signal scoring / confluence configuration.
+# Scores are 0-100 heuristics, NOT calibrated win probabilities.
+# ---------------------------------------------------------------------------
+scoring:
+  weights:
+    trend_alignment: 20
+    market_structure: 15
+    zone_confluence: 20
+    forecast_edge: 20
+    momentum_quality: 10
+    reward_risk: 15
+  thresholds:
+    strong: 85
+    valid: 70
+    weak: 50
+  min_score_to_execute: 70
+  require_calibrated_probability: true
+  min_tp_before_sl_probability: 0.42
+  max_allowed_rr_deficit: 0.0
+
+zone_engine:
+  max_supports: 5
+  max_resistances: 5
+  min_required: 3
+  cluster_tolerance_atr: 0.45
+  min_quality_score: 0.45
+  high_quality_min_families: 3
+  high_quality_min_weight: 0.50
+  touch_history_days: 5
+  pivot_timeframe: D1
+  fibonacci_levels: [0.236, 0.382, 0.5, 0.618, 0.786]
+  volume_profile_bins: 60
+
+  # Independent evidence families and their weight. Families that derive from
+  # the same raw input are grouped so they cannot double-count each other.
+  families:
+    structure_swing: 0.20
+    order_block: 0.16
+    fair_value_gap: 0.14
+    pivot: 0.10
+    fibonacci: 0.10
+    volume_profile: 0.12
+    vwap: 0.06
+    ema: 0.06
+    liquidity_equal_levels: 0.06
+    round_number: 0.04
+    reaction_history: 0.12
+
+strategies:
+  - id: trend_pullback
+    label: Trend Pullback
+    enabled: true
+    regimes: [trending_up, trending_down]
+    description: H1/H4 bias, enter on M5 pullback into a confirmed zone with structure intact.
+    min_score: 78
+    stop: structure
+    targets: adaptive
+
+  - id: breakout_continuation
+    label: Breakout Continuation
+    enabled: true
+    regimes: [trending_up, trending_down, high_volatility]
+    description: BOS confirmed with expanding volume, enter on the retest of the broken level.
+    min_score: 80
+    stop: structure
+    targets: adaptive
+
+  - id: range_reversion
+    label: Range Reversion
+    enabled: true
+    regimes: [sideways]
+    description: Fade the edges of a validated range back toward the mid, no trades in the middle.
+    min_score: 82
+    stop: zone
+    targets: fixed
+
+  - id: momentum_continuation
+    label: Momentum Continuation
+    enabled: false
+    regimes: [high_volatility]
+    description: Disabled until walk-forward results justify it (see docs/accuracy.md).
+    min_score: 85
+    stop: atr
+    targets: fixed
+
+regime_detector:
+  adx_trending: 23
+  adx_sideways: 18
+  atr_percentile_high: 0.80
+  news_shock_atr_z: 2.5
+
+news:
+  # Placeholder calendar; in production wire a real economic calendar feed.
+  lockout_currencies: [USD]
+  high_impact_tags: [FOMC, NFP, CPI, PPI, FED, RATE]

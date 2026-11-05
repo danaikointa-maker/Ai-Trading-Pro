@@ -1,0 +1,86 @@
+# ---------------------------------------------------------------------------
+# Risk Engine configuration. The Risk Engine can ALWAYS veto the AI.
+# Values below are conservative DEMO defaults, not a promise of profitability.
+# ---------------------------------------------------------------------------
+profile: demo                       # demo | live (live additionally requires allow_full_auto)
+
+limits:
+  risk_per_trade_pct: 0.50          # of equity, used to size the lot from the stop distance
+  max_daily_loss_pct: 2.00          # daily kill switch
+  max_weekly_loss_pct: 5.00
+  max_drawdown_pct: 10.00           # from peak equity -> hard stop
+  max_open_trades: 1
+  max_open_per_symbol: 1
+  max_consecutive_losses: 3         # then cooldown
+  cooldown_minutes: 20
+  max_spread_points: 60             # per-symbol override allowed in brokers.yaml
+  max_slippage_points: 15
+  max_exposure_lots: 1.00           # total open volume
+  max_leverage_notional_x_equity: 5.0
+  min_free_margin_pct: 30.0
+  min_reward_risk: 1.30             # net of spread + commission
+  max_weekly_trades: 60
+  data_staleness_seconds: 30
+  news_lockout_enabled: true
+  news_window_before_minutes: 30
+  news_window_after_minutes: 15
+  abnormal_volatility_atr_pct: 3.0  # ATR as % of price -> halt new entries
+  daily_reset_timezone: Asia/Bangkok
+
+stops:
+  sl_atr_multiplier: 1.5            # structural stop = swing +/- this * ATR
+  sl_min_points: 150
+  sl_max_points: 1200
+  use_structure_stop: true
+  include_spread_in_rr: true
+
+targets:
+  mode: adaptive                    # fixed | adaptive
+  fixed_points: [500, 750, 1000]
+  min_points: 500
+  max_points: 1000
+  adaptive:
+    atr_multiplier: 2.2             # TP1 distance target in ATR
+    respect_zones: true             # never place a target beyond a strong opposing zone
+    zone_buffer_atr: 0.35
+  ladder:
+    enabled: true
+    closes_pct: [40, 30, 30]        # TP1 / TP2 / TP3
+    lot_step_aware: true            # skip a level if the lot cannot be split legally
+
+management:
+  break_even:
+    enabled: true
+    trigger_points: 250             # move stop to entry + costs after this much profit
+    lock_points: 30                 # small buffer above entry
+  trailing:
+    enabled: true
+    start_after_points: 500
+    distance_points: 300
+    step_points: 50
+    mode: atr                       # atr | points
+    atr_multiplier: 1.0
+  partials:
+    enabled: true                   # close 40/30/30 at the ladder levels
+  time_exit:
+    enabled: true
+    max_minutes_in_trade: 240
+    close_if_profit_below_points: 50
+  smart_exit:
+    enabled: true
+    close_on_opposite_choch: true
+    close_on_regime_flip: true
+    close_if_forecast_edge_below: 0.0
+
+kill_switch:
+  enabled: true
+  flatten_on_breach: true
+  require_manual_reset: true
+
+full_auto:
+  enabled: false                    # requires NO7_ALLOW_FULL_AUTO=true AND a demo account
+  allowed_account_types: [demo]
+  min_signal_score: 85
+  min_calibrated_probability: 0.55
+  require_model_approved: true
+  max_trades_per_day: 5
