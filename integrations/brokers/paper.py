@@ -16,6 +16,7 @@ import numpy as np
 import pandas as pd
 
 from integrations.brokers.base import BrokerAdapter, BrokerError
+from integrations.brokers.fx import mid_of_bid_ask, resolve_quote_rate
 from packages.shared_schemas.models import (
     AccountInfo,
     Direction,
@@ -33,8 +34,9 @@ from services.market_data.simulator import SyntheticFeed, resample
 
 
 def gross_pnl(direction: Direction, entry: float, exit_price: float, volume: float, spec: SymbolSpec) -> float:
+    """Profit in the *account* currency (the quote currency is converted)."""
     sign = 1.0 if direction == Direction.up else -1.0
-    return sign * (exit_price - entry) * spec.contract_size * volume
+    return sign * (exit_price - entry) * spec.contract_size * volume * spec.quote_to_account_rate
 
 
 def commission_for(volume: float, spec: SymbolSpec) -> float:
@@ -108,6 +110,7 @@ class PaperBroker(BrokerAdapter):
         self.last_tick_at = 0.0
         self.clock = clock or time.time
         self._market_map = self._build_market_map(profile)
+        self.account_currency = str(profile.get("account_currency", "USD")).upper()
 
     # ------------------------------------------------------------------ maps
     @staticmethod
@@ -133,7 +136,22 @@ class PaperBroker(BrokerAdapter):
     def symbol_spec(self, symbol: str) -> SymbolSpec:
         if symbol not in self._specs:
             raise BrokerError(f"symbol {symbol} not available on {self.label}")
-        return self._specs[symbol].model_copy()
+        spec = self._specs[symbol].model_copy()
+        rate, source = self._quote_rate(spec)
+        spec.quote_to_account_rate = rate
+        spec.rate_source = source  # type: ignore[assignment]
+        return spec
+
+    def _quote_rate(self, spec: SymbolSpec) -> tuple[float, str]:
+        """Resolve the profit-currency -> account-currency rate from visible quotes."""
+
+        def price_of(name: str) -> float | None:
+            if name not in self._specs:
+                return None
+            tick = self.ticker(name)
+            return mid_of_bid_ask(tick.bid, tick.ask)
+
+        return resolve_quote_rate(spec.profit_currency, self.account_currency, price_of)
 
     def account_info(self) -> AccountInfo:
         equity = self.balance + self._floating_total()
@@ -143,7 +161,7 @@ class PaperBroker(BrokerAdapter):
             server=self.server,
             account_type=self.account_type,
             login=f"SIM-{self.id[:6].upper()}",
-            currency="USD",
+            currency=self.account_currency,
             balance=round(self.balance, 2),
             equity=round(equity, 2),
             margin=0.0,

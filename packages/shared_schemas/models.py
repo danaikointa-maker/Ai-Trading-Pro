@@ -117,23 +117,31 @@ class SymbolSpec(BaseModel):
     swap_long_per_lot: float = 0.0
     swap_short_per_lot: float = 0.0
     profit_currency: str = "USD"
+    # Multiplier that turns one unit of `profit_currency` into one unit of the
+    # account currency. 1.0 means "same currency" (or that no rate was needed).
+    quote_to_account_rate: float = 1.0
+    rate_source: Literal["identity", "ticker", "unknown"] = "identity"
     source: Literal["broker", "declared"] = "declared"
 
     @property
     def value_per_point_per_lot(self) -> float:
         """Account-currency profit for a 1.0 point move on 1.0 lot."""
-        return self.point * self.contract_size
+        return self.point * self.contract_size * self.quote_to_account_rate
 
     @property
     def quote_in_account_currency(self) -> bool:
-        """True when no FX conversion is needed to value 1 point of P&L.
-
-        ``value_per_point_per_lot`` assumes the quote currency is the account
-        currency (XAUUSD, EURUSD on a USD account). Cross pairs such as USDJPY
-        on a USD account need a live conversion rate, which this build does not
-        fetch — callers must treat those symbols as unsupported for sizing.
-        """
+        """True when one point of P&L is already denominated in the account currency."""
         return self.profit_currency.upper() == "USD"
+
+    @property
+    def sizing_blocked(self) -> bool:
+        """A cross pair whose FX rate could not be resolved must not be sized.
+
+        Applying an assumed 1.0 rate to, say, USDJPY would overstate the value of
+        a point by the whole exchange rate (about 150x), so the planner is told to
+        stand down instead.
+        """
+        return not self.quote_in_account_currency and self.rate_source == "unknown"
 
     def round_price(self, price: float) -> float:
         """Snap to the broker's legal price grid (tick size), not just digits."""

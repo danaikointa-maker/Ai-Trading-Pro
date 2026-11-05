@@ -20,6 +20,7 @@ from typing import Any
 import pandas as pd
 
 from integrations.brokers.base import BrokerAdapter, BrokerError
+from integrations.brokers.fx import resolve_quote_rate
 from packages.shared_schemas.models import (
     AccountInfo,
     Direction,
@@ -150,9 +151,12 @@ class MT5Broker(BrokerAdapter):
             raise BrokerError(f"symbol_info({broker_symbol}) failed: {mt5.last_error()}")
         if not info.visible:
             mt5.symbol_select(broker_symbol, True)
+        rate, rate_source = self._quote_rate(str(info.currency_profit))
         return SymbolSpec(
             symbol=symbol,
             description=info.description,
+            quote_to_account_rate=rate,
+            rate_source=rate_source,
             digits=int(info.digits),
             point=float(info.point),
             tick_size=float(info.trade_tick_size or info.point),
@@ -167,6 +171,25 @@ class MT5Broker(BrokerAdapter):
             profit_currency=info.currency_profit,
             source="broker",
         )
+
+    def _quote_rate(self, profit_currency: str) -> tuple[float, str]:
+        """Resolve profit currency -> account currency using visible MT5 quotes."""
+        account_currency = "USD"
+        try:
+            account = mt5.account_info()
+            if account is not None and getattr(account, "currency", None):
+                account_currency = str(account.currency)
+        except Exception:  # noqa: BLE001 - account_info is best effort
+            pass
+
+        def price_of(name: str) -> float | None:
+            for candidate in (name, self._broker_symbol(name)):
+                tick = mt5.symbol_info_tick(candidate)
+                if tick is not None and tick.bid and tick.ask:
+                    return (float(tick.bid) + float(tick.ask)) / 2.0
+            return None
+
+        return resolve_quote_rate(profit_currency, account_currency, price_of)
 
     def ticker(self, symbol: str) -> Tick:
         self._require()

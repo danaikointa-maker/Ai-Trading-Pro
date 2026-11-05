@@ -92,3 +92,61 @@ training, reconcile, alerts, errors, ticker, mode, feed, virtual_time`
 `signal.plan.{entry,sl,tp1..3,sl_points,lot,reward_risk_net,partials[]}`,
 `forecast.horizons[].{p_up,p_down,p_sideways,p10_price,p90_price,p_tp_before_sl}`,
 `analysis.spec.{digits,point,contract_size,lot_step}`
+
+---
+
+# ฟิลด์ที่สำคัญ (สัญญาณ/ออเดอร์/backtest)
+
+ส่วนนี้ระบุ *ความหมาย* ของฟิลด์ที่ตัวเลขบนจอขึ้นกับมัน ถ้าเปลี่ยนชื่อ/นิยามต้องอัปเดตที่นี่ด้วย
+
+## `signal.plan` (ใน `/api/trading/live`, `/api/signals/latest`)
+
+| ฟิลด์ | ความหมาย |
+|---|---|
+| `entry`, `sl`, `tp1..tp3` | ราคาที่ snap ตาม `tick_size` แล้ว |
+| `sl_points` | ระยะ stop เป็น points (≥ vol floor ≥ `stops_level`) |
+| `lot` | ปัดลงตาม `lot_step` และไม่ทำให้เสี่ยงเกิน budget |
+| `risk_amount` | เงินที่เสี่ยงจริง = `lot × sl_points × value_per_point_per_lot` |
+| `partials[]` | `{close_pct, volume, price}` — `volume` รวมกันได้เท่า `lot` เสมอ |
+| `reward_risk` / `reward_risk_net` | ก่อน/หลังต้นทุน; `net` ต้อง < `gross` |
+| `net_rr_tp1` | R:R ของ TP1 หลังต้นทุน ต้อง ≥ 1.0 |
+| `breakeven_probability` | `(sl + cost) / (sl + tp1)` |
+| `expected_value` | `p×profit(tp1−cost) − (1−p)×loss(sl+cost)` |
+| `notes`, `blockers` | เหตุผลที่ขยับ stop/TP หรือเหตุผลที่ไม่มีแผน |
+
+## `POST /api/trading/order` → `{ok, order, risk_check}`
+
+`risk_check` ถูกคำนวณทุกครั้งที่ fill:
+
+| ฟิลด์ | ความหมาย |
+|---|---|
+| `planned_risk` / `actual_risk` | เงินเสี่ยงตามแผน / ตามราคา fill จริง |
+| `planned_sl_points` / `actual_sl_points` | ระยะ stop ที่วางไว้ / ที่เหลือจริงหลัง fill |
+| `drift_pct` | ผลต่างเป็น % (บวก = เสี่ยงมากขึ้น) |
+| `geometry_broken` | `true` เมื่อระยะ stop จริงเหลือ < 50 % ของแผน (fill กระโดดไปชิด stop) |
+| `ok` | `actual_risk ≤ planned×1.25` **และ** ไม่ geometry broken |
+
+- `ok=false` → audit `risk.fill_drift` + notification (Thai) ให้ผู้ใช้ตัดสินใจ
+- คำสั่งซื้อขายถูกส่ง **ครั้งเดียว** ไม่มีการส่งซ้ำอัตโนมัติ; ถ้า error ระบบถามโบรกเกอร์ก่อนแล้วค่อย reject
+- `POST /api/trading/close` และ `/close-all` คืน `{ok, trade}` (paper) หรือ `{ok, order}` (MT5) — ตรวจ `ok` ก่อนใช้
+
+## `forecast`
+
+| ฟิลด์ | ความหมาย |
+|---|---|
+| `horizons[].p_up/p_down/p_sideways` | รวม = 1 (±0.0015) |
+| `horizons[].p10_price ≤ p50_price ≤ p90_price` | ต้องเรียงถูกเสมอ |
+| `horizons[].p_tp_before_sl` | ความน่าจะเป็นเชิงประจักษ์ (ดูวิธีคิดใน MATH.md §6) |
+| `scenarios[]` | `bull/base/bear` — `path[].p50` จบที่ `target_price` ของตัวเอง, `path[].p10 ≤ p50 ≤ p90` |
+| `volatility_points` | ATR × √(horizon/5) ÷ point |
+| `coverage_note` | ข้อจำกัดของแบบจำลอง horizon นั้น (อ่านก่อนเชื่อ) |
+
+## `metrics` ของ backtest
+
+`trades, net_profit, profit_factor (cap 99), expectancy, expectancy_r, win_rate,
+directional_accuracy, tp_before_sl_rate, no_trade_rate, max_drawdown_pct, sharpe,
+sortino, recovery_factor, total_costs, avg_hold_minutes, max_consecutive_losses`
+
+- `total_costs` = ค่าคอมมิชชัน + spread/slippage ที่ฝังในราคา fill → `gross_pnl − pnl = costs`
+- `expectancy_r` ใช้ risk ที่วัดตอน fill จริง ไม่ใช่ risk ตามแผน
+- `assumptions[]` ต้องอ่านคู่กับตัวเลขเสมอ (มีทั้งสมมติฐานราคาและจำนวนสัญญาณที่ถูกข้าม)

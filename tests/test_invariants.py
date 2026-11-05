@@ -270,3 +270,46 @@ def test_costs_are_reported_and_gross_minus_net_equals_costs():
     assert adapter.account_info().balance == pytest.approx(before + trade.pnl, abs=0.02), \
         "the spread is already inside the fill price; it must not be charged twice"
     rt.stop()
+
+
+def test_quote_currency_conversion():
+    """One point of USDJPY is worth 100 JPY, not 100 USD. Sizing and P&L must be
+    converted, and an unresolvable rate must block sizing instead of assuming 1.0."""
+    from integrations.brokers.fx import resolve_quote_rate
+    from packages.shared_schemas.models import SymbolSpec
+
+    quotes = {"GBPUSD": 1.25, "USDJPY": 157.2}
+    price_of = lambda name: quotes.get(name)  # noqa: E731
+
+    rate, source = resolve_quote_rate("USD", "USD", price_of)
+    assert (rate, source) == (1.0, "identity")
+
+    rate, source = resolve_quote_rate("GBP", "USD", price_of)
+    assert source == "ticker" and rate == pytest.approx(1.25)
+
+    rate, source = resolve_quote_rate("JPY", "USD", price_of)
+    assert source == "ticker" and rate == pytest.approx(1 / 157.2, rel=1e-9)
+
+    rate, source = resolve_quote_rate("CHF", "USD", price_of)
+    assert (rate, source) == (1.0, "unknown")
+
+    jpy = SymbolSpec(symbol="USDJPY", point=0.001, contract_size=100_000, profit_currency="JPY",
+                     quote_to_account_rate=1 / 157.2, rate_source="ticker")
+    # 1 point on 1 lot = 0.001 * 100000 = 100 JPY = 100/157.2 USD
+    assert jpy.value_per_point_per_lot == pytest.approx(100 / 157.2, rel=1e-9)
+    assert jpy.sizing_blocked is False
+
+    unknown = jpy.model_copy(update={"rate_source": "unknown", "quote_to_account_rate": 1.0})
+    assert unknown.sizing_blocked is True
+
+
+def test_paper_broker_pnl_is_in_account_currency():
+    """A cross pair must not inflate the balance by the exchange rate."""
+    from integrations.brokers.paper import gross_pnl
+    from packages.shared_schemas.models import Direction, SymbolSpec
+
+    usdjpy = SymbolSpec(symbol="USDJPY", point=0.001, contract_size=100_000,
+                        profit_currency="JPY", quote_to_account_rate=1 / 157.2, rate_source="ticker")
+    pnl = gross_pnl(Direction.up, 157.000, 157.100, 1.0, usdjpy)  # +100 points
+    assert pnl == pytest.approx(100 * (100 / 157.2), rel=1e-9)
+    assert pnl < 100, "JPY profit must be converted before it hits a USD balance"

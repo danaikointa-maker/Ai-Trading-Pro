@@ -38,7 +38,8 @@ python3 -m pip install -r requirements.txt   # เวอร์ชันที่
 
 cd apps/web-dashboard && npm install && npm run build && cd ../..
 
-python3 -m uvicorn services.api_gateway.app:app --host 0.0.0.0 --port 8000
+./scripts/run.sh                 # ตรวจ/สร้าง dashboard bundle แล้วเปิด port 8000
+# เทียบเท่า: python3 -m uvicorn services.api_gateway.app:app --host 0.0.0.0 --port 8000
 # เปิด http://127.0.0.1:8000  →  demo@no7.ai / no7demo1234
 # API docs: http://127.0.0.1:8000/api/docs
 ```
@@ -130,3 +131,13 @@ python3 -m pytest tests/ -q      # 54 tests: maths, risk gate, zones, forecast s
 - [`docs/MATH.md`](docs/MATH.md) — สูตรคำนวณทุกตัว (points/lot/RR/probability/metrics) + สิ่งที่ยังเป็นการประมาณ
 - [`docs/LIMITATIONS.md`](docs/LIMITATIONS.md) — สิ่งที่ยังไม่จริง/ยังไม่ครบ (อ่านก่อนตัดสินใจ)
 - [`.env.example`](.env.example) — ตัวแปรทั้งหมดที่ต้องตั้ง
+
+## คำสั่งที่ใช้บ่อย (`scripts/`)
+
+| คำสั่ง | ทำอะไร |
+|---|---|
+| `./scripts/run.sh` | เปิดแอปที่ port 8000 (สร้าง dashboard ให้ถ้ายังไม่มี) |
+| `./scripts/build_ui.sh` | `npm install` + build dashboard ลง `apps/web-dashboard/dist` |
+| `./scripts/test.sh` | รันชุดทดสอบทั้งหมด (unit + API contract + invariant สูตร) |
+| `./scripts/smoke.py` | เช็คว่าระบบมีชีวิตและ payload ครบ (health/live/model/errors) |
+| `TOKEN=… ./scripts/train.sh XAUUSD` | สั่งฝึกโมเดลใหม่ผ่าน API |

@@ -167,6 +167,12 @@ class TradePlanner:
         notes: list[str] = []
         spec = ctx.spec
         direction = ctx.direction
+        if spec.sizing_blocked:
+            # No FX rate for the profit currency: sizing would be wrong by the
+            # whole exchange rate, so refuse rather than guess.
+            blockers.append(
+                f"no FX rate to value {spec.profit_currency} P&L in the account currency; "
+                "size this symbol on the broker terminal instead")
         sign = 1 if direction == Direction.up else -1
         costs = self.cost_points(spec, ctx.spread_points)
 
