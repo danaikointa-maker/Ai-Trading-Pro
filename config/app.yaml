@@ -1,0 +1,70 @@
+# No7 AI Trading Pro V1 — application configuration
+app:
+  name: No7 AI Trading Pro
+  version: V1
+  timezone: Asia/Bangkok
+  base_currency: USD
+  decision_interval_seconds: 4        # strategy cycle
+  snapshot_interval_seconds: 1        # websocket push
+  max_decision_history: 500
+
+paths:
+  # Every path is resolved against NO7_ROOT (env). No absolute paths in code.
+  database: ${NO7_DB_PATH:storage/db/no7.sqlite3}
+  datasets: ${NO7_DATA_DIR:storage/datasets}
+  models: ${NO7_MODEL_DIR:storage/models}
+  backtests: ${NO7_BACKTEST_DIR:storage/backtests}
+  logs: ${NO7_LOG_DIR:storage/logs}
+
+market_data:
+  feed_mode: ${NO7_FEED_MODE:simulate}     # simulate | mt5
+  default_symbol: XAUUSD
+  default_broker: connext-demo
+  timeframes: [M1, M5, M15, H1, H4]
+  history_bars: ${NO7_SIM_BARS:60000}
+  staleness_seconds: 30                    # reject decisions on older data
+  simulation:
+    seed: ${NO7_SIM_SEED:7}
+    speed_minutes_per_second: ${NO7_SIM_SPEED:6.0}
+    start_price: 4180.00
+    annual_volatility: 0.16
+    tick_seconds: 0.5
+    news_shock_probability: 0.0015          # per bar
+    regime_duration_bars: [180, 900]
+
+ai:
+  enabled: true
+  horizons_minutes: [5, 15, 30, 60, 240]
+  training:
+    auto_train_on_boot: true
+    max_rows: 26000
+    train_fraction: 0.70
+    calibration_fraction: 0.15
+    min_directional_accuracy: 0.52
+    min_brier_improvement: 0.02
+    quantiles: [0.1, 0.25, 0.5, 0.75, 0.9]
+  forecast:
+    deadband_atr: 0.25                      # |ret| < x*ATR => sideways class
+    fan_points: 24
+
+security:
+  jwt_ttl_minutes: ${NO7_JWT_TTL_MINUTES:720}
+  jwt_secret_env: NO7_JWT_SECRET
+  demo_user: ${NO7_DEMO_USER:demo@no7.ai}
+  demo_password: ${NO7_DEMO_PASSWORD:no7demo1234}
+  require_auth: true
+  allow_full_auto: ${NO7_ALLOW_FULL_AUTO:false}
+
+execution:
+  order_timeout_seconds: 20
+  max_retries: 1
+  slippage_points_default: 2
+  reconcile_interval_seconds: 10
+  idempotency_ttl_minutes: 120
+  verify_after_send: true
+
+alerts:
+  channels: [inapp]
+  telegram_enabled: false
+  line_enabled: false
+  min_score: 70
