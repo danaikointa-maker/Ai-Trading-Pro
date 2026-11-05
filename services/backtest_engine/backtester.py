@@ -143,6 +143,7 @@ class Backtester:
         }
         pos: SimPosition | None = None
         decisions = 0
+        skipped = 0
         last_ctx = None
         fold_marks: list[dict[str, Any]] = []
         fold_count = 4
@@ -241,6 +242,24 @@ class Backtester:
             raw_open = float(nxt["o"]) + sign * (spread_price / 2 + request.slippage_points * spec.point)
             entry = spec.round_price(raw_open)
             plan = signal.plan
+            # If the market gapped away from the plan between the decision bar and
+            # the fill, the stop/target geometry no longer holds: the "trade" would
+            # start next to its stop (or past its first target). Skip it rather
+            # than book a meaningless R multiple.
+            planned_distance = abs(plan.entry - plan.sl)
+            drift = abs(entry - plan.entry)
+            # Two independent guards: the fill may not drift far in absolute terms
+            # (slippage) and may not eat more than a quarter of the stop distance.
+            max_drift = min(planned_distance * 0.25,
+                            max(spread_price * 3.0, spec.points_to_price(5)))
+            remaining_stop = abs(entry - plan.sl)
+            if drift > max_drift or remaining_stop < planned_distance * 0.5:
+                skipped += 1
+                continue
+            if (sign > 0 and (entry <= plan.sl or entry >= plan.tp1)) or \
+                    (sign < 0 and (entry >= plan.sl or entry <= plan.tp1)):
+                skipped += 1
+                continue
             qty = plan.lot
             if qty < spec.min_lot:
                 continue
@@ -249,12 +268,20 @@ class Backtester:
             volumes[-1] = round(qty - sum(volumes[:-1]), 4)
             if volumes[-1] < spec.min_lot:
                 volumes = [qty, 0.0, 0.0]
+            # The plan was priced off the decision bar; the fill happens on the
+            # next bar's open plus slippage. Absolute SL/TP levels stay where the
+            # structure put them, so the money actually at risk can differ from
+            # the budget. Measure it at the fill instead of assuming the plan.
+            # price distance -> points -> money (forgetting the /point step turns
+            # a $48 risk into $0.49 and every R multiple into nonsense)
+            actual_risk = (abs(entry - plan.sl) / spec.point) * spec.value_per_point_per_lot * qty
             pos = SimPosition(
                 direction=signal.action == SignalAction.buy and Direction.up or Direction.down,
                 entry=entry, sl=plan.sl, sl_initial=plan.sl,
                 tps=[plan.tp1, plan.tp2, plan.tp3], volumes=volumes, partials_done=0,
                 remaining=qty, initial_volume=qty, opened_at=int(nxt["t"]), entry_bar=i + 1,
-                risk_amount=plan.risk_amount, trade_mode=TradeMode.manual, strategy=signal.strategy,
+                risk_amount=round(actual_risk, 2) or plan.risk_amount,
+                trade_mode=TradeMode.manual, strategy=signal.strategy,
                 signal_id=signal.id,
             )
             sim["trades_today"] += 1
@@ -275,6 +302,10 @@ class Backtester:
             })
 
         metrics = compute_metrics(trades, equity_curve, decisions, request.starting_balance, holds)
+        gap_notes = ([
+            f"{skipped} signal(s) were not taken because the fill gapped outside the plan's "
+            f"entry tolerance (stop already too close or first target already gone)."
+        ] if skipped else [])
         report = BacktestReport(
             id=f"BT-{uuid.uuid4().hex[:8].upper()}",
             created_at=int(time.time()),
@@ -302,6 +333,7 @@ class Backtester:
                 f"Decisions every {self.decision_stride * 5} minutes of market time; "
                 f"{len(trades)} trades from {decisions} decision points.",
                 "Simulated feed data — replace with MT5 tick history before trusting any number here.",
+                *gap_notes,
             ],
             verdict=verdict(metrics),
         )
@@ -474,7 +506,8 @@ class Backtester:
             signal_id=pos.signal_id, mode=pos.trade_mode, broker_id="backtest",
             journal={"max_favorable_points": round(pos.mfe_points, 1),
                      "partials_done": pos.partials_done, "breakeven_done": pos.breakeven_done,
-                     "trailing_active": pos.trailing_active},
+                     "trailing_active": pos.trailing_active,
+                     "risk_amount": round(pos.risk_amount, 2)},
         )
 
 

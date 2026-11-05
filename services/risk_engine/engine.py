@@ -141,6 +141,15 @@ class RiskEngine:
 
         positions = adapter.positions()
         open_lots = sum(p.volume for p in positions)
+        # Notional exposure must use each symbol's own contract size (100 oz for
+        # gold, 100,000 for FX), not a single hard-coded constant.
+        notional = 0.0
+        for pos in positions:
+            try:
+                spec = adapter.symbol_spec(pos.symbol)
+                notional += pos.volume * spec.contract_size * float(pos.current_price or pos.entry)
+            except Exception:  # noqa: BLE001 - never break risk state on a missing spec
+                continue
         kill = self.db.kv_get("kill_switch", {"active": False, "reason": "", "since": 0})
         mode = TradeMode(self.db.kv_get("trade_mode", TradeMode.manual.value))
 
@@ -155,7 +164,7 @@ class RiskEngine:
             drawdown_pct=round(drawdown, 2),
             open_trades=len(positions),
             open_lots=round(open_lots, 2),
-            exposure_pct=round(open_lots * 100000 / info.equity, 2) if info.equity else 0.0,
+            exposure_pct=round(notional / info.equity * 100, 2) if info.equity else 0.0,
             consecutive_losses=consecutive,
             trades_today=len(daily),
             trades_this_week=len(rows),

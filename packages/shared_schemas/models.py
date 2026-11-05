@@ -1,6 +1,8 @@
 """Shared domain schemas — the contract between the AI core and the dashboard."""
 from __future__ import annotations
 
+import math
+
 from enum import Enum
 from typing import Any, Literal
 
@@ -122,8 +124,24 @@ class SymbolSpec(BaseModel):
         """Account-currency profit for a 1.0 point move on 1.0 lot."""
         return self.point * self.contract_size
 
+    @property
+    def quote_in_account_currency(self) -> bool:
+        """True when no FX conversion is needed to value 1 point of P&L.
+
+        ``value_per_point_per_lot`` assumes the quote currency is the account
+        currency (XAUUSD, EURUSD on a USD account). Cross pairs such as USDJPY
+        on a USD account need a live conversion rate, which this build does not
+        fetch — callers must treat those symbols as unsupported for sizing.
+        """
+        return self.profit_currency.upper() == "USD"
+
     def round_price(self, price: float) -> float:
-        return round(price, self.digits)
+        """Snap to the broker's legal price grid (tick size), not just digits."""
+        tick = self.tick_size or self.point
+        if not tick or tick <= 0:
+            return round(price, self.digits)
+        snapped = round(round(price / tick) * tick, self.digits)
+        return float(f"{snapped:.{self.digits}f}")
 
     def points_to_price(self, points: float) -> float:
         return round(points * self.point, self.digits)
@@ -132,9 +150,20 @@ class SymbolSpec(BaseModel):
         return distance / self.point if self.point else 0.0
 
     def normalize_lot(self, lot: float) -> float:
+        """Round a lot *down* to the broker step.
+
+        Rounding to the nearest step could hand back a position slightly larger
+        than the risk budget allowed, so sizing always floors; only a size below
+        the broker minimum is raised to that minimum (the caller reports it).
+        """
         step = self.lot_step or 0.01
-        snapped = round(round(lot / step) * step, 4)
-        return max(self.min_lot, min(self.max_lot, snapped))
+        if lot <= 0:
+            return 0.0
+        steps = math.floor(lot / step + 1e-9)
+        snapped = round(steps * step, 4)
+        if snapped < self.min_lot - 1e-12:
+            return float(self.min_lot)
+        return round(min(self.max_lot, snapped), 4)
 
     def lot_is_valid(self, lot: float) -> bool:
         step = self.lot_step or 0.01

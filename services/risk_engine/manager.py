@@ -36,6 +36,8 @@ class PositionManager:
         self.trailing = cfg.get("trailing", {})
         self.time_exit = cfg.get("time_exit", {})
         self.smart = cfg.get("smart_exit", {})
+        # Partials are on by default, but the switch has to actually work.
+        self.partials = cfg.get("partials", {"enabled": True})
 
     def evaluate(self, positions: list[Position], specs: dict[str, SymbolSpec],
                  plans: dict[str, Signal], forecast: ForecastBundle | None,
@@ -107,7 +109,7 @@ class PositionManager:
 
     # ------------------------------------------------------------- internals
     def _partial_enabled(self) -> bool:
-        return bool(self.be) or True
+        return bool(self.partials.get("enabled", True))
 
     def _partial_action(self, pos: Position, plan_data: Any, spec: SymbolSpec, sign: int) -> PositionAction | None:
         levels = getattr(plan_data, "partials", []) or []

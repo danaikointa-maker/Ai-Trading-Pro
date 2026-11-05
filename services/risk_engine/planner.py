@@ -11,6 +11,8 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Any, Callable
 
+import math
+
 import numpy as np
 
 from packages.shared_schemas.models import (
@@ -56,6 +58,29 @@ class PlanResult:
     plan: TradePlan | None
     blockers: list[str]
     notes: list[str]
+
+
+def _split_lot(spec: SymbolSpec, lot: float, closes_pct: list[float]) -> list[float]:
+    """Split a position into close volumes that are legal and sum to ``lot``.
+
+    Each slice is floored to the broker lot step (never rounded up, which would
+    close more than the position) and the final slice absorbs the remainder. If
+    the position is too small to split legally, it is kept as one block.
+    """
+    if lot <= 0:
+        return [0.0, 0.0, 0.0]
+    step = spec.lot_step or 0.01
+    volumes: list[float] = []
+    for pct in closes_pct[:2]:
+        raw = lot * float(pct) / 100.0
+        floored = round(math.floor(raw / step + 1e-9) * step, 4)
+        volumes.append(floored)
+    remainder = round(lot - sum(volumes), 4)
+    if remainder < spec.min_lot - 1e-9 or any(v < spec.min_lot - 1e-9 for v in volumes):
+        # Cannot split: trade the whole position to the final target.
+        return [round(lot, 4), 0.0, 0.0]
+    volumes.append(remainder)
+    return volumes
 
 
 class TradePlanner:
@@ -112,7 +137,7 @@ class TradePlanner:
         ladder = [float(np.clip(v, min_pts, max_pts)) for v in ladder]
         while len(ladder) < 3:
             ladder.append(float(max_pts))
-        ladder[0] = max(min_pts, ladder[0])
+        ladder[0] = max(min_pts, ladder[0], ctx.spec.stops_level_points + 1)
         ladder[1] = max(ladder[0] + 1, ladder[1])
         ladder[2] = max(ladder[1] + 1, ladder[2])
 
@@ -158,7 +183,12 @@ class TradePlanner:
                                       vol_floor, ctx.sl_max_points))
             sl_note = f"ATR stop {self.stops.get('sl_atr_multiplier', 1.0)} x ATR"
         sl_points = float(np.clip(sl_points, vol_floor, ctx.sl_max_points))
-        sl_price = ctx.entry - sign * spec.points_to_price(sl_points)
+        min_stop = float(spec.stops_level_points)
+        if min_stop > 0 and sl_points < min_stop + 1:
+            sl_note += (f" (widened to the broker stops level of {min_stop:.0f} points)"
+                        if sl_note else f"Broker stops level {min_stop:.0f} points")
+            sl_points = min_stop + 1
+        sl_price = spec.round_price(ctx.entry - sign * spec.points_to_price(sl_points))
 
         ladder, tp_notes = self._tp_ladder(direction, ctx.entry, ctx)
         notes.extend(tp_notes)
@@ -183,22 +213,31 @@ class TradePlanner:
             blockers.append(f"computed lot {lot} violates lot step {spec.lot_step}")
         actual_risk = lot * loss_per_lot
 
+        # The blended figure assumes the whole ladder fills; TP1 has to work on
+        # its own, otherwise the "expected" reward is really a hoped-for TP3.
+        tp1_reward = ladder[0] - costs
+        rr_net_tp1 = tp1_reward / (sl_points + costs) if sl_points > 0 else 0.0
         if rr_net < ctx.min_rr_net:
             blockers.append(
                 f"net reward/risk {rr_net:.2f} below the {ctx.min_rr_net:.2f} minimum after "
                 f"{costs:.0f} points of cost")
+        if rr_net_tp1 < 1.0:
+            blockers.append(
+                f"first target only pays {rr_net_tp1:.2f}R net ({ladder[0]:.0f} pts reward vs "
+                f"{sl_points:.0f} pts stop + {costs:.0f} pts cost)")
+        notes.append(
+            f"Net R:R TP1 {rr_net_tp1:.2f} / blended {rr_net:.2f} (cost {costs:.0f} pts)")
         if sl_points <= costs * 3:
             blockers.append("stop distance is too small relative to trading costs")
 
         # --- partial close feasibility (lot step aware)
+        volumes = _split_lot(spec, lot, closes)
         partials: list[PartialTarget] = []
-        feasible_all = True
-        for i, (tp, pct) in enumerate(zip(ladder, closes), start=1):
-            vol = spec.normalize_lot(lot * pct / 100.0) if lot > 0 else 0.0
-            feasible = lot > 0 and spec.lot_is_valid(vol) and vol >= spec.min_lot
-            if feasible and i < 3:
-                remaining = lot - sum(p.volume for p in partials)
-                feasible = remaining - vol >= spec.min_lot - 1e-9
+        feasible_all = lot > 0
+        running = 0.0
+        for i, (tp, pct, vol) in enumerate(zip(ladder, closes, volumes), start=1):
+            running = round(running + vol, 4)
+            feasible = bool(lot > 0 and spec.lot_is_valid(vol) and vol >= spec.min_lot - 1e-9)
             if not feasible:
                 feasible_all = False
             partials.append(PartialTarget(
@@ -208,8 +247,14 @@ class TradePlanner:
                 close_pct=pct,
                 volume=vol,
                 feasible=feasible,
-                note="" if feasible else f"{vol:.2f} lot violates step {spec.lot_step}/{spec.min_lot} minimum",
+                note="" if feasible else (
+                    f"{vol:.2f} lot cannot be closed legally with step {spec.lot_step} / "
+                    f"min {spec.min_lot}"),
             ))
+        # The ladder must add up to exactly the position that was opened.
+        if lot > 0 and abs(running - lot) > 1e-6:
+            notes.append(f"Partial ladder sums to {running:.2f} lot instead of {lot:.2f}; "
+                         f"remaining volume runs to the final target.")
         if not feasible_all:
             notes.append(
                 f"Lot {lot:.2f} is too small to split into 3 partials legally "

@@ -109,7 +109,7 @@ storage/                   db / datasets / models / backtests / logs (git-ignore
 ## ทดสอบ
 
 ```bash
-python3 -m pytest tests/ -q      # 37 tests: maths, risk gate, zones, HTTP contract
+python3 -m pytest tests/ -q      # 54 tests: maths, risk gate, zones, forecast shape, HTTP contract
 ```
 
 ## ข้อจำกัดที่ต้องอ่านก่อนใช้เงินจริง
@@ -127,5 +127,6 @@ python3 -m pytest tests/ -q      # 37 tests: maths, risk gate, zones, HTTP contr
 - [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) — ชั้นต่าง ๆ และเหตุผลการออกแบบ
 - [`docs/API.md`](docs/API.md) — รายการ endpoint ที่ dashboard ใช้
 - [`docs/RUNBOOK.md`](docs/RUNBOOK.md) — ตั้งค่า Windows + MT5, env, การแก้ปัญหา
+- [`docs/MATH.md`](docs/MATH.md) — สูตรคำนวณทุกตัว (points/lot/RR/probability/metrics) + สิ่งที่ยังเป็นการประมาณ
 - [`docs/LIMITATIONS.md`](docs/LIMITATIONS.md) — สิ่งที่ยังไม่จริง/ยังไม่ครบ (อ่านก่อนตัดสินใจ)
 - [`.env.example`](.env.example) — ตัวแปรทั้งหมดที่ต้องตั้ง

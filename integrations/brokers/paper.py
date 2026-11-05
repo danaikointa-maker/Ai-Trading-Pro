@@ -53,6 +53,7 @@ class PaperPosition:
     sl: float
     tp: float
     open_time: int
+    sl_initial: float = 0.0
     comment: str = ""
     signal_id: str | None = None
     strategy: str = ""
@@ -201,6 +202,12 @@ class PaperBroker(BrokerAdapter):
             raise BrokerError(f"symbol {request.symbol} not available on {self.label}", retcode=10013)
         spec = self._specs[request.symbol]
         volume = spec.normalize_lot(request.volume)
+        if request.volume < spec.min_lot - 1e-9:
+            raise BrokerError(
+                f"volume {request.volume} is below the minimum lot {spec.min_lot}", retcode=10014)
+        if request.volume > spec.max_lot + 1e-9:
+            raise BrokerError(
+                f"volume {request.volume} exceeds the maximum lot {spec.max_lot}", retcode=10014)
         if not spec.lot_is_valid(volume):
             raise BrokerError(f"volume {request.volume} violates lot step {spec.lot_step}", retcode=10014)
         tick = self.ticker(request.symbol)
@@ -228,7 +235,8 @@ class PaperBroker(BrokerAdapter):
         ticket = ticket_hint or f"P{next(self._seq)}"
         pos = PaperPosition(
             ticket=ticket, symbol=request.symbol, spec=spec, direction=direction, volume=volume,
-            initial_volume=volume, entry=price, sl=sl, tp=tp, open_time=int(time.time()),
+            initial_volume=volume, entry=price, sl=sl, tp=tp, sl_initial=sl,
+            open_time=int(self.clock()),
             comment=request.comment, signal_id=request.signal_id, mode=request.mode.value,
         )
         self._positions[ticket] = pos
@@ -259,7 +267,7 @@ class PaperBroker(BrokerAdapter):
         return True
 
     def close_position(self, ticket: str, volume: float | None = None, comment: str = "",
-                       reason: str = "") -> OrderResult:
+                       reason: str = "") -> TradeRecord:
         pos = self._positions.get(ticket)
         if not pos:
             raise BrokerError(f"position {ticket} not found", retcode=10013)
@@ -321,7 +329,10 @@ class PaperBroker(BrokerAdapter):
             total_costs = commission_for(pos.closed_volume, pos.spec) if self.commission_enabled else 0.0
             sign = 1.0 if pos.direction == Direction.up else -1.0
             points = (avg_exit - pos.entry) * sign / pos.spec.point
-            risk_points = abs(pos.entry - pos.sl) / pos.spec.point if pos.sl else 0.0
+            # R is measured against the stop the trade was opened with; once
+            # break-even/trailing moves the stop, this denominator must not shrink.
+            initial_sl = pos.sl_initial or pos.sl
+            risk_points = abs(pos.entry - initial_sl) / pos.spec.point if initial_sl else 0.0
             record = TradeRecord(
                 ticket=pos.ticket,
                 symbol=pos.symbol,

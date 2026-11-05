@@ -71,12 +71,18 @@ class AnalysisService:
     def snapshot(self, symbol: str, broker_id: str | None = None) -> AnalysisContext:
         adapter_id = self.market.registry.get(broker_id).id
         spec = self.market.spec(symbol, broker_id)
+        # The last row of every live series is still forming. Structure, zones and
+        # indicators must be built from *closed* candles only, otherwise a zone
+        # can flip between "confirmed" and "candidate" inside the same bar.
+        def closed(df: pd.DataFrame) -> pd.DataFrame:
+            return df.iloc[:-1].reset_index(drop=True) if len(df) > 2 else df
+
         frames: dict[str, pd.DataFrame] = {
-            "M1": self.market.candles(symbol, "M1", 600, broker_id),
-            "M5": self.market.candles(symbol, "M5", 900, broker_id),
-            "M15": self.market.candles(symbol, "M15", 600, broker_id),
-            "H1": self.market.candles(symbol, "H1", 500, broker_id),
-            "H4": self.market.candles(symbol, "H4", 300, broker_id),
+            "M1": closed(self.market.candles(symbol, "M1", 600, broker_id)),
+            "M5": closed(self.market.candles(symbol, "M5", 900, broker_id)),
+            "M15": closed(self.market.candles(symbol, "M15", 600, broker_id)),
+            "H1": closed(self.market.candles(symbol, "H1", 500, broker_id)),
+            "H4": closed(self.market.candles(symbol, "H4", 300, broker_id)),
         }
         tick = self.market.ticker(symbol, broker_id)
         price = float(tick.last or tick.bid)

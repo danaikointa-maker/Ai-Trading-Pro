@@ -130,11 +130,22 @@ class TradingRuntime:
     def start(self) -> None:
         if self._thread and self._thread.is_alive():
             return
+        # Run one cycle inline: the dashboard's very first paint then has a
+        # snapshot/forecast instead of an empty card that fills in seconds later.
+        self.prime()
         self._stop.clear()
         self._thread = threading.Thread(target=self._run, name="no7-runtime", daemon=True)
         self._thread.start()
         if self.settings.ai.get("training", {}).get("auto_train_on_boot", True):
             self.train_async(self.active_symbol)
+
+    def prime(self) -> None:
+        """Compute the first snapshot/forecast synchronously (never fatal)."""
+        for step in (self._tick_cycle, self._decision_cycle):
+            try:
+                step()
+            except Exception as exc:  # noqa: BLE001 - boot must not die on data
+                self._log_error("prime", exc)
 
     def stop(self) -> None:
         self._stop.set()
@@ -372,8 +383,9 @@ class TradingRuntime:
                 self._apply_action(action, specs)
             except Exception as exc:  # noqa: BLE001
                 self._log_error(f"action:{action.kind}", exc)
-        if positions:
-            self.gateway.open_position_snapshot(positions)
+        # Always sync (including the empty list) so a closed trade cannot linger
+        # in the local mirror and trip the reconciler.
+        self.gateway.open_position_snapshot(positions)
 
     def _apply_action(self, action: PositionAction, specs: dict[str, Any]) -> None:
         if action.kind == "modify" and action.new_sl is not None:
@@ -490,6 +502,10 @@ class TradingRuntime:
         except BrokerError as exc:
             return {"ok": False, "error": str(exc)}
         if result.status == OrderState.filled:
+            # Slippage moves the fill away from the plan's entry while SL stays
+            # where the structure put it, so the money at risk at the fill is not
+            # necessarily the money the lot size was computed for. Say so loudly.
+            fill_check = self._check_fill_risk(signal, result, spec)
             signal.executed_order_id = result.order_id
             signal.approved_by = actor
             signal.approved_at = int(now)
@@ -504,8 +520,46 @@ class TradingRuntime:
                 meta={"ticket": result.ticket, "signal_id": signal.id}, dedupe_seconds=0)
             with self.lock:
                 self.version += 1
-            return {"ok": True, "order": result.model_dump(), "signal": signal.id}
+            return {"ok": True, "order": result.model_dump(), "signal": signal.id,
+                    "risk_check": fill_check}
         return {"ok": False, "error": result.message or "order not filled", "order": result.model_dump()}
+
+    def _check_fill_risk(self, signal: Signal, result: OrderResult, spec: Any) -> dict[str, Any]:
+        """Compare the risk implied by the real fill with the planned budget."""
+        plan = signal.plan
+        fill = float(result.fill_price or 0.0)
+        if plan is None or fill <= 0:
+            return {"ok": True, "note": "no fill price to check"}
+        actual_points = abs(fill - plan.sl) / spec.point if spec.point else 0.0
+        actual_risk = actual_points * spec.value_per_point_per_lot * (result.filled_volume or plan.lot)
+        planned = plan.risk_amount or 0.0
+        drift = (actual_risk / planned - 1.0) * 100 if planned > 0 else 0.0
+        planned_points = float(plan.sl_points or 0.0)
+        geometry_broken = planned_points > 0 and actual_points < planned_points * 0.5
+        payload = {
+            "ok": actual_risk <= planned * 1.25 + 1e-9 and not geometry_broken,
+            "planned_risk": round(planned, 2),
+            "actual_risk": round(actual_risk, 2),
+            "planned_sl_points": round(planned_points, 0),
+            "actual_sl_points": round(actual_points, 0),
+            "drift_pct": round(drift, 1),
+            "geometry_broken": geometry_broken,
+            "slippage_points": getattr(result, "slippage_points", 0.0),
+        }
+        if geometry_broken:
+            self.notifier.emit(
+                "critical", "Fill landed next to the stop",
+                f"Stop is now only {actual_points:.0f} pts away (plan {planned_points:.0f} pts). "
+                f"The trade no longer has the planned room — review or close it.",
+                symbol=signal.symbol, dedupe_seconds=0)
+        elif not payload["ok"]:
+            self.notifier.emit(
+                "warning", "Fill moved the stop further than planned",
+                f"Risk now ${actual_risk:.2f} vs ${planned:.2f} planned "
+                f"({drift:+.0f}%). Check the position before it runs.",
+                symbol=signal.symbol, dedupe_seconds=0)
+        self.db.audit("risk-engine", "risk.fill_drift", payload)
+        return payload
 
     def reject_signal(self, signal_id: str, reason: str = "rejected by user") -> dict[str, Any]:
         signal = self.plans.get(signal_id)
@@ -523,14 +577,14 @@ class TradingRuntime:
         return self.execute_signal(signal.id, actor=actor)
 
     def close_ticket(self, ticket: str, volume: float | None = None) -> dict[str, Any]:
-        result = self.gateway.close(self.adapter, ticket, volume=volume, reason="manual close", actor="user")
-        return {"ok": result.status in (OrderState.closed, OrderState.filled), "result": result.model_dump()}
+        return self.gateway.close(self.adapter, ticket, volume=volume, reason="manual close", actor="user")
 
     def close_all(self) -> dict[str, Any]:
         closed = []
         for pos in self.adapter.positions():
             result = self.gateway.close(self.adapter, pos.ticket, reason="emergency close", actor="user")
-            closed.append({"ticket": pos.ticket, "ok": result.status in (OrderState.closed, OrderState.filled)})
+            closed.append({"ticket": pos.ticket, "ok": bool(result.get("ok")),
+                           "trade": result.get("trade"), "order": result.get("order")})
         if closed:
             self.notifier.emit("critical", "Emergency close executed",
                                f"{len(closed)} position(s) flattened on request.", dedupe_seconds=0)

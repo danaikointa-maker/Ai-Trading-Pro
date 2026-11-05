@@ -60,6 +60,8 @@ management:
     step_points: 50
     mode: atr                       # atr | points
     atr_multiplier: 1.0
+  partials:
+    enabled: true                   # close 40/30/30 at the ladder levels
   time_exit:
     enabled: true
     max_minutes_in_trade: 240

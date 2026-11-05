@@ -125,7 +125,6 @@ class ForecastPredictor:
     def forecast(self, m5: pd.DataFrame, spec: SymbolSpec, symbol: str) -> ForecastBundle:
         if len(m5) < 260:
             raise ValueError("not enough M5 history for a forecast")
-        feats = build_features(m5) if "ema200" not in m5.columns else build_features(m5)
         X, _ = inference_vector(m5)
         price = float(m5["c"].iloc[-1])
         atr_now = float(m5["atr"].iloc[-1]) if np.isfinite(m5["atr"].iloc[-1]) else price * 0.001
@@ -151,6 +150,9 @@ class ForecastPredictor:
                     qs = model.predict_quantiles(X.reshape(1, -1))
                     p_down, p_side, p_up = float(probs[0]), float(probs[1]), float(probs[2])
                     q10, q50, q90 = float(qs[0.1][0]), float(qs[0.5][0]), float(qs[0.9][0])
+                    # Quantile regressors are fitted independently and can cross;
+                    # silently swapping them would misreport the band.
+                    q10, q50, q90 = min(q10, q50), q50, max(q90, q50)
                     calibrated = True
                     method = "lightgbm+isotonic"
                     accuracy = model.metrics.get("directional_accuracy")
@@ -163,6 +165,8 @@ class ForecastPredictor:
             elif model is not None:
                 cov_note = "Model trained but NOT approved: out-of-sample gates failed. Showing baseline."
 
+            p_up, p_down, p_side = _normalise_probs(p_up, p_down, p_side)
+            q10, q50, q90 = min(q10, q50), q50, max(q90, q50)
             tp_points, sl_points = self._reference_levels(atr_points)
             p_path, n_path = self.p_tp_before_sl(tp_points, sl_points, minutes, p_up,
                                                  atr_points=atr_points, direction=1)
@@ -261,34 +265,40 @@ class ForecastPredictor:
     def _scenarios(self, price: float, rows: list[HorizonForecast], spec: SymbolSpec,
                    atr_now: float) -> list[Scenario]:
         primary = max(rows, key=lambda r: r.confidence)
-        idx = rows.index(primary)
-        longer = rows[min(len(rows) - 1, idx + 1)]
         end_t = int(time.time()) + primary.horizon_minutes * 60
         last_t = int(time.time())
 
-        def path(q: str) -> list[ForecastPathPoint]:
-            target = getattr(primary if q == "p50" else longer, f"{q}_price")
+        def path(target: float) -> list[ForecastPathPoint]:
+            """Fan for one scenario.
+
+            The median drifts from spot to that scenario's own target, while the
+            band is the horizon's P10-P90 width accumulated with sqrt(time). Each
+            scenario therefore stays a *range*, never a single promised price.
+            """
+            half = abs(primary.p90_price - primary.p10_price) / 2.0
             points = []
             for i in range(self.fan_points + 1):
                 frac = i / self.fan_points
                 t = int(last_t + (end_t - last_t) * frac)
-                scale = np.sqrt(frac)
-                value = price + (target - price) * scale
-                spread = atr_now * np.sqrt(max(1e-9, primary.horizon_minutes / 5)) * frac * 0.9
+                scale = np.sqrt(frac)  # volatility accumulates with the square root of time
+                centre = price + (target - price) * scale
+                width = half * scale
                 points.append(ForecastPathPoint(
-                    t=t, p10=round(value - spread, spec.digits), p50=round(value, spec.digits),
-                    p90=round(value + spread, spec.digits)))
+                    t=t,
+                    p10=round(min(centre - width, centre), spec.digits),
+                    p50=round(centre, spec.digits),
+                    p90=round(max(centre + width, centre), spec.digits)))
             return points
 
         return [
             Scenario(name="bull", probability=round(primary.p_up, 4),
-                     target_price=round(primary.p90_price, spec.digits), path=path("p90"),
+                     target_price=round(primary.p90_price, spec.digits), path=path(primary.p90_price),
                      description="Upside scenario: price reaches the upper band and tests resistance."),
             Scenario(name="base", probability=round(primary.p_sideways, 4),
-                     target_price=round(primary.p50_price, spec.digits), path=path("p50"),
+                     target_price=round(primary.p50_price, spec.digits), path=path(primary.p50_price),
                      description="Base scenario: mean-path drift with normal volatility."),
             Scenario(name="bear", probability=round(primary.p_down, 4),
-                     target_price=round(primary.p10_price, spec.digits), path=path("p10"),
+                     target_price=round(primary.p10_price, spec.digits), path=path(primary.p10_price),
                      description="Downside scenario: price reaches the lower band and tests support."),
         ]
 
@@ -307,6 +317,20 @@ class ForecastPredictor:
             f"โอกาสถึง TP ก่อน SL ≈ {r.p_tp_before_sl:.0%} ที่ TP {r.tp_points:.0f} / SL {r.sl_points:.0f} points. "
             f"({tag})"
         )
+
+
+def _normalise_probs(p_up: float, p_down: float, p_side: float) -> tuple[float, float, float]:
+    """Clip to [0,1] and rescale so the three scenarios sum to exactly 1."""
+    vals = [max(0.0, float(p_up)), max(0.0, float(p_down)), max(0.0, float(p_side))]
+    total = sum(vals)
+    if total <= 0:
+        return 1 / 3, 1 / 3, 1 / 3
+    if abs(total - 1.0) > 1e-6:
+        vals = [v / total for v in vals]
+        # give the rounding residue to the largest bucket so the sum is exact
+        idx = max(range(3), key=lambda i: vals[i])
+        vals[idx] = max(0.0, 1.0 - sum(v for i, v in enumerate(vals) if i != idx))
+    return vals[0], vals[1], vals[2]
 
 
 __all__ = ["ForecastPredictor", "enrich", "pd"]

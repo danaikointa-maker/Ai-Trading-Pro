@@ -34,7 +34,8 @@ class ExecutionGateway:
         self.settings = settings
         self.db = db
         ex = settings.execution
-        self.max_retries = int(ex.get("max_retries", 1))
+        # kept for visibility; submit() never resends (see the docstring there)
+        self.max_retries = int(ex.get("max_retries", 0))
         self.verify_after_send = bool(ex.get("verify_after_send", True))
         self.order_timeout = float(ex.get("order_timeout_seconds", 20))
 
@@ -84,32 +85,36 @@ class ExecutionGateway:
         )
         self.db.audit(actor, "order.submit", request.model_dump())
 
-        attempts = 0
-        last_error = ""
-        while attempts <= self.max_retries:
-            attempts += 1
-            try:
-                result = adapter.order_send(request, ticket_hint="")
-                result.order_id = order_id
-                if self.verify_after_send and result.status == OrderState.filled:
-                    result.verified = self._verify_fill(adapter, result)
-                    if not result.verified:
-                        result.message += " | fill not visible in positions (will reconcile)"
-                self._persist_result(order_id, result, request)
-                self.db.audit(actor, "order.result", result.model_dump())
-                return result
-            except BrokerError as exc:
-                last_error = str(exc)
-                self.db.audit(actor, "order.error", {"attempt": attempts, "error": last_error,
-                                                     "retcode": exc.retcode})
-                time.sleep(0.2)
-            except Exception as exc:  # noqa: BLE001
-                last_error = f"unexpected: {exc}"
-                self.db.audit(actor, "order.error", {"attempt": attempts, "error": last_error})
+        # One attempt only. A transport error does not prove the order was not
+        # executed, so resending could duplicate the position — the operator (or
+        # the reconciler) resolves it instead of the gateway guessing.
+        try:
+            result = adapter.order_send(request, ticket_hint="")
+            result.order_id = order_id
+            if self.verify_after_send and result.status == OrderState.filled:
+                result.verified = self._verify_fill(adapter, result)
+                if not result.verified:
+                    result.message += " | fill not visible in positions (will reconcile)"
+            self._persist_result(order_id, result, request)
+            self.db.audit(actor, "order.result", result.model_dump())
+            return result
+        except BrokerError as exc:
+            last_error = str(exc)
+            self.db.audit(actor, "order.error", {"error": last_error, "retcode": exc.retcode,
+                                                 "resent": False})
+        except Exception as exc:  # noqa: BLE001
+            last_error = f"unexpected: {exc}"
+            self.db.audit(actor, "order.error", {"error": last_error, "resent": False})
+
+        recovered = self._verify_existing(adapter, key)
+        if recovered is not None:
+            self.db.audit(actor, "order.recovered", {"key": key, "ticket": recovered.ticket})
+            return recovered
 
         result = OrderResult(
             order_id=order_id, idempotency_key=key, status=OrderState.rejected,
-            message=f"order rejected after {attempts} attempt(s): {last_error}",
+            message=(f"order not confirmed: {last_error} | not resent automatically — "
+                     f"check the terminal before retrying"),
             created_at=time.time(),
         )
         self._persist_result(order_id, result, request)
@@ -171,11 +176,33 @@ class ExecutionGateway:
             return False
 
     def close(self, adapter: BrokerAdapter, ticket: str, volume: float | None = None,
-              reason: str = "manual", actor: str = "user") -> OrderResult:
+              reason: str = "manual", actor: str = "user") -> dict[str, Any]:
+        """Close (or partially close) a position and normalise the two shapes.
+
+        The simulated broker settles inside `close_position` and returns the
+        finished ``TradeRecord``; the MT5 adapter returns the order's
+        ``OrderResult``. Callers used to assume ``.status`` existed and crashed on
+        every simulated close, so this method now returns one dict for both.
+        """
         result = adapter.close_position(ticket, volume=volume, comment=reason[:24])
+        payload: dict[str, Any]
+        if isinstance(result, TradeRecord):
+            still_open = any(p.ticket == ticket for p in adapter.positions())
+            if still_open:
+                # A partial close: the position lives on, so it must not be
+                # written into the closed-trades table yet.
+                self.db.audit(actor, "position.partial_realized",
+                              {"ticket": ticket, "pnl": result.pnl, "volume": result.volume,
+                               "reason": reason})
+            else:
+                self.record_trade(result)
+            payload = {"ok": True, "trade": result.model_dump()}
+        else:
+            ok = result.status in (OrderState.closed, OrderState.filled)
+            payload = {"ok": ok, "order": result.model_dump()}
         self.db.audit(actor, "position.close",
-                      {"ticket": ticket, "volume": volume, "reason": reason, "result": result.model_dump()})
-        return result
+                      {"ticket": ticket, "volume": volume, "reason": reason, "result": payload})
+        return payload
 
     def reconcile(self, adapter: BrokerAdapter) -> dict[str, Any]:
         """Compare remembered positions with the broker; never place orders here."""
@@ -218,11 +245,20 @@ class ExecutionGateway:
         self.db.execute("DELETE FROM open_positions WHERE ticket = ?", (trade.ticket,))
 
     def open_position_snapshot(self, positions: list[Position]) -> None:
+        """Replace the local mirror with the broker's current position list.
+
+        Upsert-only snapshots leave rows behind after the last position closes,
+        which then shows up as a bogus "missing at broker" mismatch.
+        """
+        live_tickets = {pos.ticket for pos in positions}
         for pos in positions:
             self.db.execute(
                 "INSERT OR REPLACE INTO open_positions(ticket, payload, updated_at) VALUES(?,?,?)",
                 (pos.ticket, json.dumps(pos.model_dump(), default=str), time.time()),
             )
+        for row in self.db.query("SELECT ticket FROM open_positions"):
+            if row["ticket"] not in live_tickets:
+                self.db.execute("DELETE FROM open_positions WHERE ticket = ?", (row["ticket"],))
 
     def history(self, limit: int = 100) -> list[dict[str, Any]]:
         rows = self.db.query("SELECT * FROM trades ORDER BY closed_at DESC LIMIT ?", (limit,))

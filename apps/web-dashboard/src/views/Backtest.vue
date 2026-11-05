@@ -61,7 +61,7 @@
         <template v-if="report">
           <div class="grid grid-cols-2 gap-2 md:grid-cols-4 xl:grid-cols-8">
             <Stat label="Net" :value="money(report.metrics.net_profit)" :tone="report.metrics.net_profit >= 0 ? 'text-up' : 'text-down'" />
-            <Stat label="Profit factor" :value="fmt(report.metrics.profit_factor, 2)" />
+            <Stat label="Profit factor" :value="fmtFactor(report.metrics.profit_factor)" />
             <Stat label="Expectancy" :value="money(report.metrics.expectancy)" :hint="`${fmt(report.metrics.expectancy_r, 2)}R`" />
             <Stat label="Trades" :value="report.metrics.trades" :hint="`no-trade ${fmt(report.metrics.no_trade_rate, 0)}%`" />
             <Stat label="Win rate" :value="`${fmt(report.metrics.win_rate, 1)}%`" />
@@ -154,7 +154,7 @@ import { computed, onMounted, onUnmounted, reactive, ref } from 'vue'
 import EquityChart from '../components/EquityChart.vue'
 import Stat from '../components/Stat.vue'
 import { api } from '../lib/api'
-import { datetime, fmt, money } from '../lib/format'
+import { datetime, fmt, fmtFactor, money } from '../lib/format'
 import { state, toast } from '../lib/store'
 
 const form = reactive({

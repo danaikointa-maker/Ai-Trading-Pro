@@ -50,3 +50,10 @@ export const actionTone = (action) => {
 export const qualityTone = (q) => (q === 'high' ? 'chip-up' : q === 'medium' ? 'chip-gold' : 'chip')
 export const directionTone = (d) =>
   d === 'up' || d === 'trending_up' ? 'text-up' : d === 'down' || d === 'trending_down' ? 'text-down' : 'text-muted'
+
+// A book with no losing trade has an infinite profit factor; the backend caps it
+// at 99 so it can never be confused with a dollar amount.
+export const fmtFactor = (v) => {
+  if (v === null || v === undefined || Number.isNaN(Number(v))) return '—'
+  return Number(v) >= 99 ? '99+ (no losses)' : fmt(v, 2)
+}

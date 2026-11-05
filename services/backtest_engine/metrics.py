@@ -35,7 +35,17 @@ def compute_metrics(trades: list[TradeRecord], equity_curve: list[EquityPoint],
     downside = returns[returns < 0]
     sortino = float(_safe_div(returns.mean(), downside.std(ddof=0)) * math.sqrt(periods_per_year)) if len(downside) > 2 and downside.std(ddof=0) > 0 else 0.0
 
-    tp_first = sum(1 for t in trades if t.exit_reason in ("take profit", "partial_tp3", "partial_tp2"))
+    # "TP before SL" asks whether *any* target was reached before the stop, not
+    # what the final exit label happened to be: a trade that banked TP1 and then
+    # trailed out on the stop did reach a target first.
+    def _reached_target(t: TradeRecord) -> bool:
+        if t.exit_reason in ("take profit", "partial_tp1", "partial_tp2", "partial_tp3"):
+            return True
+        journal = t.journal or {}
+        return bool(journal.get("partials_done"))
+
+    tp_first = sum(1 for t in trades if _reached_target(t))
+    directional = sum(1 for t in trades if t.points > 0)
     avg_hold = float(np.mean(list(hold_minutes))) if hold_minutes else 0.0
 
     streak = worst_streak = 0
@@ -55,7 +65,10 @@ def compute_metrics(trades: list[TradeRecord], equity_curve: list[EquityPoint],
         gross_profit=round(gross_profit, 2),
         gross_loss=round(gross_loss, 2),
         net_profit=round(net, 2),
-        profit_factor=round(gross_profit / gross_loss, 3) if gross_loss else (round(gross_profit, 2) if gross_profit else 0.0),
+        # A book with no losing trade has an infinite profit factor; cap it so the
+        # number is never mistaken for a dollar amount or a real ratio.
+        profit_factor=(round(min(99.0, gross_profit / gross_loss), 3) if gross_loss
+                       else (99.0 if gross_profit > 0 else 0.0)),
         expectancy=round(net / len(trades), 2) if trades else 0.0,
         expectancy_r=round(float(np.mean([t.r_multiple for t in trades])), 3) if trades else 0.0,
         avg_win=round(gross_profit / len(wins), 2) if wins else 0.0,
@@ -64,7 +77,9 @@ def compute_metrics(trades: list[TradeRecord], equity_curve: list[EquityPoint],
         sharpe=round(min(10.0, max(-10.0, sharpe)), 2),
         sortino=round(min(10.0, max(-10.0, sortino)), 2),
         tp_before_sl_rate=round(tp_first / len(trades) * 100, 2) if trades else 0.0,
-        directional_accuracy=round(len(wins) / len(trades) * 100, 2) if trades else 0.0,
+        # Direction hit rate measured before costs, so a fee-driven loss is not
+        # reported as a wrong forecast.
+        directional_accuracy=round(directional / len(trades) * 100, 2) if trades else 0.0,
         no_trade_rate=round(max(0.0, 1 - len(trades) / decisions) * 100, 2) if decisions else 0.0,
         avg_hold_minutes=round(avg_hold, 1),
         total_costs=round(costs, 2),

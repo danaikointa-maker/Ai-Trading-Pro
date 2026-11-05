@@ -69,7 +69,9 @@ class BrokerAdapter(ABC):
     def modify_position(self, ticket: str, sl: float | None = None, tp: float | None = None) -> bool: ...
 
     @abstractmethod
-    def close_position(self, ticket: str, volume: float | None = None, comment: str = "") -> OrderResult: ...
+    def close_position(self, ticket: str, volume: float | None = None, comment: str = "") -> OrderResult | TradeRecord:
+        """Simulated adapters settle immediately and return a TradeRecord; live adapters return an OrderResult."""
+        ...
 
     # ------------------------------------------------------------- lifecycle
     def on_tick(self, ticks: dict[str, Tick]) -> list[TradeRecord]:

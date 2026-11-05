@@ -13,12 +13,12 @@
 
     <div class="grid grid-cols-2 gap-2 md:grid-cols-4 xl:grid-cols-8">
       <Stat label="Net P&L" :value="money(m?.net_profit)" :tone="(m?.net_profit || 0) >= 0 ? 'text-up' : 'text-down'" />
-      <Stat label="Profit factor" :value="fmt(m?.profit_factor, 2)" :hint="'target > 1.30'" />
+      <Stat label="Profit factor" :value="fmtFactor(m?.profit_factor)" :hint="'target > 1.30'" />
       <Stat label="Expectancy" :value="money(m?.expectancy)" :hint="`${fmt(m?.expectancy_r, 2)}R avg`" />
       <Stat label="Win rate" :value="pct((m?.win_rate || 0) / 100, 1)" :hint="`${m?.wins || 0}W / ${m?.losses || 0}L`" />
       <Stat label="Max drawdown" :value="`${fmt(m?.max_drawdown_pct, 2)}%`" tone="text-down" />
       <Stat label="Sharpe" :value="fmt(m?.sharpe, 2)" />
-      <Stat label="TP before SL" :value="pct((m?.tp_before_sl_rate || 0) / 100, 0)" />
+      <Stat label="TP reached first" :value="pct((m?.tp_before_sl_rate || 0) / 100, 0)" hint="any target before the stop" />
       <Stat label="Trades" :value="m?.trades ?? 0" :hint="`costs ${money(m?.total_costs)}`" />
     </div>
 
@@ -93,7 +93,7 @@ import EquityChart from '../components/EquityChart.vue'
 import PositionsTable from '../components/PositionsTable.vue'
 import Stat from '../components/Stat.vue'
 import { api } from '../lib/api'
-import { datetime, fmt, money, pct } from '../lib/format'
+import { datetime, fmt, fmtFactor, money, pct } from '../lib/format'
 import { state, toast } from '../lib/store'
 
 const payload = ref(null)

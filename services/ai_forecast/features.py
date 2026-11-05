@@ -76,7 +76,8 @@ def build_features(df: pd.DataFrame) -> pd.DataFrame:
     hour = times.dt.hour.to_numpy()
     out["hour_sin"] = np.sin(2 * np.pi * hour / 24.0)
     out["hour_cos"] = np.cos(2 * np.pi * hour / 24.0)
-    out["dow"] = times.dt.dayofweek.to_numpy() / 6.0
+    dow = times.dt.day_of_week if hasattr(times.dt, "day_of_week") else times.dt.dayofweek
+    out["dow"] = dow.to_numpy() / 6.0
 
     out = out[FEATURE_COLUMNS].replace([np.inf, -np.inf], np.nan)
     out["t"] = df["t"].to_numpy(int)

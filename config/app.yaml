@@ -57,7 +57,9 @@ security:
 
 execution:
   order_timeout_seconds: 20
-  max_retries: 1
+  # Orders are sent once. An unconfirmed result is verified against the broker
+  # and surfaced to the operator — never resent automatically.
+  max_retries: 0
   slippage_points_default: 2
   reconcile_interval_seconds: 10
   idempotency_ttl_minutes: 120

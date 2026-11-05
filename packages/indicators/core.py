@@ -43,7 +43,9 @@ def rsi(close, period: int = 14) -> np.ndarray:
     avg_loss = loss.ewm(alpha=1 / period, adjust=False, min_periods=period).mean()
     rs = avg_gain / avg_loss.replace(0.0, np.nan)
     out = 100 - (100 / (1 + rs))
+    # No losses at all -> 100; perfectly flat (no gains either) -> neutral 50.
     out = out.where(avg_loss != 0, 100.0)
+    out = out.where(~((avg_loss == 0) & (avg_gain == 0)), 50.0)
     return out.to_numpy()
 
 

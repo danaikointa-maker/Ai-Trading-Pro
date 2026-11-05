@@ -210,7 +210,8 @@ class StrategyEngine:
         primary = self._primary_horizon(forecast, plan)
         calibrated = bool(primary and primary.calibrated)
         if primary is not None and plan is not None:
-            breakeven = plan.sl_points / max(1e-9, (plan.sl_points + plan.tp_points[0]))
+            cost = float(plan.estimated_cost)
+            breakeven = (plan.sl_points + cost) / max(1e-9, (plan.sl_points + plan.tp_points[0]))
             edge = max(-0.2, p_path - breakeven)
             normalized = float(np.clip(edge / 0.10, 0.0, 1.0))
             if not calibrated:
@@ -359,9 +360,11 @@ class StrategyEngine:
                 atr_points=max(1.0, snap.indicators.atr_points),
                 direction=1 if direction == Direction.up else -1)
             plan.p_tp_before_sl = round(p_path, 4)
-            plan.expected_value = round(
-                p_path * self.planner.profit_at(spec, plan.tp_points[0], plan.lot)
-                - (1 - p_path) * plan.risk_amount, 2)
+            # Expectancy of the *first* target, net of spread + commission on both legs.
+            cost = float(plan.estimated_cost)
+            win = self.planner.profit_at(spec, max(0.0, plan.tp_points[0] - cost), plan.lot)
+            loss = self.planner.profit_at(spec, plan.sl_points + cost, plan.lot)
+            plan.expected_value = round(p_path * win - (1 - p_path) * loss, 2)
 
         score, components, score_notes = self._score(ctx, direction, entry or EntryEvaluation(False, ""),
                                                      forecast, plan, p_path) if entry else (0.0, [], [])
@@ -412,7 +415,9 @@ class StrategyEngine:
                 "alignment_notes": ctx.alignment_notes,
                 "plan_notes": plan_notes,
                 "p_tp_before_sl": round(p_path, 4),
-                "breakeven_probability": round(plan.sl_points / (plan.sl_points + plan.tp_points[0]), 4) if plan else None,
+                "breakeven_probability": round(
+                    (plan.sl_points + plan.estimated_cost)
+                    / max(1e-9, (plan.sl_points + plan.tp_points[0])), 4) if plan else None,
                 "calibrated": bool(primary and primary.calibrated),
                 "model_version": forecast.model_version if forecast else None,
                 "regime_note": snap.regime.note if snap.regime else "",
