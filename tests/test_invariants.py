@@ -362,3 +362,62 @@ def test_short_backtest_raises_a_clear_error():
         Backtester(rt.settings, rt.risk, rt.planner).run(
             frame, spec, BacktestRequest(symbol="XAUUSD", bars=1200), "connext-demo")
     rt.stop()
+
+
+def test_news_calendar_file_overrides_the_placeholder(tmp_path):
+    """A real calendar file must replace the demo schedule, and the demo entries
+    must announce themselves as provisional so nobody mistakes them for news."""
+    import json
+
+    from packages.persistence.db import Database
+    from services.market_data.news import NewsService
+
+    calendar = tmp_path / "news.json"
+    now = 1_800_000_000
+    calendar.write_text(json.dumps({"events": [
+        {"t": now + 600, "currency": "USD", "impact": "high", "title": "US CPI m/m"},
+        {"t": now + 1200, "currency": "EUR", "impact": "medium", "title": "ECB minutes"},
+        {"t": "bad", "currency": "USD", "impact": "high", "title": "broken row"},
+        {"t": now + 1800, "currency": "USD", "impact": "nonsense", "title": "bad impact"},
+    ]}), encoding="utf-8")
+
+    db = Database(tmp_path / "news.sqlite3")
+    service = NewsService(db, now=now, calendar_path=calendar)
+    assert service.source.endswith("news.json")
+    assert service.skipped_events == 2, "malformed rows are skipped, not silently accepted"
+    assert [e.title for e in service.events] == ["US CPI m/m", "ECB minutes"]
+    assert all(not e.provisional for e in service.events)
+
+    lock = service.lockout(now + 700)
+    assert lock["active"] is True
+    assert lock["provisional"] is False
+    assert "provisional" not in lock["reason"]
+
+    demo = NewsService(Database(tmp_path / "demo.sqlite3"), now=now)
+    assert demo.source == "demo"
+    assert all(e.provisional for e in demo.events)
+    demo_lock = demo.lockout(demo.events[0].t - 60)
+    assert demo_lock["active"] is True
+    assert demo_lock["provisional"] is True
+    assert "NOT a real economic release" in demo_lock["reason"]
+
+
+def test_provisional_flag_survives_a_restart(tmp_path):
+    """The demo-news flag must survive the sqlite round trip: a reloaded event
+    used to come back as if it were real news."""
+    from packages.persistence.db import Database
+    from services.market_data.news import NewsService
+
+    db_path = tmp_path / "news.sqlite3"
+    now = 1_800_000_000
+    first = NewsService(Database(db_path), now=now)
+    assert first.events and all(e.provisional for e in first.events)
+
+    second = NewsService(Database(db_path), now=now)
+    assert all(e.provisional for e in second.events), "provisional flag lost on reload"
+    event = second.events[0]
+    lock = second.lockout(event.t - 60)
+    assert lock["provisional"] is True
+    assert "NOT a real economic release" in lock["reason"]
+    assert lock["event"]["provisional"] is True
+    assert lock["next_event"]["provisional"] is True

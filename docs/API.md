@@ -153,3 +153,22 @@ sortino, recovery_factor, total_costs, avg_hold_minutes, max_consecutive_losses`
 - `data_fingerprint` (16 hex) + `seed` — แฮชของ OHLCV ที่ใช้รัน; **แฮชเดิมให้ผลเลขเดิม**
 - `POST /api/backtests` ที่ `bars` น้อยเกินไป (< ~1,600 แท่ง M1) จะได้ job `state: "error"` พร้อมข้อความ
   "not enough history" (เดิม crash เป็น IndexError)
+
+
+## ปฏิทินข่าว (`/api/system/config` → `news`)
+
+```json
+{"calendar": "demo|file", "source": "...", "provisional": true, "events_loaded": 10, "rows_skipped": 0}
+```
+
+- `calendar: "demo"` = ใช้ตารางตัวอย่างที่ฝังมา (แสดงใน lockout reason ว่า
+  "provisional demo calendar, NOT a real economic release")
+- ถ้าต้องการใช้ปฏิทินจริง: วางไฟล์ที่ `storage/datasets/news.json` แล้วรีสตาร์ท
+
+```json
+[{"t": 1793900000, "currency": "USD", "impact": "high", "title": "US CPI m/m"}]
+```
+
+- รับได้ทั้ง list ตรง ๆ หรือ `{"events": [...]}`; `impact` ต้องเป็น `high|medium|low`
+- แถวที่ผิดรูปแบบจะถูกข้ามและนับใน `rows_skipped` (ไม่ทำให้แอปพัง)
+- `provisional: false` = ข้อมูลจริงจากไฟล์ ไม่ใช่ของตัวอย่าง

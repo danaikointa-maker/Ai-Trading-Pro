@@ -30,6 +30,15 @@ def config(runtime: TradingRuntime = Depends(get_runtime), user=Depends(current_
         "scoring": settings.strategy_cfg().get("scoring", {}),
         "zone_engine": settings.strategy_cfg().get("zone_engine", {}),
         "ai_horizons": settings.ai.get("horizons_minutes", []),
+        "news": {
+            # "demo" means the bundled placeholder schedule is in use: the lockout
+            # it produces is real logic but the events themselves are not news.
+            "calendar": "demo" if runtime.news.source == "demo" else "file",
+            "source": runtime.news.source,
+            "provisional": runtime.news.source == "demo",
+            "events_loaded": len(runtime.news.events),
+            "rows_skipped": runtime.news.skipped_events,
+        },
         "security": {
             "require_auth": settings.security.get("require_auth", True),
             "allow_full_auto": bool(settings.security.get("allow_full_auto")),

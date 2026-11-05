@@ -71,7 +71,8 @@ CREATE TABLE IF NOT EXISTS equity (
 );
 
 CREATE TABLE IF NOT EXISTS news (
-    id TEXT PRIMARY KEY, t INTEGER, currency TEXT, impact TEXT, title TEXT
+    id TEXT PRIMARY KEY, t INTEGER, currency TEXT, impact TEXT, title TEXT,
+    provisional INTEGER DEFAULT 0
 );
 
 CREATE TABLE IF NOT EXISTS backtests (
