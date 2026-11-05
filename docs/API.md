@@ -150,3 +150,6 @@ sortino, recovery_factor, total_costs, avg_hold_minutes, max_consecutive_losses`
 - `total_costs` = ค่าคอมมิชชัน + spread/slippage ที่ฝังในราคา fill → `gross_pnl − pnl = costs`
 - `expectancy_r` ใช้ risk ที่วัดตอน fill จริง ไม่ใช่ risk ตามแผน
 - `assumptions[]` ต้องอ่านคู่กับตัวเลขเสมอ (มีทั้งสมมติฐานราคาและจำนวนสัญญาณที่ถูกข้าม)
+- `data_fingerprint` (16 hex) + `seed` — แฮชของ OHLCV ที่ใช้รัน; **แฮชเดิมให้ผลเลขเดิม**
+- `POST /api/backtests` ที่ `bars` น้อยเกินไป (< ~1,600 แท่ง M1) จะได้ job `state: "error"` พร้อมข้อความ
+  "not enough history" (เดิม crash เป็น IndexError)

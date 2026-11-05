@@ -591,6 +591,7 @@ class BacktestRequest(BaseModel):
     slippage_points: float = 2.0
     starting_balance: float = 10000.0
     validate_walk_forward: bool = True
+    seed: int = 7
 
 
 class BacktestMetrics(BaseModel):
@@ -637,6 +638,9 @@ class BacktestReport(BaseModel):
     bars: int
     from_t: int = 0
     to_t: int = 0
+    # sha256 of the OHLCV the run consumed: same fingerprint => same numbers.
+    data_fingerprint: str = ""
+    seed: int = 7
     metrics: BacktestMetrics = Field(default_factory=BacktestMetrics)
     equity_curve: list[EquityPoint] = Field(default_factory=list)
     trades: list[TradeRecord] = Field(default_factory=list)

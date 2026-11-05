@@ -313,3 +313,52 @@ def test_paper_broker_pnl_is_in_account_currency():
     pnl = gross_pnl(Direction.up, 157.000, 157.100, 1.0, usdjpy)  # +100 points
     assert pnl == pytest.approx(100 * (100 / 157.2), rel=1e-9)
     assert pnl < 100, "JPY profit must be converted before it hits a USD balance"
+
+
+def test_backtest_is_reproducible_for_the_same_data():
+    """Same OHLCV in => identical metrics out, and the fingerprint proves it.
+
+    Before this, two identical runs could differ and there was no way to say why;
+    the report now records a hash of the exact candles it consumed.
+    """
+    from packages.shared_schemas.models import BacktestRequest
+    from services.api_gateway.state import TradingRuntime
+    from services.backtest_engine.backtester import Backtester
+
+    rt = TradingRuntime()
+    adapter = rt.registry.get("connext-demo")
+    spec = adapter.symbol_spec("XAUUSD")
+    frame = adapter.candles("XAUUSD", "M1", 2400).copy()
+    request = BacktestRequest(symbol="XAUUSD", bars=2400, slippage_points=2, starting_balance=10000)
+
+    engine = Backtester(rt.settings, rt.risk, rt.planner)
+    first = engine.run(frame, spec, request, "connext-demo")
+    second = engine.run(frame, spec, request, "connext-demo")
+
+    assert first.data_fingerprint and len(first.data_fingerprint) == 16
+    assert first.data_fingerprint == second.data_fingerprint
+    assert first.metrics.model_dump() == second.metrics.model_dump()
+    assert first.equity_curve[-1].equity == pytest.approx(second.equity_curve[-1].equity, abs=1e-9)
+
+    # One changed bar must change the fingerprint (otherwise the hash is useless).
+    nudged = frame.copy()
+    nudged.loc[nudged.index[-5], "c"] = float(nudged["c"].iloc[-5]) + 0.5
+    third = engine.run(nudged, spec, request, "connext-demo")
+    assert third.data_fingerprint != first.data_fingerprint
+    rt.stop()
+
+
+def test_short_backtest_raises_a_clear_error():
+    """Asking for too few bars must say so, not blow up with a pandas IndexError."""
+    from packages.shared_schemas.models import BacktestRequest
+    from services.api_gateway.state import TradingRuntime
+    from services.backtest_engine.backtester import Backtester
+
+    rt = TradingRuntime()
+    adapter = rt.registry.get("connext-demo")
+    spec = adapter.symbol_spec("XAUUSD")
+    frame = adapter.candles("XAUUSD", "M1", 1200).copy()
+    with pytest.raises(ValueError, match="not enough history"):
+        Backtester(rt.settings, rt.risk, rt.planner).run(
+            frame, spec, BacktestRequest(symbol="XAUUSD", bars=1200), "connext-demo")
+    rt.stop()

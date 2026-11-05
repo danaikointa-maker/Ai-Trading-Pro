@@ -109,6 +109,22 @@ class Backtester:
         self.kill_cfg = risk_cfg.get("kill_switch", {})
 
     # ------------------------------------------------------------------- run
+    @staticmethod
+    def _fingerprint(frame: pd.DataFrame) -> str:
+        """Hash the exact OHLCV the run consumed.
+
+        Two runs with the same fingerprint must produce the same metrics; a
+        different fingerprint explains any difference without hand-waving.
+        """
+        import hashlib
+
+        columns = [c for c in ("t", "o", "h", "l", "c", "v") if c in frame.columns]
+        digest = hashlib.sha256()
+        for column in columns:
+            digest.update(column.encode())
+            digest.update(np.ascontiguousarray(frame[column].to_numpy(dtype="float64")).tobytes())
+        return digest.hexdigest()[:16]
+
     def run(self, m1: pd.DataFrame, spec: SymbolSpec, request: BacktestRequest,
             broker_id: str = "connext-demo") -> BacktestReport:
         started = time.time()
@@ -117,6 +133,7 @@ class Backtester:
         commission = float(request.commission_per_lot if request.commission_per_lot is not None
                            else spec.commission_per_lot_round_turn)
         m1 = m1.tail(max(1200, min(20000, request.bars))).reset_index(drop=True)
+        fingerprint = self._fingerprint(m1)
         m5 = enrich(resample(m1, "M5"))
         m15 = enrich(resample(m1, "M15"))
         h1 = enrich(resample(m1, "H1"))
@@ -124,6 +141,12 @@ class Backtester:
         m1e = enrich(m1)
         n = len(m5)
         warmup = 320
+        if n <= warmup + 60:
+            # Without this guard a short request died deep inside with a pandas
+            # IndexError instead of telling the caller to ask for more history.
+            raise ValueError(
+                f"not enough history: {len(m1)} M1 bars -> {n} M5 bars, "
+                f"need more than {warmup + 60} M5 bars (about {(warmup + 61) * 5} M1 bars)")
         horizon_bars = [1, 3, 6, 12, 48]
         train_cut = int(n * 0.6)
         table = None
@@ -321,6 +344,8 @@ class Backtester:
             bars=len(m1),
             from_t=int(m5["t"].iloc[warmup]),
             to_t=int(m5["t"].iloc[-1]),
+            data_fingerprint=fingerprint,
+            seed=int(getattr(request, "seed", 7) or 7),
             metrics=metrics,
             equity_curve=equity_curve[:: max(1, len(equity_curve) // 600)],
             trades=trades[-200:],
@@ -339,6 +364,7 @@ class Backtester:
                 f"Decisions every {self.decision_stride * 5} minutes of market time; "
                 f"{len(trades)} trades from {decisions} decision points.",
                 "Simulated feed data — replace with MT5 tick history before trusting any number here.",
+                f"Data fingerprint {fingerprint}: a rerun on the same fingerprint reproduces these numbers exactly.",
                 *gap_notes,
             ],
             verdict=verdict(metrics),

@@ -3,8 +3,9 @@
     <div v-if="isAuthed" class="flex min-h-screen">
       <SideNav class="hidden lg:flex" />
       <div class="flex min-w-0 flex-1 flex-col">
+        <OfflineBanner />
         <TopBar />
-        <main class="mx-auto w-full max-w-[1700px] flex-1 px-3 py-3 pb-16 sm:px-4">
+        <main class="mx-auto w-full max-w-[1700px] flex-1 px-3 py-3 pb-24 sm:px-4 lg:pb-16">
           <router-view v-slot="{ Component }">
             <transition name="fade" mode="out-in">
               <component :is="Component" />
@@ -26,6 +27,7 @@
       </div>
     </div>
     <router-view v-else />
+    <MobileNav v-if="isAuthed" />
     <Toasts />
   </div>
 </template>
@@ -33,6 +35,8 @@
 <script setup>
 import { computed, onMounted, onUnmounted } from 'vue'
 import SideNav from './components/SideNav.vue'
+import MobileNav from './components/MobileNav.vue'
+import OfflineBanner from './components/OfflineBanner.vue'
 import TopBar from './components/TopBar.vue'
 import Toasts from './components/Toasts.vue'
 import { bootstrap, startLive, state, stopLive } from './lib/store'
