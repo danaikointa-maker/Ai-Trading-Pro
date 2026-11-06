@@ -41,12 +41,6 @@ def _run_job(job_id: str, runtime: TradingRuntime, request: BacktestRequest, act
             JOBS[job_id] = {"state": "done", "pct": 100, "message": "finished",
                             "report_id": report.id, "metrics": report.metrics.model_dump(),
                             "verdict": report.verdict}
-    except ValueError as exc:
-        # Bad input (too few bars, unknown symbol) is the caller's problem, not a crash.
-        with _LOCK:
-            JOBS[job_id] = {"state": "error", "pct": 100, "message": str(exc),
-                            "finished_at": time.time()}
-        runtime.db.audit(actor, "backtest.error", {"bars": request.bars, "error": str(exc)})
     except Exception as exc:  # noqa: BLE001
         with _LOCK:
             JOBS[job_id] = {"state": "error", "pct": 0, "message": str(exc)}

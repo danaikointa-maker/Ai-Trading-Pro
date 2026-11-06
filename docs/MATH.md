@@ -117,7 +117,7 @@ recovery_factor     = net / (max_dd × starting_balance)
 | ต้นทุน spread ใน backtest | ใส่ที่ราคาเข้า (bid/ask + slippage) แต่SL/TP ตัดสินจากราคา mid ของแท่ง |
 | SL/TP ชนในแท่งเดียวกัน | เลือก stop ก่อน target (อนุรักษ์นิยม) |
 | ค่าธรรมเนียม | ใช้ `commission_per_lot_round_turn` จาก spec (ถ้าโบรกเกอร์ไม่ให้มา = 0) |
-| swap | คิดแล้วเมื่อถือข้ามเที่ยงคืน (UTC) — วันพุธคูณ 3 ตามธรรมเนียมโบรกเกอร์ |
+| swap | ไม่คิด (กลยุทธ์ intraday) |
 | สกุลเงินกำไร ≠ USD | ยังไม่แปลงค่า |
 | walk-forward | fold ตามเวลา แต่ยังใช้ข้อมูลชุดเดียว (ไม่ใช่ tick data) |
 | Sharpe | annualise จากแท่ง 5 นาที; ช่วงที่ไม่มีไม้จะได้ return = 0 ทำให้ค่าสูงเกินจริงได้ |
@@ -150,16 +150,3 @@ recovery_factor     = net / (max_dd × starting_balance)
 23. `total_costs` รายงานแค่ค่าคอมมิชชั่น (XAUUSD = 0) ทั้งที่ราคา fill มี spread 12.5 points ฝังอยู่
     → บันทึกต้นทุนฝั่งเข้าเป็นเงินด้วย ทำให้ `gross_pnl − pnl == costs` เสมอ (ทั้ง paper และ backtest) ✅
     ข้อควรระวัง: ต้นทุนนี้อยู่ในราคาแล้ว จึงหักจาก balance ซ้ำไม่ได้ (มี test ล็อกไว้)
-
-## 11. Overnight swap (ค่าถือข้ามคืน)
-
-```
-swap_per_night = (swap_long_per_lot ถ้า BUY / swap_short_per_lot ถ้า SELL) × volume
-จำนวนคืน      = จำนวนเที่ยงคืน (UTC) ที่ถือผ่าน
-ตัวคูณ         = 3 ถ้าเป็นคืนที่เข้าสู่วันพุธ (carry weekend) นอกนั้น 1
-pnl_สุทธิ      = ราคา × ขนาด + swap − commission − ต้นทุนฝั่งเข้า
-```
-
-- ใช้ทั้ง paper broker และ backtest (สูตรเดียวกัน)
-- `gross_pnl = pnl + costs − swap` → `gross − pnl = costs − swap` (มี test ล็อก)
-- อัตรา swap มาจาก `config/brokers.yaml` ต่อ symbol; MT5 จะอ่านจาก terminal ในงานถัดไป

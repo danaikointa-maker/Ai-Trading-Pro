@@ -23,27 +23,9 @@ from typing import Callable
 PriceOf = Callable[[str], float | None]
 
 
-# Anchors tried when neither the direct nor the inverse pair is quoted. USD first
-# because most accounts and most liquid crosses go through it.
-DEFAULT_ANCHORS = ("USD", "EUR", "GBP", "JPY", "CHF")
-
-
-def _pair_rate(base: str, quote: str, price_of: PriceOf) -> float | None:
-    """How many `quote` one unit of `base` is worth, or None when unquoted."""
-    if base == quote:
-        return 1.0
-    direct = price_of(f"{base}{quote}")
-    if direct and direct > 0:
-        return float(direct)
-    inverse = price_of(f"{quote}{base}")
-    if inverse and inverse > 0:
-        return 1.0 / float(inverse)
-    return None
-
-
 def resolve_quote_rate(profit_currency: str, account_currency: str, price_of: PriceOf,
-                       anchors: tuple[str, ...] = DEFAULT_ANCHORS) -> tuple[float, str]:
-    """Return ``(rate, source)`` where ``source`` is identity/ticker/triangulated/unknown."""
+                       ) -> tuple[float, str]:
+    """Return ``(rate, source)`` where ``source`` is one of the literals below."""
     profit = (profit_currency or "").upper()
     account = (account_currency or "").upper()
     if not profit or not account:
@@ -51,20 +33,13 @@ def resolve_quote_rate(profit_currency: str, account_currency: str, price_of: Pr
     if profit == account:
         return 1.0, "identity"
 
-    direct = _pair_rate(profit, account, price_of)
-    if direct:
-        return direct, "ticker"
+    direct = price_of(f"{profit}{account}")
+    if direct and direct > 0:
+        return float(direct), "ticker"
 
-    # e.g. GBP profit on a USD account with no GBPUSD quote, but EURUSD and
-    # EURGBP are visible: 1 GBP = (EURGBP)^-1 EUR = EURUSD / EURGBP USD.
-    for anchor in anchors or ():
-        anchor = anchor.upper()
-        if anchor in (profit, account):
-            continue
-        p = _pair_rate(profit, anchor, price_of)
-        a = _pair_rate(account, anchor, price_of)
-        if p and a:
-            return p / a, "triangulated"
+    inverse = price_of(f"{account}{profit}")
+    if inverse and inverse > 0:
+        return 1.0 / float(inverse), "ticker"
 
     return 1.0, "unknown"
 
