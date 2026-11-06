@@ -128,6 +128,16 @@ class SymbolSpec(BaseModel):
         """Account-currency profit for a 1.0 point move on 1.0 lot."""
         return self.point * self.contract_size * self.quote_to_account_rate
 
+    def pnl_in_account_currency(self, price_change: float, volume: float) -> float:
+        """Money made by a *signed* price change, already in the account currency.
+
+        `price_change` is (exit - entry) for a long and (entry - exit) for a short,
+        i.e. it already carries the direction sign. A JPY-quoted pair returns JPY
+        from `contract_size x price_change`, so the quote->account rate is not
+        optional: without it the same trade is worth ~157x too much.
+        """
+        return price_change * self.contract_size * volume * self.quote_to_account_rate
+
     @property
     def quote_in_account_currency(self) -> bool:
         """True when one point of P&L is already denominated in the account currency."""

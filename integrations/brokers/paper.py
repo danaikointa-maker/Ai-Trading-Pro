@@ -36,7 +36,7 @@ from services.market_data.simulator import SyntheticFeed, resample
 def gross_pnl(direction: Direction, entry: float, exit_price: float, volume: float, spec: SymbolSpec) -> float:
     """Profit in the *account* currency (the quote currency is converted)."""
     sign = 1.0 if direction == Direction.up else -1.0
-    return sign * (exit_price - entry) * spec.contract_size * volume * spec.quote_to_account_rate
+    return spec.pnl_in_account_currency(sign * (exit_price - entry), volume)
 
 
 def commission_for(volume: float, spec: SymbolSpec) -> float:

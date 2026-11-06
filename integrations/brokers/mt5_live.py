@@ -339,8 +339,13 @@ class MT5Broker(BrokerAdapter):
         """Broker-authoritative P&L via order_calc_profit (falls back to the contract formula)."""
         if not self._connected or not MT5_AVAILABLE:
             spec = self.symbol_spec(symbol)
+            if spec.sizing_blocked:
+                raise BrokerError(
+                    f"cannot value {symbol} profit in account currency: "
+                    f"{spec.profit_currency}->USD rate unresolved (MT5 offline)"
+                )
             sign = 1 if direction == Direction.up else -1
-            return (exit_price - entry) * sign * spec.contract_size * volume
+            return spec.pnl_in_account_currency((exit_price - entry) * sign, volume)
         order_type = mt5.ORDER_TYPE_BUY if direction == Direction.up else mt5.ORDER_TYPE_SELL
         profit = mt5.order_calc_profit(order_type, self._broker_symbol(symbol), volume, entry, exit_price)
         return float(profit) if profit is not None else 0.0

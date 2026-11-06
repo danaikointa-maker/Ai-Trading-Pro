@@ -417,7 +417,7 @@ class Backtester:
         if pos is None:
             return 0.0
         sign = 1 if pos.direction == Direction.up else -1
-        return (price - pos.entry) * sign * spec.contract_size * pos.remaining
+        return spec.pnl_in_account_currency((price - pos.entry) * sign, pos.remaining)
 
     def _manage_bar(self, pos: SimPosition, bar: pd.Series, spec: SymbolSpec, spread_price: float,
                     commission: float) -> tuple[SimPosition | None, TradeRecord | None]:
@@ -430,7 +430,9 @@ class Backtester:
 
         def book(volume: float, price: float, reason: str) -> None:
             nonlocal pos
-            pnl = (price - pos.entry) * sign * spec.contract_size * volume
+            # Account currency, not quote currency: a JPY-quoted pair would
+            # otherwise book ~157x the real profit next to USD commission.
+            pnl = spec.pnl_in_account_currency((price - pos.entry) * sign, volume)
             cost = commission * volume
             pos.realized += pnl - cost
             pos.costs += cost
