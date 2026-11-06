@@ -82,12 +82,7 @@ class TradingRuntime:
             if hasattr(adapter, "clock"):
                 adapter.clock = lambda: self.feed.end_time  # type: ignore[attr-defined]
 
-        self.news = NewsService(
-            self.db, high_impact_currencies=["USD"], now=self.feed.end_time,
-            # A real calendar dropped here (own export or scraper output) replaces
-            # the bundled placeholder schedule; see docs/API.md for the format.
-            calendar_path=self.settings.paths["datasets"] / "news.json",
-        )
+        self.news = NewsService(self.db, high_impact_currencies=["USD"], now=self.feed.end_time)
         self.market = MarketDataService(self.settings, self.registry, self.news)
         self.market.set_virtual_now(self.feed.end_time)
 

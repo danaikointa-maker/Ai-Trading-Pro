@@ -67,16 +67,13 @@
             <Stat label="Win rate" :value="`${fmt(report.metrics.win_rate, 1)}%`" />
             <Stat label="Max DD" :value="`${fmt(report.metrics.max_drawdown_pct, 2)}%`" tone="text-down" />
             <Stat label="Sharpe" :value="fmt(report.metrics.sharpe, 2)" />
-            <Stat label="Costs" :value="money(report.metrics.total_costs)"
-                  :hint="`swap ${money(report.metrics.total_swap || 0)}`" />
+            <Stat label="Costs" :value="money(report.metrics.total_costs)" />
           </div>
 
           <div class="grid gap-3 lg:grid-cols-[minmax(0,1fr)_320px]">
             <section class="panel">
               <div class="panel-head"><div class="panel-title">Equity curve</div>
-                <span class="chip num" :title="'แฮชของข้อมูลที่ใช้รัน — แฮชเดิมให้ผลเลขเดิมเสมอ'">
-                  data {{ report.data_fingerprint || '—' }} · seed {{ report.seed ?? 7 }}
-                </span></div>
+                <span class="chip">{{ fmt(report.from_t, 0) }} → {{ fmt(report.to_t, 0) }}</span></div>
               <div class="px-2 py-2"><EquityChart :curve="report.equity_curve" :baseline="form.starting_balance" /></div>
             </section>
             <section class="panel">

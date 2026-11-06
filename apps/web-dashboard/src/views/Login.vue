@@ -70,7 +70,6 @@
 import { onMounted, ref } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { bootstrap, login, startLive } from '../lib/store'
-import { getToken } from '../lib/api'
 
 const router = useRouter()
 const route = useRoute()
@@ -93,23 +92,14 @@ function fillDemo() {
   password.value = 'no7demo1234'
 }
 
-function landingTarget() {
-  const raw = route.query.next
-  const next = typeof raw === 'string' ? raw : ''
-  return next.startsWith('/') && !next.startsWith('//') ? next : '/'
-}
-
 async function submit() {
   loading.value = true
   error.value = ''
   try {
     await login(email.value, password.value)
-    // Leave the login route immediately: waiting for bootstrap() first left the
-    // user staring at the form (with a valid token already stored) whenever the
-    // bootstrap calls were slow.
-    await router.replace(landingTarget()).catch(() => window.location.assign('/'))
-    bootstrap().catch(() => {})
+    await bootstrap()
     startLive()
+    router.push(route.query.next || '/')
   } catch (err) {
     error.value = err.message
   } finally {
@@ -119,7 +109,5 @@ async function submit() {
 
 onMounted(() => {
   if (route.query.demo === '1') fillDemo()
-  // A reload on /login with a live token must not keep the form on screen.
-  if (getToken()) router.replace(landingTarget()).catch(() => window.location.assign('/'))
 })
 </script>

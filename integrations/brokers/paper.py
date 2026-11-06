@@ -9,7 +9,6 @@ from __future__ import annotations
 
 import itertools
 import time
-from datetime import datetime, timezone
 from dataclasses import dataclass, field
 from typing import Any
 
@@ -66,8 +65,6 @@ class PaperPosition:
     weighted_exit: float = 0.0
     max_favorable_points: float = 0.0
     entry_cost: float = 0.0
-    swap_charged: float = 0.0
-    last_swap_day: int = 0
     breakeven_done: bool = False
     trailing_active: bool = False
     partials_done: int = 0
@@ -261,7 +258,6 @@ class PaperBroker(BrokerAdapter):
             open_time=int(self.clock()),
             # Half the spread plus the slippage is already inside `price`; book the
             # money here so `costs` means the same thing live as in the backtest.
-            last_swap_day=int(self.clock() // 86400),
             entry_cost=round((spec.spread_typical_points / 2.0 * spec.point + slip)
                              / spec.point * spec.value_per_point_per_lot * volume, 2),
             comment=request.comment, signal_id=request.signal_id, mode=request.mode.value,
@@ -307,36 +303,8 @@ class PaperBroker(BrokerAdapter):
             pos.partials_done += 1
         return self._realize(pos, price, vol, reason or comment or "manual close")
 
-    # ----------------------------------------------------------------- swap
-    def _swap_rate(self, pos: PaperPosition) -> float:
-        """Money charged (negative) or paid (positive) for one night, per lot."""
-        return (pos.spec.swap_long_per_lot if pos.direction == Direction.up
-                else pos.spec.swap_short_per_lot)
-
-    def _apply_swap(self) -> None:
-        """Charge overnight financing when the clock crosses midnight.
-
-        Brokers roll FX at 00:00 server time; this build uses UTC. Wednesday is
-        charged three times (the market takes the weekend funding on Wednesday
-        night) — the same convention most retail brokers use.
-        """
-        today = int(self.clock() // 86400)
-        for pos in self._positions.values():
-            if pos.last_swap_day >= today:
-                continue
-            while pos.last_swap_day < today:
-                pos.last_swap_day += 1
-                # 3 = Wednesday in date.weekday()
-                multiplier = 3 if datetime.utcfromtimestamp(pos.last_swap_day * 86400).weekday() == 2 else 1
-                amount = self._swap_rate(pos) * pos.volume * multiplier
-                if amount:
-                    pos.swap_charged += amount
-                    pos.realized_pnl += amount
-                    self.balance += amount
-
     # ---------------------------------------------------------------- ticks
     def on_tick(self, ticks: dict[str, Tick]) -> list[TradeRecord]:
-        self._apply_swap()
         closed: list[TradeRecord] = []
         for ticket in list(self._positions):
             pos = self._positions.get(ticket)
@@ -404,10 +372,8 @@ class PaperBroker(BrokerAdapter):
                 opened_at=pos.open_time,
                 closed_at=int(self.clock()),
                 points=round(points, 1),
-                # gross = P&L with neither costs nor financing applied
-                gross_pnl=round(pos.realized_pnl + total_costs - pos.swap_charged, 2),
+                gross_pnl=round(pos.realized_pnl + total_costs, 2),
                 costs=round(total_costs, 2),
-                swap=round(pos.swap_charged, 2),
                 pnl=round(pos.realized_pnl, 2),
                 r_multiple=round(pos.realized_pnl / (risk_points * pos.spec.value_per_point_per_lot * pos.closed_volume), 2)
                 if risk_points and pos.closed_volume else 0.0,

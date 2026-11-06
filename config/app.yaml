@@ -70,8 +70,3 @@ alerts:
   telegram_enabled: false
   line_enabled: false
   min_score: 70
-
-# WebSocket: a light frame every second, a full payload (with analysis/forecast)
-# at least this often so those panels never freeze.
-ws:
-  full_snapshot_seconds: 5

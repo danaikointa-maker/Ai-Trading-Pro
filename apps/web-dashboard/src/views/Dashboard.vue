@@ -11,9 +11,6 @@
     </div>
 
     <div v-if="news?.active" class="rounded-xl border border-amber-400/30 bg-amber-400/10 px-4 py-2.5 text-[11.5px] text-amber-200">
-      <span v-if="news.provisional" class="mr-1 rounded bg-amber-400/20 px-1.5 py-0.5 text-[10px] font-semibold uppercase tracking-wide">
-        ปฏิทินตัวอย่าง
-      </span>
       <strong>News lockout:</strong> {{ news.reason }} — ระบบจะไม่เปิดไม้ใหม่จนกว่าจะพ้นช่วงข่าว
     </div>
     <div v-if="!analysis?.data_quality?.ok" class="rounded-xl border border-down/30 bg-down/10 px-4 py-2.5 text-[11.5px] text-down">

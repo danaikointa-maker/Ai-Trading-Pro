@@ -87,14 +87,7 @@ export function setTimeframe(tf) {
 }
 
 export function applyLive(payload, transport = 'ws') {
-  // "tick" frames are intentionally light (no analysis/forecast). Merging instead
-  // of replacing keeps those blocks on screen between full snapshots — replacing
-  // used to blank every analysis panel one second after load.
-  const previous = state.live || {}
-  const merged = { ...previous, ...payload }
-  if (merged.analysis == null) merged.analysis = previous.analysis ?? null
-  if (merged.forecast == null) merged.forecast = previous.forecast ?? null
-  state.live = merged
+  state.live = payload
   if (payload.symbol && payload.symbol !== state.symbol) state.symbol = payload.symbol
   state.connected = true
   state.transport = transport
