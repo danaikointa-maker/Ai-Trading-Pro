@@ -141,3 +141,15 @@ python3 -m pytest tests/ -q      # 54 tests: maths, risk gate, zones, forecast s
 | `./scripts/test.sh` | รันชุดทดสอบทั้งหมด (unit + API contract + invariant สูตร) |
 | `./scripts/smoke.py` | เช็คว่าระบบมีชีวิตและ payload ครบ (health/live/model/errors) |
 | `TOKEN=… ./scripts/train.sh XAUUSD` | สั่งฝึกโมเดลใหม่ผ่าน API |
+
+## ติดตั้งเป็นแอปบนมือถือ (PWA)
+
+เปิดแอปในเบราว์เซอร์ของมือถือ (ต้องเป็น HTTPS หรือ localhost) แล้วเลือก
+"เพิ่มไปยังหน้าจอโฮม" — รองรับ:
+
+- `manifest.webmanifest` + ไอคอน 192/512/maskable + `apple-touch-icon`
+- service worker: cache เฉพาะ "เปลือกแอป" (HTML/JS/CSS/ไอคอน)
+  **ไม่ cache `/api` หรือ `/ws` เด็ดขาด** เพราะราคาเก่าอันตรายกว่าราคาที่ไม่มี
+- แถบเตือน "ไม่มีการเชื่อมต่อ" เมื่อสตรีมขาด เพื่อไม่ให้ดูเหมือนราคาสด
+- แถบเมนูล่าง (bottom tab bar) + เมนูเต็มจอสำหรับหน้าจอเล็ก (เดิม sidebar ถูกซ่อนและไม่มีทางไปหน้าอื่น)
+- สร้างไอคอนใหม่ได้ด้วย `python3 scripts/make_icons.py` (ไม่ต้องใช้ Pillow)

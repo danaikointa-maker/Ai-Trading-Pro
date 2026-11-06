@@ -89,14 +89,29 @@ def create_app(runtime: TradingRuntime | None = None) -> FastAPI:
         if (DASHBOARD_DIST / "assets").is_dir():
             app.mount("/assets", StaticFiles(directory=str(DASHBOARD_DIST / "assets")), name="assets")
 
+        # Files whose caching semantics matter for the PWA: the worker must be
+        # re-fetched on every visit (otherwise an old worker serves an old app),
+        # and the manifest must be typed correctly or the install prompt is not offered.
+        PWA_HEADERS = {
+            "sw.js": {"media_type": "application/javascript",
+                      "headers": {"Cache-Control": "no-cache", "Service-Worker-Allowed": "/"}},
+            "manifest.webmanifest": {"media_type": "application/manifest+json",
+                                     "headers": {"Cache-Control": "public, max-age=3600"}},
+        }
+
         @app.get("/{full_path:path}", include_in_schema=False)
         def spa_fallback(full_path: str):
             if full_path.startswith(("api/", "ws")):
                 raise HTTPException(status_code=404, detail="not found")
             candidate = (DASHBOARD_DIST / full_path).resolve()
             if full_path and candidate.is_file() and DASHBOARD_DIST.resolve() in candidate.parents:
+                extra = PWA_HEADERS.get(full_path)
+                if extra:
+                    return FileResponse(candidate, **extra)
                 return FileResponse(candidate)
-            return FileResponse(DASHBOARD_DIST / "index.html")
+            # index.html itself must not be cached hard, or users keep an old shell.
+            return FileResponse(DASHBOARD_DIST / "index.html",
+                                headers={"Cache-Control": "no-cache"})
     else:
         @app.get("/", include_in_schema=False, response_class=HTMLResponse)
         def placeholder():

@@ -131,9 +131,25 @@ class TradeExplainer:
             "model_used": "deterministic",
         }
 
+    #: Words that look like an instruction to trade. The explainer explains; it
+    #: never executes, and it must say so instead of leaving the user guessing.
+    TRADE_INTENT = ("ซื้อ", "ขาย", "เปิดไม้", "ปิดไม้", "ปิดออเดอร์", "เข้าไม้",
+                    " buy ", " sell ", "open ", "close ", "lot")
+
+    def _looks_like_an_order(self, question: str) -> bool:
+        text = f" {question.strip().lower()} "
+        return any(token in text for token in self.TRADE_INTENT)
+
     def explain(self, question: str, signal: Signal | None, snapshot: AnalysisSnapshot | None,
                 forecast: ForecastBundle | None) -> dict[str, Any]:
         base = self.deterministic_answer(question, signal, snapshot, forecast)
+        if self._looks_like_an_order(question):
+            base["answer"] = (
+                "ช่องนี้ตอบคำถามเท่านั้น ไม่สามารถสั่งซื้อ/ขายได้ — "
+                "การเปิด-ปิดไม้ต้องทำที่หน้า Terminal หรือกดยืนยันคำสั่งเอง"
+                + "\n\n" + str(base.get("answer", ""))
+            )
+            base["bullets"] = ["ไม่มีการส่งคำสั่งใด ๆ จากช่องทางนี้"] + list(base.get("bullets") or [])
         if not self.llm.enabled:
             return base
         facts = self.fact_sheet(signal, snapshot, forecast)

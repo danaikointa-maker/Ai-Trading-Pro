@@ -313,3 +313,181 @@ def test_paper_broker_pnl_is_in_account_currency():
     pnl = gross_pnl(Direction.up, 157.000, 157.100, 1.0, usdjpy)  # +100 points
     assert pnl == pytest.approx(100 * (100 / 157.2), rel=1e-9)
     assert pnl < 100, "JPY profit must be converted before it hits a USD balance"
+
+
+def test_backtest_is_reproducible_for_the_same_data():
+    """Same OHLCV in => identical metrics out, and the fingerprint proves it.
+
+    Before this, two identical runs could differ and there was no way to say why;
+    the report now records a hash of the exact candles it consumed.
+    """
+    from packages.shared_schemas.models import BacktestRequest
+    from services.api_gateway.state import TradingRuntime
+    from services.backtest_engine.backtester import Backtester
+
+    rt = TradingRuntime()
+    adapter = rt.registry.get("connext-demo")
+    spec = adapter.symbol_spec("XAUUSD")
+    frame = adapter.candles("XAUUSD", "M1", 2400).copy()
+    request = BacktestRequest(symbol="XAUUSD", bars=2400, slippage_points=2, starting_balance=10000)
+
+    engine = Backtester(rt.settings, rt.risk, rt.planner)
+    first = engine.run(frame, spec, request, "connext-demo")
+    second = engine.run(frame, spec, request, "connext-demo")
+
+    assert first.data_fingerprint and len(first.data_fingerprint) == 16
+    assert first.data_fingerprint == second.data_fingerprint
+    assert first.metrics.model_dump() == second.metrics.model_dump()
+    assert first.equity_curve[-1].equity == pytest.approx(second.equity_curve[-1].equity, abs=1e-9)
+
+    # One changed bar must change the fingerprint (otherwise the hash is useless).
+    nudged = frame.copy()
+    nudged.loc[nudged.index[-5], "c"] = float(nudged["c"].iloc[-5]) + 0.5
+    third = engine.run(nudged, spec, request, "connext-demo")
+    assert third.data_fingerprint != first.data_fingerprint
+    rt.stop()
+
+
+def test_short_backtest_raises_a_clear_error():
+    """Asking for too few bars must say so, not blow up with a pandas IndexError."""
+    from packages.shared_schemas.models import BacktestRequest
+    from services.api_gateway.state import TradingRuntime
+    from services.backtest_engine.backtester import Backtester
+
+    rt = TradingRuntime()
+    adapter = rt.registry.get("connext-demo")
+    spec = adapter.symbol_spec("XAUUSD")
+    frame = adapter.candles("XAUUSD", "M1", 1200).copy()
+    with pytest.raises(ValueError, match="not enough history"):
+        Backtester(rt.settings, rt.risk, rt.planner).run(
+            frame, spec, BacktestRequest(symbol="XAUUSD", bars=1200), "connext-demo")
+    rt.stop()
+
+
+def test_news_calendar_file_overrides_the_placeholder(tmp_path):
+    """A real calendar file must replace the demo schedule, and the demo entries
+    must announce themselves as provisional so nobody mistakes them for news."""
+    import json
+
+    from packages.persistence.db import Database
+    from services.market_data.news import NewsService
+
+    calendar = tmp_path / "news.json"
+    now = 1_800_000_000
+    calendar.write_text(json.dumps({"events": [
+        {"t": now + 600, "currency": "USD", "impact": "high", "title": "US CPI m/m"},
+        {"t": now + 1200, "currency": "EUR", "impact": "medium", "title": "ECB minutes"},
+        {"t": "bad", "currency": "USD", "impact": "high", "title": "broken row"},
+        {"t": now + 1800, "currency": "USD", "impact": "nonsense", "title": "bad impact"},
+    ]}), encoding="utf-8")
+
+    db = Database(tmp_path / "news.sqlite3")
+    service = NewsService(db, now=now, calendar_path=calendar)
+    assert service.source.endswith("news.json")
+    assert service.skipped_events == 2, "malformed rows are skipped, not silently accepted"
+    assert [e.title for e in service.events] == ["US CPI m/m", "ECB minutes"]
+    assert all(not e.provisional for e in service.events)
+
+    lock = service.lockout(now + 700)
+    assert lock["active"] is True
+    assert lock["provisional"] is False
+    assert "provisional" not in lock["reason"]
+
+    demo = NewsService(Database(tmp_path / "demo.sqlite3"), now=now)
+    assert demo.source == "demo"
+    assert all(e.provisional for e in demo.events)
+    demo_lock = demo.lockout(demo.events[0].t - 60)
+    assert demo_lock["active"] is True
+    assert demo_lock["provisional"] is True
+    assert "NOT a real economic release" in demo_lock["reason"]
+
+
+def test_provisional_flag_survives_a_restart(tmp_path):
+    """The demo-news flag must survive the sqlite round trip: a reloaded event
+    used to come back as if it were real news."""
+    from packages.persistence.db import Database
+    from services.market_data.news import NewsService
+
+    db_path = tmp_path / "news.sqlite3"
+    now = 1_800_000_000
+    first = NewsService(Database(db_path), now=now)
+    assert first.events and all(e.provisional for e in first.events)
+
+    second = NewsService(Database(db_path), now=now)
+    assert all(e.provisional for e in second.events), "provisional flag lost on reload"
+    event = second.events[0]
+    lock = second.lockout(event.t - 60)
+    assert lock["provisional"] is True
+    assert "NOT a real economic release" in lock["reason"]
+    assert lock["event"]["provisional"] is True
+    assert lock["next_event"]["provisional"] is True
+
+
+def test_fx_triangulation_through_a_third_currency():
+    """GBP P&L on a USD account must still be valued when only EUR pairs exist:
+    EURUSD / EURGBP = GBPUSD."""
+    from integrations.brokers.fx import resolve_quote_rate
+
+    quotes = {"EURUSD": 1.08, "EURGBP": 0.85}
+    rate, source = resolve_quote_rate("GBP", "USD", quotes.get)
+    assert source == "triangulated"
+    assert rate == pytest.approx(1.08 / 0.85, rel=1e-12)
+
+    # A direct quote always wins over triangulation.
+    rate, source = resolve_quote_rate("GBP", "USD", {"GBPUSD": 1.27, **quotes}.get)
+    assert (source, rate) == ("ticker", 1.27)
+
+    # No path at all -> still unknown (the planner will refuse to size).
+    rate, source = resolve_quote_rate("TRY", "USD", quotes.get)
+    assert (rate, source) == (1.0, "unknown")
+
+
+def test_overnight_swap_is_charged_and_wednesday_counts_triple():
+    """Holding past midnight must cost money, and the demo swap rates must reach
+    the balance (before this, swap was configured but never applied)."""
+    from datetime import datetime, timezone
+
+    from packages.shared_schemas.models import OrderRequest, OrderSide
+    from services.api_gateway.state import TradingRuntime
+
+    rt = TradingRuntime()
+    adapter = rt.registry.get("connext-demo")
+    spec = adapter.symbol_spec("XAUUSD")
+    assert spec.swap_long_per_lot != 0 or spec.swap_short_per_lot != 0, \
+        "the demo profile must carry swap rates for this to mean anything"
+
+    tick = adapter.ticker("XAUUSD")
+    opened = adapter.order_send(OrderRequest(
+        symbol="XAUUSD", side=OrderSide.sell, volume=0.5,
+        sl=round(tick.bid + 5.0, spec.digits), tp=round(tick.bid - 8.0, spec.digits)))
+    assert opened.ticket
+
+    # Start from a Monday so the first rollover is a plain weekday night.
+    monday = int(datetime(2026, 11, 2, 23, 30, tzinfo=timezone.utc).timestamp())
+    position = adapter._positions[opened.ticket]
+    position.last_swap_day = monday // 86400
+    balance_before = adapter.account_info().balance
+
+    adapter.clock = lambda: monday + 3600  # 00:30 Tuesday
+    adapter._apply_swap()
+    tuesday = datetime(2026, 11, 3, tzinfo=timezone.utc).weekday()
+    assert tuesday == 1
+    expected = spec.swap_short_per_lot * 0.5
+    assert position.swap_charged == pytest.approx(expected, rel=1e-9)
+    assert adapter.account_info().balance == pytest.approx(balance_before + expected, abs=0.01)
+
+    # Tuesday -> Wednesday: the rollover that carries the weekend, so triple.
+    wednesday_epoch = int(datetime(2026, 11, 4, 0, 30, tzinfo=timezone.utc).timestamp())
+    adapter.clock = lambda: wednesday_epoch
+    adapter._apply_swap()
+    assert position.swap_charged == pytest.approx(expected * 4, rel=1e-9)
+
+    # Nothing is charged twice for the same day.
+    adapter._apply_swap()
+    assert position.swap_charged == pytest.approx(expected * 4, rel=1e-9)
+
+    trade = adapter.close_position(opened.ticket, comment="test")
+    assert trade.swap == pytest.approx(expected * 4, abs=0.01)
+    # gross = P&L with no costs and no financing: gross - pnl == costs - swap
+    assert trade.gross_pnl - trade.pnl == pytest.approx(trade.costs - trade.swap, abs=0.02)
+    rt.stop()

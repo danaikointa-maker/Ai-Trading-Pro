@@ -84,7 +84,11 @@ Base: `http://127.0.0.1:8000` · interactive docs: `/api/docs` · OpenAPI: `/api
 ```
 ws://<host>/ws/live?token=<jwt>      (alias: /ws)
 ```
-frame ทุก 1 วินาที = `live_payload` + `type:"snapshot"`:
+frame ทุก 1 วินาที: `type:"snapshot"` (payload เต็ม) หรือ `type:"tick"` (เบา — ไม่มี `analysis`/`forecast`)
+snapshot ถูกส่งครั้งแรกทันที และซ้ำทุก `ws.full_snapshot_seconds` (ค่าเริ่มต้น 5 วินาที) —
+client ต้อง merge ไม่ใช่ replace ไม่งั้น panel analysis จะหายไป 1 วินาทีหลังโหลด
+
+payload เต็ม:
 `account, positions, risk_state, limits, signal, gate, analysis, forecast, model,
 training, reconcile, alerts, errors, ticker, mode, feed, virtual_time`
 
@@ -147,6 +151,29 @@ training, reconcile, alerts, errors, ticker, mode, feed, virtual_time`
 directional_accuracy, tp_before_sl_rate, no_trade_rate, max_drawdown_pct, sharpe,
 sortino, recovery_factor, total_costs, avg_hold_minutes, max_consecutive_losses`
 
-- `total_costs` = ค่าคอมมิชชัน + spread/slippage ที่ฝังในราคา fill → `gross_pnl − pnl = costs`
+- `total_costs` = ค่าคอมมิชชัน + spread/slippage ที่ฝังในราคา fill
+- `total_swap` / `trades[].swap` = ค่าถือข้ามคืน (ติดลบ = จ่าย) → `gross_pnl − pnl = costs − swap`
 - `expectancy_r` ใช้ risk ที่วัดตอน fill จริง ไม่ใช่ risk ตามแผน
 - `assumptions[]` ต้องอ่านคู่กับตัวเลขเสมอ (มีทั้งสมมติฐานราคาและจำนวนสัญญาณที่ถูกข้าม)
+- `data_fingerprint` (16 hex) + `seed` — แฮชของ OHLCV ที่ใช้รัน; **แฮชเดิมให้ผลเลขเดิม**
+- `POST /api/backtests` ที่ `bars` น้อยเกินไป (< ~1,600 แท่ง M1) จะได้ job `state: "error"` พร้อมข้อความ
+  "not enough history" (เดิม crash เป็น IndexError)
+
+
+## ปฏิทินข่าว (`/api/system/config` → `news`)
+
+```json
+{"calendar": "demo|file", "source": "...", "provisional": true, "events_loaded": 10, "rows_skipped": 0}
+```
+
+- `calendar: "demo"` = ใช้ตารางตัวอย่างที่ฝังมา (แสดงใน lockout reason ว่า
+  "provisional demo calendar, NOT a real economic release")
+- ถ้าต้องการใช้ปฏิทินจริง: วางไฟล์ที่ `storage/datasets/news.json` แล้วรีสตาร์ท
+
+```json
+[{"t": 1793900000, "currency": "USD", "impact": "high", "title": "US CPI m/m"}]
+```
+
+- รับได้ทั้ง list ตรง ๆ หรือ `{"events": [...]}`; `impact` ต้องเป็น `high|medium|low`
+- แถวที่ผิดรูปแบบจะถูกข้ามและนับใน `rows_skipped` (ไม่ทำให้แอปพัง)
+- `provisional: false` = ข้อมูลจริงจากไฟล์ ไม่ใช่ของตัวอย่าง

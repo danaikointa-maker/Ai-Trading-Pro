@@ -120,7 +120,7 @@ class SymbolSpec(BaseModel):
     # Multiplier that turns one unit of `profit_currency` into one unit of the
     # account currency. 1.0 means "same currency" (or that no rate was needed).
     quote_to_account_rate: float = 1.0
-    rate_source: Literal["identity", "ticker", "unknown"] = "identity"
+    rate_source: Literal["identity", "ticker", "triangulated", "unknown"] = "identity"
     source: Literal["broker", "declared"] = "declared"
 
     @property
@@ -560,6 +560,7 @@ class TradeRecord(BaseModel):
     points: float
     gross_pnl: float
     costs: float
+    swap: float = 0.0
     pnl: float
     r_multiple: float = 0.0
     exit_reason: str = ""
@@ -591,6 +592,7 @@ class BacktestRequest(BaseModel):
     slippage_points: float = 2.0
     starting_balance: float = 10000.0
     validate_walk_forward: bool = True
+    seed: int = 7
 
 
 class BacktestMetrics(BaseModel):
@@ -614,6 +616,7 @@ class BacktestMetrics(BaseModel):
     no_trade_rate: float = 0.0
     avg_hold_minutes: float = 0.0
     total_costs: float = 0.0
+    total_swap: float = 0.0
     best_trade: float = 0.0
     worst_trade: float = 0.0
     return_pct: float = 0.0
@@ -637,6 +640,9 @@ class BacktestReport(BaseModel):
     bars: int
     from_t: int = 0
     to_t: int = 0
+    # sha256 of the OHLCV the run consumed: same fingerprint => same numbers.
+    data_fingerprint: str = ""
+    seed: int = 7
     metrics: BacktestMetrics = Field(default_factory=BacktestMetrics)
     equity_curve: list[EquityPoint] = Field(default_factory=list)
     trades: list[TradeRecord] = Field(default_factory=list)

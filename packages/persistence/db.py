@@ -57,6 +57,10 @@ CREATE TABLE IF NOT EXISTS audit (
     detail TEXT, ip TEXT
 );
 
+CREATE TABLE IF NOT EXISTS login_throttle (
+    key TEXT PRIMARY KEY, failures INTEGER DEFAULT 0, first_at REAL, locked_until REAL
+);
+
 CREATE TABLE IF NOT EXISTS app_settings (
     key TEXT PRIMARY KEY, value TEXT, updated_at REAL
 );
@@ -71,7 +75,8 @@ CREATE TABLE IF NOT EXISTS equity (
 );
 
 CREATE TABLE IF NOT EXISTS news (
-    id TEXT PRIMARY KEY, t INTEGER, currency TEXT, impact TEXT, title TEXT
+    id TEXT PRIMARY KEY, t INTEGER, currency TEXT, impact TEXT, title TEXT,
+    provisional INTEGER DEFAULT 0
 );
 
 CREATE TABLE IF NOT EXISTS backtests (

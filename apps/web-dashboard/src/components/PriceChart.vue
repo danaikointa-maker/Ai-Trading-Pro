@@ -7,17 +7,38 @@
       <span v-if="state.live?.analysis?.regime" class="chip">{{ state.live.analysis.regime.regime.replace('_',' ') }}</span>
     </div>
     <div v-if="loading" class="absolute inset-0 grid place-items-center bg-ink-900/40 text-[12px] text-muted">loading chart…</div>
+    <!-- Never fail silently: a blank panel tells nobody anything. -->
+    <div v-else-if="error" class="absolute inset-0 grid place-items-center px-6 text-center">
+      <div>
+        <div class="text-[12.5px] font-semibold text-down">แสดงกราฟไม่ได้</div>
+        <div class="mt-1 max-w-[520px] break-words text-[11px] leading-relaxed text-muted">{{ error }}</div>
+        <button class="btn mt-3 px-3 py-1.5 text-[11.5px]" @click="retry">ลองอีกครั้ง</button>
+      </div>
+    </div>
+    <div v-else-if="bars === 0" class="absolute inset-0 grid place-items-center px-6 text-center">
+      <div>
+        <div class="text-[12.5px] font-semibold text-slate-200">ยังไม่มีข้อมูลแท่งเทียน</div>
+        <div class="mt-1 text-[11px] text-muted">{{ state.symbol }} · {{ state.timeframe }} — รอ feed ส่งข้อมูล</div>
+        <button class="btn mt-3 px-3 py-1.5 text-[11.5px]" @click="retry">โหลดใหม่</button>
+      </div>
+    </div>
+    <div class="pointer-events-none absolute bottom-1.5 right-2 text-[9.5px] text-muted">
+      {{ bars }} bars · last {{ lastBarText }}
+    </div>
   </div>
 </template>
 
 <script setup>
-import { onBeforeUnmount, onMounted, ref, watch } from 'vue'
+import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { createChart } from 'lightweight-charts'
 import { api } from '../lib/api'
 import { state } from '../lib/store'
 
 const container = ref(null)
 const loading = ref(false)
+const error = ref('')
+const bars = ref(0)
+const lastBar = ref(null)
 let chart = null
 let candleSeries = null
 let ema20 = null
@@ -49,6 +70,9 @@ function ema(values, period) {
 
 function buildChart() {
   chart = createChart(container.value, {
+    // Let the library track the container itself: creating the chart before the
+    // parent column has laid out used to leave a 0-width canvas behind.
+    autoSize: true,
     layout: {
       background: { color: 'transparent' },
       textColor: '#8b98a9',
@@ -80,30 +104,66 @@ function buildChart() {
   ema50 = line('rgba(96,165,250,0.8)', 1)
   ema200 = line('rgba(167,139,250,0.8)', 1)
   resizeObs = new ResizeObserver(() => {
-    if (chart && container.value) chart.applyOptions({ width: container.value.clientWidth })
+    if (!chart || !container.value) return
+    const { clientWidth, clientHeight } = container.value
+    if (clientWidth > 0 && clientHeight > 0) {
+      chart.applyOptions({ width: clientWidth, height: clientHeight })
+    }
   })
   resizeObs.observe(container.value)
+}
+
+const lastBarText = computed(() => {
+  if (!lastBar.value) return '—'
+  const d = new Date(lastBar.value * 1000)
+  return `${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}`
+})
+
+async function retry() {
+  error.value = ''
+  if (!chart) buildChart()
+  await load()
 }
 
 async function load() {
   if (!candleSeries) return
   loading.value = true
+  error.value = ''
   try {
     const data = await api.get(
       `/api/market/candles?symbol=${encodeURIComponent(state.symbol)}&timeframe=${state.timeframe}&limit=${state.range}`,
     )
-    const candles = data.candles.map((c) => ({ time: c.t, open: c.o, high: c.h, low: c.l, close: c.c }))
-    state.candles = data.candles
+    const raw = Array.isArray(data.candles) ? data.candles : []
+    // lightweight-charts demands strictly ascending, unique timestamps.
+    const seen = new Set()
+    const clean = raw
+      .filter((c) => c && Number.isFinite(Number(c.t)))
+      .sort((a, b) => a.t - b.t)
+      .filter((c) => {
+        const t = Number(c.t)
+        if (seen.has(t)) return false
+        seen.add(t)
+        return true
+      })
+    const candles = clean.map((c) => ({ time: Number(c.t), open: c.o, high: c.h, low: c.l, close: c.c }))
+    bars.value = candles.length
+    lastBar.value = candles.length ? candles[candles.length - 1].time : null
+    state.candles = clean
     candleSeries.setData(candles)
-    const closes = data.candles.map((c) => c.c)
-    ema20.setData(data.candles.map((c, i) => ({ time: c.t, value: ema(closes, 20)[i] })).filter((p) => p.value))
-    ema50.setData(data.candles.map((c, i) => ({ time: c.t, value: ema(closes, 50)[i] })).filter((p) => p.value))
-    ema200.setData(data.candles.map((c, i) => ({ time: c.t, value: ema(closes, 200)[i] })).filter((p) => p.value))
+    const closes = candles.map((c) => c.close)
+    const line = (series, period) => series.setData(
+      candles.map((c, i) => ({ time: c.time, value: ema(closes, period)[i] }))
+        .filter((p) => Number.isFinite(p.value)),
+    )
+    line(ema20, 20)
+    line(ema50, 50)
+    line(ema200, 200)
     lastCandle = candles[candles.length - 1] || null
     chart.timeScale().fitContent()
     drawOverlays()
   } catch (err) {
-    console.warn(err)
+    error.value = String((err && err.message) || err)
+    console.error('[PriceChart] load failed', err)
   } finally {
     loading.value = false
   }
@@ -189,7 +249,13 @@ watch(() => state.live?.version, () => {
 watch(() => state.live?.ticker?.last, updateLast)
 
 onMounted(async () => {
-  buildChart()
+  try {
+    buildChart()
+  } catch (err) {
+    error.value = `สร้างกราฟไม่สำเร็จ: ${(err && err.message) || err}`
+    console.error('[PriceChart] build failed', err)
+    return
+  }
   await load()
 })
 onBeforeUnmount(() => {
