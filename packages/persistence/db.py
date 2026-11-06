@@ -57,6 +57,10 @@ CREATE TABLE IF NOT EXISTS audit (
     detail TEXT, ip TEXT
 );
 
+CREATE TABLE IF NOT EXISTS login_throttle (
+    key TEXT PRIMARY KEY, failures INTEGER DEFAULT 0, first_at REAL, locked_until REAL
+);
+
 CREATE TABLE IF NOT EXISTS app_settings (
     key TEXT PRIMARY KEY, value TEXT, updated_at REAL
 );
