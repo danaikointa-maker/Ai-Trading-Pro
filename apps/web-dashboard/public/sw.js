@@ -8,7 +8,7 @@
  *  - hashed build assets are immutable, so cache-first is safe for them.
  */
 
-const VERSION = 'no7-v1'
+const VERSION = 'no7-v2'
 const SHELL_CACHE = `${VERSION}-shell`
 const ASSET_CACHE = `${VERSION}-assets`
 
