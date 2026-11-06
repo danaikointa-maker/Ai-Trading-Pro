@@ -25,6 +25,25 @@ pnl_account = Δprice_signed × contract_size × lot × quote_to_account_rate
   `spec.sizing_blocked` หยุดการคำนวณ lot, MT5 offline estimate โยน `BrokerError`,
   และ position นั้นถูกตัดออกจาก notional exposure แทนการประเมินค่าผิด
 
+## 1b. Swap (ค่าถือข้ามคืน)
+
+โบรกเกอร์ประกาศ swap ได้ 3 หน่วยที่ **ใช้แทนกันไม่ได้** ระบบจึงเก็บ `swap_mode` ไปกับตัวเลขด้วย
+
+```
+money   : swap_night = swap_long_per_lot (หรือ short) × lot
+points  : swap_night = swap_points × point × contract_size × quote_to_account_rate × lot
+percent : swap_night = notional × pct / 100 / 360 × lot        # ดอกเบี้ยรายปี ฐาน 360 วัน
+          notional = price × contract_size × quote_to_account_rate
+```
+
+- คิด **คืนละครั้ง** ทุกเที่ยงคืน UTC และ **วันพุธคูณ 3** (โบรกเกอร์รวม funding ของสุดสัปดาห์ไว้คืนพุธ)
+  ✅ `swap_night_multiplier()` ใน `models.py` ใช้ร่วมกันทั้ง paper และ backtest
+- คิดบน volume ที่ยังเปิดอยู่ ณ คืนนั้น (partial close แล้วลดตามจริง)
+- MT5: `swap_mode` ของเทอร์มินัลถูกแปลงเป็นหน่วยของเรา (`_swap_fields`)
+  1 → points, 3/5 → percent, 2 → money (แปลง profit currency → สกุลบัญชี), 6/7 (reopen) → 0
+- รายงานแยกเป็นฟิลด์ `swap` ใน `TradeRecord` ไม่ปนกับ `costs` (ค่าคอมมิชชัน)
+  และ `gross_pnl - pnl = costs - swap` ✅ `tests/test_swap.py`
+
 ## 2. ขนาดไม้ (lot)
 
 ```
@@ -126,7 +145,7 @@ recovery_factor     = net / (max_dd × starting_balance)
 | ต้นทุน spread ใน backtest | ใส่ที่ราคาเข้า (bid/ask + slippage) แต่SL/TP ตัดสินจากราคา mid ของแท่ง |
 | SL/TP ชนในแท่งเดียวกัน | เลือก stop ก่อน target (อนุรักษ์นิยม) |
 | ค่าธรรมเนียม | ใช้ `commission_per_lot_round_turn` จาก spec (ถ้าโบรกเกอร์ไม่ให้มา = 0) |
-| swap | ไม่คิด (กลยุทธ์ intraday) |
+| swap | คิดตามโหมดที่โบรกเกอร์ประกาศ (money / points / percent) |
 | สกุลเงินกำไร ≠ USD | ยังไม่แปลงค่า |
 | walk-forward | fold ตามเวลา แต่ยังใช้ข้อมูลชุดเดียว (ไม่ใช่ tick data) |
 | Sharpe | annualise จากแท่ง 5 นาที; ช่วงที่ไม่มีไม้จะได้ return = 0 ทำให้ค่าสูงเกินจริงได้ |

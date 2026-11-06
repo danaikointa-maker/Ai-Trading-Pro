@@ -153,6 +153,7 @@ class MT5Broker(BrokerAdapter):
             mt5.symbol_select(broker_symbol, True)
         rate, rate_source = self._quote_rate(str(info.currency_profit))
         return SymbolSpec(
+            **self._swap_fields(info, rate),
             symbol=symbol,
             description=info.description,
             quote_to_account_rate=rate,
@@ -171,6 +172,30 @@ class MT5Broker(BrokerAdapter):
             profit_currency=info.currency_profit,
             source="broker",
         )
+
+    @staticmethod
+    def _swap_fields(info: Any, rate: float) -> dict[str, Any]:
+        """Translate MT5's swap_mode into our money/points/percent contract.
+
+        MT5 quotes swap in four different units; taking `swap_long` at face value
+        without knowing the mode turns a points figure into dollars or vice versa.
+        Modes 6/7 (reopen) have no equivalent here, so the swap is reported as
+        zero rather than guessed.
+        """
+        mode = int(getattr(info, "swap_mode", 0) or 0)
+        long_raw = float(getattr(info, "swap_long", 0.0) or 0.0)
+        short_raw = float(getattr(info, "swap_short", 0.0) or 0.0)
+        if mode == 1:  # SYMBOL_SWAP_MODE_POINTS
+            return {"swap_mode": "points", "swap_long_points": long_raw, "swap_short_points": short_raw}
+        if mode in (3, 5):  # INTEREST_CURRENT / INTEREST_OPEN -> annual %
+            return {"swap_mode": "percent", "swap_long_pct": long_raw, "swap_short_pct": short_raw}
+        if mode == 2:  # CURRENCY_SYMBOL -> profit currency, convert to account
+            return {"swap_mode": "money", "swap_long_per_lot": long_raw * rate,
+                    "swap_short_per_lot": short_raw * rate}
+        if mode in (6, 7):  # REOPEN_* -> unsupported, do not invent a number
+            return {"swap_mode": "money", "swap_long_per_lot": 0.0, "swap_short_per_lot": 0.0}
+        # 0 disabled / 4 margin currency -> already account currency
+        return {"swap_mode": "money", "swap_long_per_lot": long_raw, "swap_short_per_lot": short_raw}
 
     def _quote_rate(self, profit_currency: str) -> tuple[float, str]:
         """Resolve profit currency -> account currency using visible MT5 quotes."""

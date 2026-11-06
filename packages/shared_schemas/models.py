@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import math
 
+from datetime import datetime, timezone
 from enum import Enum
 from typing import Any, Literal
 
@@ -15,6 +16,15 @@ class Health(str, Enum):
     degraded = "degraded"
     disconnected = "disconnected"
     stale = "stale"
+
+
+# Retail brokers roll the weekend's funding into Wednesday night (3x swap).
+SWAP_TRIPLE_WEEKDAY = 2
+
+
+def swap_night_multiplier(day_index: int) -> int:
+    """Multiplier for the night that starts at UTC midnight `day_index`."""
+    return 3 if datetime.fromtimestamp(day_index * 86400, tz=timezone.utc).weekday() == SWAP_TRIPLE_WEEKDAY else 1
 
 
 class Direction(str, Enum):
@@ -114,8 +124,19 @@ class SymbolSpec(BaseModel):
     freeze_level_points: float = 0.0
     spread_typical_points: float = 25.0
     commission_per_lot_round_turn: float = 0.0
+    # Overnight financing. Brokers quote it in one of three ways and the unit is
+    # NOT interchangeable: `money` is account currency per lot per night,
+    # `points` is price points per lot per night, `percent` is an *annual*
+    # interest rate applied to the position notional. Mixing them up silently
+    # inflates or erases the cost, so the mode travels with the numbers.
+    swap_mode: Literal["money", "points", "percent"] = "money"
     swap_long_per_lot: float = 0.0
     swap_short_per_lot: float = 0.0
+    swap_long_points: float = 0.0
+    swap_short_points: float = 0.0
+    swap_long_pct: float = 0.0
+    swap_short_pct: float = 0.0
+    swap_days_in_year: int = 360  # the basis brokers use for swap interest
     profit_currency: str = "USD"
     # Multiplier that turns one unit of `profit_currency` into one unit of the
     # account currency. 1.0 means "same currency" (or that no rate was needed).
@@ -137,6 +158,27 @@ class SymbolSpec(BaseModel):
         optional: without it the same trade is worth ~157x too much.
         """
         return price_change * self.contract_size * volume * self.quote_to_account_rate
+
+    def swap_per_lot_night(self, is_long: bool, price: float) -> float:
+        """One lot's swap for one night, in the account currency (negative = charged).
+
+        `price` is only used by `percent` mode, where the rate is charged on the
+        position notional rather than on a fixed per-lot amount.
+        """
+        if self.swap_mode == "points":
+            points = self.swap_long_points if is_long else self.swap_short_points
+            return points * self.point * self.contract_size * self.quote_to_account_rate
+        if self.swap_mode == "percent":
+            pct = self.swap_long_pct if is_long else self.swap_short_pct
+            notional = self.pnl_in_account_currency(price, 1.0)
+            return notional * pct / 100.0 / float(self.swap_days_in_year or 360)
+        return self.swap_long_per_lot if is_long else self.swap_short_per_lot
+
+    def swap_for(self, direction: Direction, volume: float, price: float) -> float:
+        """Swap for `volume` lots held across one night, account currency."""
+        if volume <= 0:
+            return 0.0
+        return self.swap_per_lot_night(direction == Direction.up, price) * volume
 
     @property
     def quote_in_account_currency(self) -> bool:
@@ -570,6 +612,7 @@ class TradeRecord(BaseModel):
     points: float
     gross_pnl: float
     costs: float
+    swap: float = 0.0
     pnl: float
     r_multiple: float = 0.0
     exit_reason: str = ""
@@ -624,6 +667,7 @@ class BacktestMetrics(BaseModel):
     no_trade_rate: float = 0.0
     avg_hold_minutes: float = 0.0
     total_costs: float = 0.0
+    total_swap: float = 0.0  # overnight financing, negative = charged
     best_trade: float = 0.0
     worst_trade: float = 0.0
     return_pct: float = 0.0
