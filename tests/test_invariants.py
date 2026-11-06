@@ -421,3 +421,73 @@ def test_provisional_flag_survives_a_restart(tmp_path):
     assert "NOT a real economic release" in lock["reason"]
     assert lock["event"]["provisional"] is True
     assert lock["next_event"]["provisional"] is True
+
+
+def test_fx_triangulation_through_a_third_currency():
+    """GBP P&L on a USD account must still be valued when only EUR pairs exist:
+    EURUSD / EURGBP = GBPUSD."""
+    from integrations.brokers.fx import resolve_quote_rate
+
+    quotes = {"EURUSD": 1.08, "EURGBP": 0.85}
+    rate, source = resolve_quote_rate("GBP", "USD", quotes.get)
+    assert source == "triangulated"
+    assert rate == pytest.approx(1.08 / 0.85, rel=1e-12)
+
+    # A direct quote always wins over triangulation.
+    rate, source = resolve_quote_rate("GBP", "USD", {"GBPUSD": 1.27, **quotes}.get)
+    assert (source, rate) == ("ticker", 1.27)
+
+    # No path at all -> still unknown (the planner will refuse to size).
+    rate, source = resolve_quote_rate("TRY", "USD", quotes.get)
+    assert (rate, source) == (1.0, "unknown")
+
+
+def test_overnight_swap_is_charged_and_wednesday_counts_triple():
+    """Holding past midnight must cost money, and the demo swap rates must reach
+    the balance (before this, swap was configured but never applied)."""
+    from datetime import datetime, timezone
+
+    from packages.shared_schemas.models import OrderRequest, OrderSide
+    from services.api_gateway.state import TradingRuntime
+
+    rt = TradingRuntime()
+    adapter = rt.registry.get("connext-demo")
+    spec = adapter.symbol_spec("XAUUSD")
+    assert spec.swap_long_per_lot != 0 or spec.swap_short_per_lot != 0, \
+        "the demo profile must carry swap rates for this to mean anything"
+
+    tick = adapter.ticker("XAUUSD")
+    opened = adapter.order_send(OrderRequest(
+        symbol="XAUUSD", side=OrderSide.sell, volume=0.5,
+        sl=round(tick.bid + 5.0, spec.digits), tp=round(tick.bid - 8.0, spec.digits)))
+    assert opened.ticket
+
+    # Start from a Monday so the first rollover is a plain weekday night.
+    monday = int(datetime(2026, 11, 2, 23, 30, tzinfo=timezone.utc).timestamp())
+    position = adapter._positions[opened.ticket]
+    position.last_swap_day = monday // 86400
+    balance_before = adapter.account_info().balance
+
+    adapter.clock = lambda: monday + 3600  # 00:30 Tuesday
+    adapter._apply_swap()
+    tuesday = datetime(2026, 11, 3, tzinfo=timezone.utc).weekday()
+    assert tuesday == 1
+    expected = spec.swap_short_per_lot * 0.5
+    assert position.swap_charged == pytest.approx(expected, rel=1e-9)
+    assert adapter.account_info().balance == pytest.approx(balance_before + expected, abs=0.01)
+
+    # Tuesday -> Wednesday: the rollover that carries the weekend, so triple.
+    wednesday_epoch = int(datetime(2026, 11, 4, 0, 30, tzinfo=timezone.utc).timestamp())
+    adapter.clock = lambda: wednesday_epoch
+    adapter._apply_swap()
+    assert position.swap_charged == pytest.approx(expected * 4, rel=1e-9)
+
+    # Nothing is charged twice for the same day.
+    adapter._apply_swap()
+    assert position.swap_charged == pytest.approx(expected * 4, rel=1e-9)
+
+    trade = adapter.close_position(opened.ticket, comment="test")
+    assert trade.swap == pytest.approx(expected * 4, abs=0.01)
+    # gross = P&L with no costs and no financing: gross - pnl == costs - swap
+    assert trade.gross_pnl - trade.pnl == pytest.approx(trade.costs - trade.swap, abs=0.02)
+    rt.stop()

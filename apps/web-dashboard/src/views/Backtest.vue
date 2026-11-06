@@ -67,7 +67,8 @@
             <Stat label="Win rate" :value="`${fmt(report.metrics.win_rate, 1)}%`" />
             <Stat label="Max DD" :value="`${fmt(report.metrics.max_drawdown_pct, 2)}%`" tone="text-down" />
             <Stat label="Sharpe" :value="fmt(report.metrics.sharpe, 2)" />
-            <Stat label="Costs" :value="money(report.metrics.total_costs)" />
+            <Stat label="Costs" :value="money(report.metrics.total_costs)"
+                  :hint="`swap ${money(report.metrics.total_swap || 0)}`" />
           </div>
 
           <div class="grid gap-3 lg:grid-cols-[minmax(0,1fr)_320px]">

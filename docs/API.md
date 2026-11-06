@@ -147,7 +147,8 @@ training, reconcile, alerts, errors, ticker, mode, feed, virtual_time`
 directional_accuracy, tp_before_sl_rate, no_trade_rate, max_drawdown_pct, sharpe,
 sortino, recovery_factor, total_costs, avg_hold_minutes, max_consecutive_losses`
 
-- `total_costs` = ค่าคอมมิชชัน + spread/slippage ที่ฝังในราคา fill → `gross_pnl − pnl = costs`
+- `total_costs` = ค่าคอมมิชชัน + spread/slippage ที่ฝังในราคา fill
+- `total_swap` / `trades[].swap` = ค่าถือข้ามคืน (ติดลบ = จ่าย) → `gross_pnl − pnl = costs − swap`
 - `expectancy_r` ใช้ risk ที่วัดตอน fill จริง ไม่ใช่ risk ตามแผน
 - `assumptions[]` ต้องอ่านคู่กับตัวเลขเสมอ (มีทั้งสมมติฐานราคาและจำนวนสัญญาณที่ถูกข้าม)
 - `data_fingerprint` (16 hex) + `seed` — แฮชของ OHLCV ที่ใช้รัน; **แฮชเดิมให้ผลเลขเดิม**

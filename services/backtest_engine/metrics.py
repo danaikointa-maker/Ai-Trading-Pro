@@ -22,6 +22,7 @@ def compute_metrics(trades: list[TradeRecord], equity_curve: list[EquityPoint],
     gross_loss = abs(sum(t.pnl for t in losses))
     net = sum(t.pnl for t in trades)
     costs = sum(t.costs for t in trades)
+    swaps = sum(getattr(t, "swap", 0.0) or 0.0 for t in trades)
 
     eq = np.array([p.equity for p in equity_curve]) if equity_curve else np.array([starting_balance])
     peak = np.maximum.accumulate(eq)
@@ -83,6 +84,7 @@ def compute_metrics(trades: list[TradeRecord], equity_curve: list[EquityPoint],
         no_trade_rate=round(max(0.0, 1 - len(trades) / decisions) * 100, 2) if decisions else 0.0,
         avg_hold_minutes=round(avg_hold, 1),
         total_costs=round(costs, 2),
+        total_swap=round(swaps, 2),
         best_trade=round(max((t.pnl for t in trades), default=0.0), 2),
         worst_trade=round(min((t.pnl for t in trades), default=0.0), 2),
         return_pct=round(total_return_pct, 3),

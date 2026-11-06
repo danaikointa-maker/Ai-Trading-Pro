@@ -5,8 +5,8 @@ Fidelity notes
 * Decisions are made on closed M5 bars; fills happen on the *next* bar's open
   with spread + slippage, so a bar's own future is never used for its entry.
 * If a bar contains both the stop and a target, the stop is assumed first.
-* Commission and spread are charged on every fill; swap is not modelled for
-  intraday holds (documented assumption).
+* Commission and spread are charged on every fill; overnight swap is charged
+  when a position is held across midnight (Wednesday counted three times).
 * The TP-before-SL probability table is built on the first 60% of the sample and
   reused out-of-sample, and the forecast direction proxy is rule-based, so the
   numbers measure the rule core rather than a trained model's edge.
@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import time
 import uuid
+from datetime import datetime, timezone
 from dataclasses import dataclass, field
 from typing import Any
 
@@ -69,6 +70,8 @@ class SimPosition:
     realized: float = 0.0
     costs: float = 0.0
     entry_cost: float = 0.0
+    swap: float = 0.0
+    last_swap_day: int = 0
     weighted_exit: float = 0.0
     closed_volume: float = 0.0
     mfe_points: float = 0.0
@@ -309,6 +312,7 @@ class Backtester:
                 signal_id=signal.id,
                 # The spread half and the slippage are already inside `entry`, so
                 # the money they cost is invisible unless it is booked here.
+                last_swap_day=int(nxt["t"]) // 86400,
                 entry_cost=round((spread_price / 2 + request.slippage_points * spec.point)
                                  / spec.point * spec.value_per_point_per_lot * qty, 2),
             )
@@ -454,6 +458,18 @@ class Backtester:
         pos.mfe_points = max(pos.mfe_points, (high - pos.entry) * sign / spec.point if sign > 0
                              else (pos.entry - low) / spec.point)
 
+        # Overnight financing: a position held across midnight pays (or earns)
+        # the broker's swap for each night. Wednesday is charged triple.
+        bar_day = bar_time // 86400
+        if pos.last_swap_day and bar_day > pos.last_swap_day:
+            rate = spec.swap_long_per_lot if pos.direction == Direction.up else spec.swap_short_per_lot
+            while pos.last_swap_day < bar_day:
+                pos.last_swap_day += 1
+                multiplier = 3 if datetime.utcfromtimestamp(pos.last_swap_day * 86400).weekday() == 2 else 1
+                amount = rate * pos.remaining * multiplier
+                pos.swap += amount
+                pos.realized += amount
+
         def book(volume: float, price: float, reason: str) -> None:
             nonlocal pos
             pnl = (price - pos.entry) * sign * spec.contract_size * volume
@@ -526,7 +542,7 @@ class Backtester:
         # Net P&L already carries the spread inside the entry price; adding the
         # booked costs back gives the cost-free result, so gross - pnl == costs.
         net = pos.realized
-        gross = net + pos.costs
+        gross = net + pos.costs - pos.swap
         return TradeRecord(
             ticket=f"BT{pos.entry_bar}-{pos.signal_id[-6:]}",
             symbol=spec.symbol, direction=pos.direction, volume=round(pos.closed_volume, 4),
@@ -535,6 +551,7 @@ class Backtester:
             tp=round(pos.tps[0], spec.digits),
             opened_at=pos.opened_at, closed_at=bar_time,
             points=round(points, 1), gross_pnl=round(gross, 2), costs=round(pos.costs, 2),
+            swap=round(pos.swap, 2),
             pnl=round(pos.realized, 2),
             r_multiple=round(pos.realized / pos.risk_amount, 2) if pos.risk_amount else 0.0,
             exit_reason=pos.exit_reason or "closed", strategy=pos.strategy,
