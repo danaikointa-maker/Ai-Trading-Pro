@@ -22,7 +22,7 @@ from packages.shared_schemas.models import (
     SymbolSpec,
 )
 from packages.shared_schemas.settings import Settings
-from services.ai_forecast.features import FEATURE_COLUMNS, build_features, inference_vector
+from services.ai_forecast.features import FEATURE_COLUMNS, inference_vector
 from services.ai_forecast.pathprob import PathProbabilityTable
 from services.ai_forecast.registry import ModelRegistry
 from services.ai_forecast.trainer import HorizonModel, TrainingResult

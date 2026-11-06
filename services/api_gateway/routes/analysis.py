@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi import APIRouter, Depends, HTTPException
 
 from services.api_gateway.deps import current_user, get_runtime
 from services.api_gateway.state import TradingRuntime

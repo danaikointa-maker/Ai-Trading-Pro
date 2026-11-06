@@ -1,7 +1,6 @@
 """HTTP contract tests: everything the dashboard relies on must answer 200."""
 from __future__ import annotations
 
-import time
 
 
 def test_login_returns_token_and_hides_secret(client):

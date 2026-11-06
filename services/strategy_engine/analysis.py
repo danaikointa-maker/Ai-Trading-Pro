@@ -20,7 +20,6 @@ from packages.shared_schemas.models import (
     AnalysisSnapshot,
     Direction,
     IndicatorSnapshot,
-    RegimeReading,
     StructureEvent,
     TrendReading,
 )

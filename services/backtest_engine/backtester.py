@@ -23,7 +23,6 @@ import pandas as pd
 
 from packages.indicators.pipeline import enrich
 from packages.shared_schemas.models import (
-    BacktestMetrics,
     BacktestReport,
     BacktestRequest,
     Direction,

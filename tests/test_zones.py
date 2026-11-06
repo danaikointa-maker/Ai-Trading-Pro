@@ -1,7 +1,6 @@
 """Support/resistance zones: confluence rules, both sides, and no repainting."""
 from __future__ import annotations
 
-from packages.shared_schemas.models import Zone
 
 
 def _snapshot(runtime, symbol="XAUUSD"):

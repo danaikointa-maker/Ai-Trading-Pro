@@ -3,9 +3,8 @@ from __future__ import annotations
 
 import time
 
-import pytest
 
-from packages.shared_schemas.models import Health, RiskState, SymbolSpec
+from packages.shared_schemas.models import Health, SymbolSpec
 from services.risk_engine.engine import default_risk_state
 
 SPEC = SymbolSpec(
