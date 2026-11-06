@@ -18,6 +18,7 @@ from fastapi.staticfiles import StaticFiles
 
 from packages.shared_schemas.settings import get_settings
 from services.api_gateway.auth import ensure_demo_user
+from services.api_gateway.ratelimit import RateLimiter, RateLimitMiddleware
 from services.api_gateway.routes import (
     analysis,
     auth,
@@ -60,6 +61,11 @@ def create_app(runtime: TradingRuntime | None = None) -> FastAPI:
         openapi_url="/api/openapi.json",
     )
     app.state.runtime = runtime
+    # Added first, so CORS ends up outermost and 429s still carry CORS headers
+    # (otherwise the browser reports a network error instead of the real limit).
+    limiter = RateLimiter((settings.app.get("ratelimit") or {}).get("rules"))
+    app.state.ratelimit = limiter
+    app.add_middleware(RateLimitMiddleware, limiter=limiter, settings=settings)
     app.add_middleware(
         CORSMiddleware,
         allow_origins=["*"],

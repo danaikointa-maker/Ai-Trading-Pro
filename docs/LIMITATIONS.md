@@ -44,7 +44,9 @@
 - ยังไม่มี role/permission ละเอียด (มี JWT + `owner` role เดียว)
 - Telegram/LINE/Web Push ยังไม่ต่อ (มี in-app alert แล้ว)
 - Mobile PWA ยังว่าง
-- ไม่มี rate limiting ที่ชั้น API (ควรอยู่หลัง reverse proxy)
+- มี rate limiting ในตัวแล้ว (token bucket ต่อผู้ใช้/IP: order 10/นาที, explain 20/นาที,
+  backtest 6/นาที, train 2/ชั่วโมง, อื่น ๆ 300/นาที) แต่เป็น **in-process**
+  ถ้ารันหลาย worker/หลายเครื่อง ต้องย้ายไป Redis หรือ reverse proxy
 
 ## 6. กฎหมาย / ความเสี่ยง
 

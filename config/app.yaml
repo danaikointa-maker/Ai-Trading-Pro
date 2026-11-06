@@ -75,3 +75,14 @@ alerts:
 # at least this often so those panels never freeze.
 ws:
   full_snapshot_seconds: 5
+
+# Per-identity limits (token buckets). Separate from the login throttle: this is
+# about capacity, not credentials. `default` covers GETs and everything unlisted.
+ratelimit:
+  enabled: true
+  rules:
+    order: {limit: 10, window_seconds: 60}
+    explain: {limit: 20, window_seconds: 60}
+    backtest: {limit: 6, window_seconds: 60}
+    train: {limit: 2, window_seconds: 3600}
+    default: {limit: 300, window_seconds: 60}
