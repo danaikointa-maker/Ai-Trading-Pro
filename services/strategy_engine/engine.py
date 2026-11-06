@@ -101,7 +101,6 @@ class StrategyEngine:
     def _evaluate_entry(self, ctx: AnalysisContext, direction: Direction, spec: SymbolSpec) -> EntryEvaluation:
         snap = ctx.snapshot
         price = snap.price
-        atr_points = max(1.0, snap.indicators.atr_points)
         zones = snap.supports if direction == Direction.up else snap.resistances
         near = [z for z in zones if z.distance_atr <= 1.5]
         best_zone = max(near, key=lambda z: (z.strength, -z.distance_atr)) if near else None
@@ -297,6 +296,9 @@ class StrategyEngine:
                  equity: float, now: float | None = None) -> Signal:
         snap = ctx.snapshot
         spec = snap.spec
+        # ATR in points drives stop distance: never let it collapse to zero on a
+        # flat bar, or every stop lands on the entry price.
+        atr_points = max(1.0, snap.indicators.atr_points)
         now = int(now if now is not None else time.time())
         sig_id = f"S{now}-{hashlib.sha1(f'{symbol}{snap.price}{now}'.encode()).hexdigest()[:6]}"
         direction, dir_reasons = self._candidate_direction(ctx)
@@ -321,7 +323,9 @@ class StrategyEngine:
             reasons.extend(entry.reasons)
             if not entry.ok:
                 blockers.append("entry conditions are not all satisfied")
-            atr_points = max(1.0, snap.indicators.atr_points)
+            # Settings are needed for *any* plan, not only for a blocked entry:
+            # keeping this inside the `if` crashed the exact path where entry
+            # conditions are satisfied (UnboundLocalError -> no signal ever sent).
             risk_settings = self.risk.settings_view()
             plan_inputs = PlanInputs(
                 direction=direction,
@@ -357,7 +361,7 @@ class StrategyEngine:
         if plan is not None and primary is not None:
             p_path, _ = self.predictor.p_tp_before_sl(
                 plan.tp_points[0], plan.sl_points, primary.horizon_minutes, primary.p_up,
-                atr_points=max(1.0, snap.indicators.atr_points),
+                atr_points=atr_points,
                 direction=1 if direction == Direction.up else -1)
             plan.p_tp_before_sl = round(p_path, 4)
             # Expectancy of the *first* target, net of spread + commission on both legs.

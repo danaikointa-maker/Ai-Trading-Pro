@@ -1,20 +1,48 @@
 # สูตรคำนวณทั้งหมด (และจุดที่ยังเป็นการประมาณ)
 
 เอกสารนี้ตอบคำถามว่า "ตัวเลขบนหน้าจอมาจากสูตรอะไร" และ "สูตรไหนยังไม่เป๊ะ"
-ทุกข้อที่มีเครื่องหมาย ✅ มี test ครอบอยู่ใน `tests/test_invariants.py`
+ทุกข้อที่มีเครื่องหมาย ✅ มี test ครอบอยู่ใน `tests/test_invariants.py` และ `tests/test_currency.py`
 
 ## 1. หน่วยราคา (points)
 
 ```
-value_per_point_per_lot = point × contract_size        # XAUUSD: 0.01 × 100 = $1.00
-price_move(points)      = points × point               # 500 pts × 0.01 = 5.00 USD
+value_per_point_per_lot = point × contract_size × quote_to_account_rate
+                                                    # XAUUSD: 0.01 × 100 × 1.0 = $1.00
+price_move(points)      = points × point            # 500 pts × 0.01 = 5.00 USD
 gross_profit            = points × value_per_point_per_lot × lot
+
+pnl_account = Δprice_signed × contract_size × lot × quote_to_account_rate
+              # Δprice_signed = (exit − entry) สำหรับ long, (entry − exit) สำหรับ short
 ```
 
 - `point`, `tick_size`, `contract_size`, `min_lot`, `lot_step`, `stops_level` **อ่านจากโบรกเกอร์**
 - ราคาทุกจุดถูก snap ลงกริด `tick_size` ✅ (`SymbolSpec.round_price`)
-- ⚠️ `value_per_point_per_lot` ใช้ได้เมื่อ quote currency = สกุลบัญชี (USD)
-  คู่แบบ USDJPY บนบัญชี USD ต้องใช้ FX rate แปลง — ยังไม่รองรับ (ดู `quote_in_account_currency`)
+- `quote_to_account_rate` แปลงกำไรจากสกุล quote → สกุลบัญชี และ **ถูกใช้เหมือนกันทุกเอนจิน** ✅
+  (`SymbolSpec.pnl_in_account_currency` → backtest, paper, MT5 offline estimate, risk notional)
+- ตัวอย่าง USDJPY (quote = JPY, rate = 1/157.2): ราคา +0.5 บน 0.1 lot
+  = 0.5 × 100,000 × 0.1 = 5,000 JPY = **31.81 USD** (ไม่ใช่ 5,000 USD)
+- ⚠️ ถ้า resolve rate ไม่ได้ (`rate_source = "unknown"`) ระบบ **ไม่เดาเป็น 1.0**:
+  `spec.sizing_blocked` หยุดการคำนวณ lot, MT5 offline estimate โยน `BrokerError`,
+  และ position นั้นถูกตัดออกจาก notional exposure แทนการประเมินค่าผิด
+
+## 1b. Swap (ค่าถือข้ามคืน)
+
+โบรกเกอร์ประกาศ swap ได้ 3 หน่วยที่ **ใช้แทนกันไม่ได้** ระบบจึงเก็บ `swap_mode` ไปกับตัวเลขด้วย
+
+```
+money   : swap_night = swap_long_per_lot (หรือ short) × lot
+points  : swap_night = swap_points × point × contract_size × quote_to_account_rate × lot
+percent : swap_night = notional × pct / 100 / 360 × lot        # ดอกเบี้ยรายปี ฐาน 360 วัน
+          notional = price × contract_size × quote_to_account_rate
+```
+
+- คิด **คืนละครั้ง** ทุกเที่ยงคืน UTC และ **วันพุธคูณ 3** (โบรกเกอร์รวม funding ของสุดสัปดาห์ไว้คืนพุธ)
+  ✅ `swap_night_multiplier()` ใน `models.py` ใช้ร่วมกันทั้ง paper และ backtest
+- คิดบน volume ที่ยังเปิดอยู่ ณ คืนนั้น (partial close แล้วลดตามจริง)
+- MT5: `swap_mode` ของเทอร์มินัลถูกแปลงเป็นหน่วยของเรา (`_swap_fields`)
+  1 → points, 3/5 → percent, 2 → money (แปลง profit currency → สกุลบัญชี), 6/7 (reopen) → 0
+- รายงานแยกเป็นฟิลด์ `swap` ใน `TradeRecord` ไม่ปนกับ `costs` (ค่าคอมมิชชัน)
+  และ `gross_pnl - pnl = costs - swap` ✅ `tests/test_swap.py`
 
 ## 2. ขนาดไม้ (lot)
 
@@ -117,7 +145,7 @@ recovery_factor     = net / (max_dd × starting_balance)
 | ต้นทุน spread ใน backtest | ใส่ที่ราคาเข้า (bid/ask + slippage) แต่SL/TP ตัดสินจากราคา mid ของแท่ง |
 | SL/TP ชนในแท่งเดียวกัน | เลือก stop ก่อน target (อนุรักษ์นิยม) |
 | ค่าธรรมเนียม | ใช้ `commission_per_lot_round_turn` จาก spec (ถ้าโบรกเกอร์ไม่ให้มา = 0) |
-| swap | ไม่คิด (กลยุทธ์ intraday) |
+| swap | คิดตามโหมดที่โบรกเกอร์ประกาศ (money / points / percent) |
 | สกุลเงินกำไร ≠ USD | ยังไม่แปลงค่า |
 | walk-forward | fold ตามเวลา แต่ยังใช้ข้อมูลชุดเดียว (ไม่ใช่ tick data) |
 | Sharpe | annualise จากแท่ง 5 นาที; ช่วงที่ไม่มีไม้จะได้ return = 0 ทำให้ค่าสูงเกินจริงได้ |

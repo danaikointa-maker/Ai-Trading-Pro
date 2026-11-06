@@ -107,6 +107,27 @@ class RiskEngine:
         monday = dt - timedelta(days=dt.weekday())
         return int(monday.replace(hour=0, minute=0, second=0, microsecond=0).timestamp())
 
+    @staticmethod
+    def _notional(adapter: BrokerAdapter, positions) -> float:
+        """Open exposure in the *account* currency.
+
+        `contract_size x price` is denominated in the pair's quote currency, so a
+        JPY-quoted position would be counted ~157x too large and inflate
+        exposure_pct. A symbol whose quote->account rate is unresolved is skipped:
+        the planner refuses to size it (`spec.sizing_blocked`), so valuing it at an
+        assumed 1.0 would be a fabricated number rather than a measurement.
+        """
+        total = 0.0
+        for pos in positions:
+            try:
+                spec = adapter.symbol_spec(pos.symbol)
+            except Exception:  # noqa: BLE001 - never break risk state on a missing spec
+                continue
+            if spec.sizing_blocked:
+                continue
+            total += spec.pnl_in_account_currency(float(pos.current_price or pos.entry), pos.volume)
+        return total
+
     def state(self, adapter: BrokerAdapter, now: float | None = None) -> RiskState:
         now = now or time.time()
         info: AccountInfo = adapter.account_info()
@@ -143,13 +164,7 @@ class RiskEngine:
         open_lots = sum(p.volume for p in positions)
         # Notional exposure must use each symbol's own contract size (100 oz for
         # gold, 100,000 for FX), not a single hard-coded constant.
-        notional = 0.0
-        for pos in positions:
-            try:
-                spec = adapter.symbol_spec(pos.symbol)
-                notional += pos.volume * spec.contract_size * float(pos.current_price or pos.entry)
-            except Exception:  # noqa: BLE001 - never break risk state on a missing spec
-                continue
+        notional = self._notional(adapter, positions)
         kill = self.db.kv_get("kill_switch", {"active": False, "reason": "", "since": 0})
         mode = TradeMode(self.db.kv_get("trade_mode", TradeMode.manual.value))
 

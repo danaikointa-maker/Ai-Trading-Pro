@@ -29,6 +29,7 @@ from packages.shared_schemas.models import (
     SymbolSpec,
     Tick,
     TradeRecord,
+    swap_night_multiplier,
 )
 from services.market_data.simulator import SyntheticFeed, resample
 
@@ -36,7 +37,7 @@ from services.market_data.simulator import SyntheticFeed, resample
 def gross_pnl(direction: Direction, entry: float, exit_price: float, volume: float, spec: SymbolSpec) -> float:
     """Profit in the *account* currency (the quote currency is converted)."""
     sign = 1.0 if direction == Direction.up else -1.0
-    return sign * (exit_price - entry) * spec.contract_size * volume * spec.quote_to_account_rate
+    return spec.pnl_in_account_currency(sign * (exit_price - entry), volume)
 
 
 def commission_for(volume: float, spec: SymbolSpec) -> float:
@@ -70,6 +71,8 @@ class PaperPosition:
     partials_done: int = 0
     last_price: float = 0.0
     exit_reason: str = ""
+    swap_charged: float = 0.0
+    last_swap_day: int = 0
     journal: dict[str, Any] = field(default_factory=dict)
 
     def floating(self, price: float) -> float:
@@ -256,6 +259,7 @@ class PaperBroker(BrokerAdapter):
             ticket=ticket, symbol=request.symbol, spec=spec, direction=direction, volume=volume,
             initial_volume=volume, entry=price, sl=sl, tp=tp, sl_initial=sl,
             open_time=int(self.clock()),
+            last_swap_day=int(self.clock()) // 86400,
             # Half the spread plus the slippage is already inside `price`; book the
             # money here so `costs` means the same thing live as in the backtest.
             entry_cost=round((spec.spread_typical_points / 2.0 * spec.point + slip)
@@ -305,6 +309,7 @@ class PaperBroker(BrokerAdapter):
 
     # ---------------------------------------------------------------- ticks
     def on_tick(self, ticks: dict[str, Tick]) -> list[TradeRecord]:
+        self._apply_swap()
         closed: list[TradeRecord] = []
         for ticket in list(self._positions):
             pos = self._positions.get(ticket)
@@ -333,6 +338,28 @@ class PaperBroker(BrokerAdapter):
                 if rec:
                     closed.append(rec)
         return closed
+
+    # ------------------------------------------------------------------ swap
+    def _apply_swap(self) -> None:
+        """Charge overnight financing for every UTC midnight crossed.
+
+        Wednesday is charged three times: retail brokers roll the weekend's
+        funding into that night. The rate itself comes from `SymbolSpec.swap_for`
+        so `money` / `points` / `percent` quoting all produce account currency.
+        """
+        today = int(self.clock()) // 86400
+        for pos in self._positions.values():
+            if pos.last_swap_day >= today:
+                continue
+            while pos.last_swap_day < today:
+                pos.last_swap_day += 1
+                amount = pos.spec.swap_for(
+                    pos.direction, pos.volume, pos.last_price or pos.entry
+                ) * swap_night_multiplier(pos.last_swap_day)
+                if amount:
+                    pos.swap_charged += amount
+                    pos.realized_pnl += amount
+                    self.balance += amount
 
     # -------------------------------------------------------------- internals
     def _realize(self, pos: PaperPosition, price: float, volume: float, reason: str) -> TradeRecord | None:
@@ -372,8 +399,12 @@ class PaperBroker(BrokerAdapter):
                 opened_at=pos.open_time,
                 closed_at=int(self.clock()),
                 points=round(points, 1),
-                gross_pnl=round(pos.realized_pnl + total_costs, 2),
+                # Swap is financing, not a trading cost: net already carries it,
+                # so adding costs back and removing swap leaves the pure price
+                # result (gross - pnl == costs - swap).
+                gross_pnl=round(pos.realized_pnl + total_costs - pos.swap_charged, 2),
                 costs=round(total_costs, 2),
+                swap=round(pos.swap_charged, 2),
                 pnl=round(pos.realized_pnl, 2),
                 r_multiple=round(pos.realized_pnl / (risk_points * pos.spec.value_per_point_per_lot * pos.closed_volume), 2)
                 if risk_points and pos.closed_volume else 0.0,

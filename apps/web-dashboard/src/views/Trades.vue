@@ -19,7 +19,7 @@
       <Stat label="Max drawdown" :value="`${fmt(m?.max_drawdown_pct, 2)}%`" tone="text-down" />
       <Stat label="Sharpe" :value="fmt(m?.sharpe, 2)" />
       <Stat label="TP reached first" :value="pct((m?.tp_before_sl_rate || 0) / 100, 0)" hint="any target before the stop" />
-      <Stat label="Trades" :value="m?.trades ?? 0" :hint="`costs ${money(m?.total_costs)}`" />
+      <Stat label="Trades" :value="m?.trades ?? 0" :hint="`costs ${money(m?.total_costs)} · swap ${money(m?.total_swap)}`" />
     </div>
 
     <div class="grid gap-3 xl:grid-cols-[minmax(0,1fr)_330px]">

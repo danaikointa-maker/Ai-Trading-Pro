@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import json
 
-import numpy as np
 from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel
 

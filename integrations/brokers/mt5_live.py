@@ -153,6 +153,7 @@ class MT5Broker(BrokerAdapter):
             mt5.symbol_select(broker_symbol, True)
         rate, rate_source = self._quote_rate(str(info.currency_profit))
         return SymbolSpec(
+            **self._swap_fields(info, rate),
             symbol=symbol,
             description=info.description,
             quote_to_account_rate=rate,
@@ -171,6 +172,30 @@ class MT5Broker(BrokerAdapter):
             profit_currency=info.currency_profit,
             source="broker",
         )
+
+    @staticmethod
+    def _swap_fields(info: Any, rate: float) -> dict[str, Any]:
+        """Translate MT5's swap_mode into our money/points/percent contract.
+
+        MT5 quotes swap in four different units; taking `swap_long` at face value
+        without knowing the mode turns a points figure into dollars or vice versa.
+        Modes 6/7 (reopen) have no equivalent here, so the swap is reported as
+        zero rather than guessed.
+        """
+        mode = int(getattr(info, "swap_mode", 0) or 0)
+        long_raw = float(getattr(info, "swap_long", 0.0) or 0.0)
+        short_raw = float(getattr(info, "swap_short", 0.0) or 0.0)
+        if mode == 1:  # SYMBOL_SWAP_MODE_POINTS
+            return {"swap_mode": "points", "swap_long_points": long_raw, "swap_short_points": short_raw}
+        if mode in (3, 5):  # INTEREST_CURRENT / INTEREST_OPEN -> annual %
+            return {"swap_mode": "percent", "swap_long_pct": long_raw, "swap_short_pct": short_raw}
+        if mode == 2:  # CURRENCY_SYMBOL -> profit currency, convert to account
+            return {"swap_mode": "money", "swap_long_per_lot": long_raw * rate,
+                    "swap_short_per_lot": short_raw * rate}
+        if mode in (6, 7):  # REOPEN_* -> unsupported, do not invent a number
+            return {"swap_mode": "money", "swap_long_per_lot": 0.0, "swap_short_per_lot": 0.0}
+        # 0 disabled / 4 margin currency -> already account currency
+        return {"swap_mode": "money", "swap_long_per_lot": long_raw, "swap_short_per_lot": short_raw}
 
     def _quote_rate(self, profit_currency: str) -> tuple[float, str]:
         """Resolve profit currency -> account currency using visible MT5 quotes."""
@@ -339,8 +364,13 @@ class MT5Broker(BrokerAdapter):
         """Broker-authoritative P&L via order_calc_profit (falls back to the contract formula)."""
         if not self._connected or not MT5_AVAILABLE:
             spec = self.symbol_spec(symbol)
+            if spec.sizing_blocked:
+                raise BrokerError(
+                    f"cannot value {symbol} profit in account currency: "
+                    f"{spec.profit_currency}->USD rate unresolved (MT5 offline)"
+                )
             sign = 1 if direction == Direction.up else -1
-            return (exit_price - entry) * sign * spec.contract_size * volume
+            return spec.pnl_in_account_currency((exit_price - entry) * sign, volume)
         order_type = mt5.ORDER_TYPE_BUY if direction == Direction.up else mt5.ORDER_TYPE_SELL
         profit = mt5.order_calc_profit(order_type, self._broker_symbol(symbol), volume, entry, exit_price)
         return float(profit) if profit is not None else 0.0

@@ -3,7 +3,7 @@ from __future__ import annotations
 
 import pytest
 
-from packages.shared_schemas.models import SymbolSpec, Zone
+from packages.shared_schemas.models import SymbolSpec
 from services.risk_engine.planner import points_calculator, TradePlanner
 
 GOLD = SymbolSpec(

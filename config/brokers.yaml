@@ -36,6 +36,7 @@ brokers:
         freeze_level_points: 0
         spread_typical_points: 25
         commission_per_lot_round_turn: 0.0
+        swap_mode: money           # money | points | percent (must match the broker)
         swap_long_per_lot: -21.4
         swap_short_per_lot: 9.1
         margin_currency: USD
@@ -54,6 +55,7 @@ brokers:
         freeze_level_points: 0
         spread_typical_points: 30
         commission_per_lot_round_turn: 0.0
+        swap_mode: money           # money | points | percent (must match the broker)
         swap_long_per_lot: -3.2
         swap_short_per_lot: 1.1
         margin_currency: USD
@@ -72,6 +74,7 @@ brokers:
         freeze_level_points: 0
         spread_typical_points: 8
         commission_per_lot_round_turn: 7.0
+        swap_mode: money           # money | points | percent (must match the broker)
         swap_long_per_lot: -7.6
         swap_short_per_lot: 2.4
         margin_currency: USD
@@ -100,6 +103,7 @@ brokers:
         freeze_level_points: 0
         spread_typical_points: 25
         commission_per_lot_round_turn: 0.0
+        swap_mode: money           # money | points | percent (must match the broker)
         swap_long_per_lot: -21.4
         swap_short_per_lot: 9.1
         margin_currency: USD
@@ -132,6 +136,7 @@ brokers:
         freeze_level_points: 0
         spread_typical_points: 28
         commission_per_lot_round_turn: 6.0
+        swap_mode: money           # money | points | percent (must match the broker)
         swap_long_per_lot: -18.0
         swap_short_per_lot: 6.0
         margin_currency: USD
@@ -162,6 +167,7 @@ brokers:
         freeze_level_points: 0
         spread_typical_points: 30
         commission_per_lot_round_turn: 0.0
+        swap_mode: money           # money | points | percent (must match the broker)
         swap_long_per_lot: -20.0
         swap_short_per_lot: 8.0
         margin_currency: USD

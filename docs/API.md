@@ -84,7 +84,11 @@ Base: `http://127.0.0.1:8000` · interactive docs: `/api/docs` · OpenAPI: `/api
 ```
 ws://<host>/ws/live?token=<jwt>      (alias: /ws)
 ```
-frame ทุก 1 วินาที = `live_payload` + `type:"snapshot"`:
+frame ทุก 1 วินาที: `type:"snapshot"` (payload เต็ม) หรือ `type:"tick"` (เบา — ไม่มี `analysis`/`forecast`)
+snapshot ถูกส่งครั้งแรกทันที และซ้ำทุก `ws.full_snapshot_seconds` (ค่าเริ่มต้น 5 วินาที) —
+client ต้อง merge ไม่ใช่ replace ไม่งั้น panel analysis จะหายไป 1 วินาทีหลังโหลด
+
+payload เต็ม:
 `account, positions, risk_state, limits, signal, gate, analysis, forecast, model,
 training, reconcile, alerts, errors, ticker, mode, feed, virtual_time`
 

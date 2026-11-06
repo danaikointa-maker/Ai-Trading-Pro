@@ -23,7 +23,6 @@ import pandas as pd
 
 from packages.indicators.pipeline import enrich
 from packages.shared_schemas.models import (
-    BacktestMetrics,
     BacktestReport,
     BacktestRequest,
     Direction,
@@ -38,6 +37,7 @@ from packages.shared_schemas.models import (
     Tick,
     TradeMode,
     TradeRecord,
+    swap_night_multiplier,
 )
 from packages.shared_schemas.settings import Settings
 from services.ai_forecast.pathprob import PathProbabilityTable
@@ -75,6 +75,8 @@ class SimPosition:
     breakeven_done: bool = False
     trailing_active: bool = False
     exit_reason: str = ""
+    swap: float = 0.0
+    last_swap_day: int = 0
     notes: list[str] = field(default_factory=list)
 
 
@@ -281,6 +283,7 @@ class Backtester:
                 entry=entry, sl=plan.sl, sl_initial=plan.sl,
                 tps=[plan.tp1, plan.tp2, plan.tp3], volumes=volumes, partials_done=0,
                 remaining=qty, initial_volume=qty, opened_at=int(nxt["t"]), entry_bar=i + 1,
+                last_swap_day=int(nxt["t"]) // 86400,
                 risk_amount=round(actual_risk, 2) or plan.risk_amount,
                 trade_mode=TradeMode.manual, strategy=signal.strategy,
                 signal_id=signal.id,
@@ -312,6 +315,13 @@ class Backtester:
             f"{skipped} signal(s) were not taken because the fill gapped outside the plan's "
             f"entry tolerance (stop already too close or first target already gone)."
         ] if skipped else [])
+        swap_note = {
+            "money": f"{spec.swap_long_per_lot:+.2f} / {spec.swap_short_per_lot:+.2f} "
+                     f"{spec.profit_currency} per lot per night",
+            "points": f"{spec.swap_long_points:+.1f} / {spec.swap_short_points:+.1f} points per lot per night",
+            "percent": f"{spec.swap_long_pct:+.3f}% / {spec.swap_short_pct:+.3f}% annual interest "
+                       f"on notional ({spec.swap_days_in_year}-day basis)",
+        }.get(spec.swap_mode, "quoted swap")
         report = BacktestReport(
             id=f"BT-{uuid.uuid4().hex[:8].upper()}",
             created_at=int(time.time()),
@@ -328,9 +338,11 @@ class Backtester:
             per_regime={k: compute_metrics(v, [], len(v), request.starting_balance) for k, v in per_regime.items()},
             walk_forward=fold_marks,
             assumptions=[
+                f"Swap basis: {swap_note}.",
                 f"Spread {spread_points:.0f} points and commission {commission:.2f}/lot on every fill; "
                 f"slippage {request.slippage_points:.1f} points.",
-                "No swap/modelling of overnight financing (intraday strategy).",
+                "Overnight swap is charged once per UTC midnight crossed, three times on "
+                "Wednesday; a position opened and closed inside one day pays none.",
                 "When a bar contains both stop and target, the stop is assumed first (conservative).",
                 "The trained ML model's directional edge is NOT used inside this backtest; the "
                 "forecast component is a deterministic rule proxy and is discounted as unvalidated.",
@@ -417,7 +429,7 @@ class Backtester:
         if pos is None:
             return 0.0
         sign = 1 if pos.direction == Direction.up else -1
-        return (price - pos.entry) * sign * spec.contract_size * pos.remaining
+        return spec.pnl_in_account_currency((price - pos.entry) * sign, pos.remaining)
 
     def _manage_bar(self, pos: SimPosition, bar: pd.Series, spec: SymbolSpec, spread_price: float,
                     commission: float) -> tuple[SimPosition | None, TradeRecord | None]:
@@ -428,9 +440,24 @@ class Backtester:
         pos.mfe_points = max(pos.mfe_points, (high - pos.entry) * sign / spec.point if sign > 0
                              else (pos.entry - low) / spec.point)
 
+        # --- overnight financing: one charge per UTC midnight crossed, triple on
+        # Wednesday (brokers roll the weekend's funding into that night). Charged
+        # on the volume still open at that moment, in account currency.
+        bar_day = bar_time // 86400
+        if pos.last_swap_day and bar_day > pos.last_swap_day:
+            while pos.last_swap_day < bar_day:
+                pos.last_swap_day += 1
+                amount = spec.swap_for(pos.direction, pos.remaining, close) * \
+                    swap_night_multiplier(pos.last_swap_day)
+                if amount:
+                    pos.swap += amount
+                    pos.realized += amount
+
         def book(volume: float, price: float, reason: str) -> None:
             nonlocal pos
-            pnl = (price - pos.entry) * sign * spec.contract_size * volume
+            # Account currency, not quote currency: a JPY-quoted pair would
+            # otherwise book ~157x the real profit next to USD commission.
+            pnl = spec.pnl_in_account_currency((price - pos.entry) * sign, volume)
             cost = commission * volume
             pos.realized += pnl - cost
             pos.costs += cost
@@ -500,7 +527,9 @@ class Backtester:
         # Net P&L already carries the spread inside the entry price; adding the
         # booked costs back gives the cost-free result, so gross - pnl == costs.
         net = pos.realized
-        gross = net + pos.costs
+        # Swap is financing, not a trading cost: strip it back out alongside the
+        # commission so `gross - pnl == costs - swap`.
+        gross = net + pos.costs - pos.swap
         return TradeRecord(
             ticket=f"BT{pos.entry_bar}-{pos.signal_id[-6:]}",
             symbol=spec.symbol, direction=pos.direction, volume=round(pos.closed_volume, 4),
@@ -509,7 +538,7 @@ class Backtester:
             tp=round(pos.tps[0], spec.digits),
             opened_at=pos.opened_at, closed_at=bar_time,
             points=round(points, 1), gross_pnl=round(gross, 2), costs=round(pos.costs, 2),
-            pnl=round(pos.realized, 2),
+            swap=round(pos.swap, 2), pnl=round(pos.realized, 2),
             r_multiple=round(pos.realized / pos.risk_amount, 2) if pos.risk_amount else 0.0,
             exit_reason=pos.exit_reason or "closed", strategy=pos.strategy,
             signal_id=pos.signal_id, mode=pos.trade_mode, broker_id="backtest",
