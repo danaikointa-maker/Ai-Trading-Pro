@@ -21,6 +21,7 @@ import pandas as pd
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from packages.shared_schemas.settings import reload_settings  # noqa: E402
+from services.market_data.tick_store import manifest_path  # noqa: E402
 from services.market_data.ticks import import_ticks, tick_summary  # noqa: E402
 
 
@@ -55,11 +56,12 @@ def main() -> int:
                               "utf-8")
     out_dir = Path(args.data_dir) if args.data_dir else settings.paths["datasets"]
     summary = import_ticks(args.out, args.symbol, out_dir, tz="UTC")
-    manifest_path = out_dir / "ticks" / f"{args.symbol.upper()}_ticks.json"
     manifest = tick_summary(out_dir, args.symbol) or {}
     manifest.update({"reconstruction": True,
                      "warning": "reconstructed from M1 bars: the intra-bar order is a guess"})
-    manifest_path.write_text(json.dumps(manifest, indent=2), "utf-8")
+    path = manifest_path(out_dir, args.symbol)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps(manifest, indent=2), "utf-8")
     print(json.dumps({k: summary[k] for k in ("rows_used", "first_t", "last_t")}, indent=2))
     print(f"stored: {summary['path']}  (reconstruction — testing only)")
     return 0

@@ -249,15 +249,53 @@ training, reconcile, alerts, errors, ticker, mode, feed, virtual_time`
 ```bash
 .venv/bin/python scripts/import_ticks.py --csv ~/Downloads/XAUUSD_ticks.csv --symbol XAUUSD   # time,bid,ask
 .venv/bin/python scripts/import_ticks.py --csv ticks.csv --symbol XAUUSD --tz Etc/GMT-3       # ไฟล์ไม่มี tz
+.venv/bin/python scripts/import_ticks.py --csv big.csv --symbol XAUUSD --chunk-rows 100000    # stream
+.venv/bin/python scripts/import_ticks.py --csv old.csv --symbol XAUUSD --single-file          # layout เดิม
 ```
-เก็บเป็น `storage/datasets/ticks/XAUUSD_ticks.csv.gz` + manifest `.json` (จำนวนแถวที่ใช้/ที่ทิ้ง,
-ช่วงเวลา, sha256, median spread) — backtest โหลดเองเมื่อ `use_ticks: true`
+เก็บเป็น **หนึ่งไฟล์ต่อหนึ่งวัน UTC**: `storage/datasets/ticks/XAUUSD/2026-11-05.parquet`
+(ถ้าไม่มี pyarrow → `.csv.gz`) พร้อม `ticks/XAUUSD/manifest.json` (rows/first_t/last_t/sha256
+ต่อวัน, จำนวนแถวที่ใช้/ที่ทิ้ง, median spread) — backtest อ่านเฉพาะวันทีหน้าต่างแท่งทับ
+ไม่โหลดทั้งก้อน; layout ไฟล์เดียวแบบเดิมยังเปิดได้ (auto-detect)
+
+### `GET /api/datasets/ticks/status`
+
+ทุก role อ่านได้ ตอบจาก manifest โดยไม่เปิดไฟล์ข้อมูลเลย (`rows_loaded: 0`):
+
+```json
+{"used_for_intra_bar_ordering": true,
+ "ticks": [{"symbol": "XAUUSD", "available": true, "layout": "daily", "format": "parquet",
+            "rows": 1008000, "days_covered": 12,
+            "first_iso": "2026-10-05T00:00:00+00:00", "last_iso": "2026-10-16T23:19:59+00:00",
+            "gaps": [],
+            "days": [{"day": "2026-10-05", "rows": 84000, "first_t": 1791158400,
+                      "last_t": 1791242399, "format": "parquet", "bytes": 769760}],
+            "source": "/home/me/XAUUSD_ticks.csv", "dropped": {"ask below bid": 3}}]}
+```
+
+`gaps` = วันที่หายไปตรงกลางช่วง (มีไฟล์วันแรกกับวันสุดท้าย แต่ขาดวันระหว่าง) — ถ้าไม่ว่าง
+แปลว่า backtest ที่ทับช่วงนั้นจะยังใช้สมมติฐาน SL-ก่อนในแท่งที่ขาด และนับใน `bars_without_ticks`
+
+### `POST /api/datasets/ticks/prune?symbol=XAUUSD&keep_days=60[&force=true]` (admin)
+
+ลบไฟล์วันเก่า เหลือ `keep_days` วันล่าสุด + เขียน audit `datasets.ticks_prune`
+**ค่าเริ่มต้นปฏิเสธ (409)** ถ้ามี backtest ที่บันทึกไว้อ้างวันเหล่านั้นอยู่
+(`dataset.ticks.days_used`) เพราะ report นั้นจะ reproduce ไม่ได้อีก — `force=true` เท่านั้นที่ลบได้
 
 ใน report:
 ```json
-"diagnostics": {"intra_bar": {"rows": 24000, "bars_settled_by_ticks": 3, "bars_without_ticks": 1, ...}},
+"diagnostics": {"intra_bar": {"layout": "daily", "days": 18, "days_in_window": 5,
+                              "ticks_in_window": 13242, "days_used": ["2026-11-05"],
+                              "days_loaded": 1, "rows": 1024000, "rows_in_window": 480,
+                              "bars_settled_by_ticks": 3, "bars_without_ticks": 1, ...}},
 "assumptions": ["Intra-bar order: 3 ambiguous bars were settled by walking 24000 real ticks in time order; 1 bars had no ticks ..."]
 ```
+ความหมายของตัวเลขใน `intra_bar` (แยกให้ชัด เพราะมันต่างกันจริง):
+- `ticks_in_window` = tick ที่ **มีอยู่** ในหน้าต่างที่รัน (ตอบจาก manifest ไม่ได้อ่านไฟล์) —
+  ใช้ตอบคำถาม "ทำไม tick ไม่ช่วยอะไรเลย": ถ้าเป็น 0 แปลว่าไม่มีข้อมูลครอบช่วงนี้จริง ๆ
+- `days_in_window` / `days_used` / `days_loaded` = วันที่ทับหน้าต่าง / วันที่ถูกอ่านจริง /
+  จำนวนไฟล์ที่เปิด — งานที่ไม่มีแท่งกำกวมจะอ่าน 0 ไฟล์แม้มี tick ครบ
+- `rows_in_window` = จำนวน tick ที่เดินจริงเพื่อตัดสินแท่ง (0 ถ้าไม่มีแท่งกำกวม)
+
 `_manage_bar` เดิมเดาว่า "แท่งที่ชนทั้ง SL และ TP → SL ก่อน" ซึ่งเปลี่ยนไม้ชนะเป็นไม้แพ้ได้;
 เมื่อมี tick ระบบเดินราคาตามเวลาจริงในแท่งนั้น (long ออกที่ bid, short ออกที่ ask) แล้วจึงตัดสิน —
 ถ้า tick ไม่ครอบคลุมแท่งนั้น จะกลับไปใช้สมมติฐานเดิม **และนับไว้** ไม่ใช่เงียบ ๆ
