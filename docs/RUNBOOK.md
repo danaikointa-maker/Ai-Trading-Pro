@@ -147,6 +147,18 @@ export NO7_REDIS_URL=redis://127.0.0.1:6379/0
 - ดูสถานะที่ `/api/system/health` → `cluster: {role, backend, requested, reason, shared_health}`
   และแถว `cluster` บนหน้า /system
 
+**Hot standby (ค่าเริ่มต้นเปิด):** โปรเซสที่ไม่ได้ lease จะไม่ตายทิ้ง — มันเฝ้าทุก
+`standby_poll_seconds` (5s) และถ้า heartbeat ของ leader เงียบเกิน 30s จะยึด lease (compare-and-set,
+ผู้ชนะคนเดียว) แล้วเริ่มเทรดเอง บันทึกไว้ใน error log ว่า `promoted to leader …`
+ปิดได้ด้วย `NO7_HOT_STANDBY=false` ถ้าต้องการให้ต้องรีสตาร์ตมือ
+
+```bash
+# ตัวอย่าง: สองโปรเซส, ตัวที่สองเป็น standby
+.venv/bin/python -m uvicorn services.api_gateway.app:app --port 8000 &
+.venv/bin/python -m uvicorn services.api_gateway.app:app --port 8001 &   # role: blocked + standby
+# ปิดตัวแรก → อีก ~5 วินาที ตัวที่สองกลายเป็น leader เอง
+```
+
 ถ้าตั้ง `backend: redis` แต่ยังใช้ไม่ได้ (ไม่มี URL / ไม่ได้ `pip install redis` / ต่อเซิร์ฟเวอร์ไม่ได้)
 ระบบจะ **ถอยไปใช้ in-process store** และบอกเหตุผลใน `cluster.reason` — replica จะไม่มีอะไรอ่าน
 จึงกลายเป็น `blocked` ตามเดิม (ไม่แอบทำงานครึ่ง ๆ กลาง ๆ)

@@ -220,6 +220,7 @@ class TradingRuntime:
         self.training: dict[str, Any] = {"state": "idle", "message": "", "pct": 0.0, "version": None}
         self._owner = lease_owner()
         self.lease: dict[str, Any] = {"state": "unclaimed", "owner": self._owner}
+        self._standby: threading.Thread | None = None
         self.shared, self.shared_status = build_shared_state(self.settings)
         self.replica = False
         self._replica_frame: dict[str, Any] | None = None
@@ -238,6 +239,7 @@ class TradingRuntime:
         if self._thread and self._thread.is_alive():
             return
         if not self._claim_lease():
+            self._start_standby()
             return
         # Run one cycle inline: the dashboard's very first paint then has a
         # snapshot/forecast instead of an empty card that fills in seconds later.
@@ -284,6 +286,49 @@ class TradingRuntime:
         self._lease_last_beat = now
         self.lease = heartbeat_lease(self.db, self._owner, now)
 
+    # ------------------------------------------------------------ hot standby
+    def try_promote(self) -> bool:
+        """Take over from a leader that stopped breathing (atomic lease claim).
+
+        A standby is a full runtime that simply never started its loop, so
+        promotion is "claim the lease and start ticking" — no re-initialisation and
+        no chance of two winners, because the claim is a compare-and-set.
+        """
+        if self._stop.is_set():
+            return False
+        if self.lease.get("state") in ("held", "shared") and not self.replica:
+            return False
+        ok, record = claim_runtime_lease(self.db, self._owner)
+        if not ok:
+            self.lease = record
+            return False
+        self.lease = record
+        self.replica = False
+        self._log_error("runtime-lease", RuntimeError(
+            f"promoted to leader ({record.get('state')}) — the previous runtime stopped "
+            f"sending heartbeats. This process now drives trading."))
+        self.start()
+        return True
+
+    def _start_standby(self) -> None:
+        """Poll for a dead leader while this process waits in the background."""
+        if not bool(self.settings.cluster.get("hot_standby", True)):
+            return
+        if self._standby and self._standby.is_alive():
+            return
+        interval = float(self.settings.cluster.get("standby_poll_seconds", 5) or 5)
+
+        def watch() -> None:
+            while not self._stop.wait(max(0.2, interval)):
+                try:
+                    if self.try_promote():
+                        return
+                except Exception as exc:  # noqa: BLE001 - a standby must not crash
+                    self._log_error("runtime-lease", exc)
+
+        self._standby = threading.Thread(target=watch, name="no7-standby", daemon=True)
+        self._standby.start()
+
     def _maybe_publish(self, now: float | None = None) -> None:
         """Publish this leader's live frame for any replicas (once a second)."""
         now = time.time() if now is None else now
@@ -317,6 +362,8 @@ class TradingRuntime:
         self._stop.set()
         if self._thread:
             self._thread.join(timeout=3)
+        if self._standby:
+            self._standby.join(timeout=2)
         try:
             self.shared.close()
         except Exception:  # noqa: BLE001 - shutdown must not raise

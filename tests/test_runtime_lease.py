@@ -185,3 +185,63 @@ def test_a_fresh_lease_is_not_stolen_by_an_atomic_write(db):
     ok, record = claim_runtime_lease(db, "host-a#2", now=1002.0)
     assert not ok and record["owner"] == "host-a#1"
     assert db.kv_get(LEASE_KEY)["heartbeat"] == pytest.approx(1000.0)
+
+
+def _stub(tmp_path, lease_state: str, owner_heartbeat_age: float = 0.0):
+    """A runtime shell with just what promotion touches."""
+    from collections import deque
+
+    from packages.persistence.db import Database
+    from services.api_gateway.cluster import LocalSharedState
+    from services.api_gateway.state import TradingRuntime
+
+    db = Database(str(tmp_path / "standby.sqlite3"))
+    rt = TradingRuntime.__new__(TradingRuntime)
+    rt.db, rt._owner = db, lease_owner()
+    rt.lease = {"state": lease_state, "owner": rt._owner}
+    rt.replica = lease_state == "replica"
+    rt.errors = deque(maxlen=10)
+    rt.shared, rt.shared_status = LocalSharedState(), {"backend": "local"}
+    rt._replica_frame = None
+    rt._stop = __import__("threading").Event()
+    rt.settings = type("S", (), {"cluster": {"hot_standby": True}})
+    rt.started = 0
+
+    def fake_start():
+        rt.started += 1
+
+    rt.start = fake_start  # type: ignore[method-assign]
+    now = time.time()
+    claim_runtime_lease(db, "dead-host#404", now=now - owner_heartbeat_age)
+    return rt, db
+
+
+def test_a_standby_does_not_steal_a_live_leader(tmp_path):
+    rt, db = _stub(tmp_path, "blocked", owner_heartbeat_age=1.0)
+    assert rt.try_promote() is False
+    assert rt.started == 0
+    assert db.kv_get(LEASE_KEY)["owner"] == "dead-host#404"
+    db.close()
+
+
+def test_a_standby_promotes_once_the_leader_goes_quiet(tmp_path):
+    rt, db = _stub(tmp_path, "blocked", owner_heartbeat_age=LEASE_STALE_SECONDS + 5)
+    assert rt.try_promote() is True
+    assert rt.started == 1, "promotion must actually start the loop"
+    assert rt.replica is False
+    assert db.kv_get(LEASE_KEY)["owner"] == rt._owner
+    assert any(e["where"] == "runtime-lease" for e in rt.errors), "promotion must be logged"
+    db.close()
+
+
+def test_promotion_is_idempotent_and_respects_shutdown(tmp_path):
+    rt, db = _stub(tmp_path, "blocked", owner_heartbeat_age=LEASE_STALE_SECONDS + 5)
+    assert rt.try_promote() is True
+    assert rt.try_promote() is False, "an active leader must not promote again"
+    assert rt.started == 1
+
+    rt2, db2 = _stub(tmp_path, "blocked", owner_heartbeat_age=LEASE_STALE_SECONDS + 5)
+    rt2._stop.set()
+    assert rt2.try_promote() is False, "a shutting-down process must not take over"
+    db.close()
+    db2.close()

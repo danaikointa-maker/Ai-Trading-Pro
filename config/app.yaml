@@ -103,6 +103,11 @@ cluster:
   redis_url: ${NO7_REDIS_URL:}               # e.g. redis://127.0.0.1:6379/0
   key_prefix: no7
   state_ttl_seconds: 10                      # a frame older than this is gone, by design
+  # A process that could not take the lease keeps checking whether the leader
+  # went quiet (heartbeat older than 30s) and takes over. Only one can win: the
+  # claim is a compare-and-set. Set false to require a manual restart instead.
+  hot_standby: ${NO7_HOT_STANDBY:true}
+  standby_poll_seconds: 5
 
 # WebSocket: a light frame every second, a full payload (with analysis/forecast)
 # at least this often so those panels never freeze.
