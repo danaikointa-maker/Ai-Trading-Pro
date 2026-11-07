@@ -129,7 +129,9 @@ volume profile, VWAP, EMA, equal highs/lows, round number, reaction history
    (ยังทำไม่ได้: ต้องมี Windows + MT5)
 2. **tick data จริง** — นำเข้า M1 จากไฟล์ได้แล้วและ replay ผ่านไปป์ไลน์สดได้ แต่ intra-bar path
    ยังเป็นการประมาณ; snapshot ของ dataset สำหรับ reproducible backtest ก็ยังไม่มี
-3. **หลาย worker / หลายเครื่อง** — rate limit แชร์โควตาได้ในเครื่องเดียว (`ratelimit.store: sqlite`)
-   แต่ runtime (simulator/scheduler/ws hub) ยังออกแบบสำหรับโปรเซสเดียว; ข้ามเครื่องยังต้อง Redis/proxy
+3. **หลาย worker / หลายเครื่อง** — runtime ถูกล็อกให้มี **เจ้าของเดียว** ต่อฐานข้อมูลผ่าน lease
+   (`runtime_lease`, heartbeat 5s / stale 30s) โปรเซสที่สองจะไม่เทรดและรายงานว่าถูกบล็อก แต่ยังไม่มี
+   การแชร์สถานะสดระหว่างโปรเซส (ws hub/scheduler ยังอยู่ในโปรเซสเดียว) — ข้ามเครื่องต้องใช้ Redis/pub-sub
+   และ rate limit ข้ามเครื่อง (`ratelimit.store: sqlite` แชร์ได้เฉพาะในเครื่องเดียว)
 4. Mobile PWA + Telegram/LINE push
 5. Full Auto เปิดใช้หลัง paper forward test ต่อเนื่อง

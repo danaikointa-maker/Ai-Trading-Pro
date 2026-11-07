@@ -23,6 +23,12 @@
             <dt>{{ k }}</dt>
             <dd><span class="chip" :class="String(v).includes('ok') || String(v).includes('running') || String(v).includes('approved') ? 'chip-up' : 'chip-warn'">{{ v }}</span></dd>
           </div>
+          <div class="kv">
+            <dt>runtime lease</dt>
+            <dd>
+              <span class="chip" :class="leaseTone" :title="leaseTitle">{{ leaseLabel }}</span>
+            </dd>
+          </div>
           <div v-if="health?.feed_note" class="kv">
             <dt>feed note</dt>
             <dd><span class="chip chip-warn" :title="health.feed_note">{{ shortNote }}</span></dd>
@@ -146,6 +152,33 @@ const feedHint = computed(() => {
   return `virtual ${clock(h.virtual_time)}`
 })
 const feedSymbols = computed(() => health.value?.feed?.symbols || {})
+
+// One process may drive ticks and orders per database. When the lease is held
+// elsewhere this page still loads, but nothing moves — say so instead of
+// leaving a frozen screen with no explanation.
+const lease = computed(() => health.value?.runtime_lease || {})
+const leaseLabel = computed(() => {
+  const state = lease.value.state || 'unknown'
+  const owner = lease.value.owner || '—'
+  if (state === 'held' || state === 'shared') return `${state} · ${owner}`
+  if (state === 'blocked') return `blocked by ${owner}`
+  if (state === 'lost') return `lost to ${owner}`
+  if (state === 'released') return 'released'
+  return state
+})
+const leaseTone = computed(() => {
+  const state = lease.value.state
+  if (state === 'held') return 'chip-up'
+  return state === 'shared' ? 'chip-warn' : 'chip-down'
+})
+const leaseTitle = computed(() => {
+  const l = lease.value
+  if (l.state === 'held') return ` heartbeat ${fmt(l.heartbeat_age_seconds, 1)}s ago`
+  if (l.state === 'shared') return 'NO7_ALLOW_MULTI_RUNTIME เปิดอยู่ — อาจมีออเดอร์ซ้ำ'
+  if (l.state === 'blocked') return `runtime อื่นถือฐานข้อมูลนี้อยู่ (heartbeat ${fmt(l.heartbeat_age_seconds, 1)}s) — โปรเซสนี้ไม่เทรด`
+  if (l.state === 'lost') return 'มีโปรเซสอื่นยึด runtime ไปแล้ว — โปรเซสนี้หยุดเทรด'
+  return ''
+})
 const shortNote = computed(() => {
   const note = String(health.value?.feed_note || '')
   return note.length > 60 ? `${note.slice(0, 60)}…` : note

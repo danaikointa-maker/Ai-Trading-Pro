@@ -90,7 +90,22 @@ NO7_FEED_MODE=replay .venv/bin/python -m uvicorn services.api_gateway.app:app --
 | `/api/market/candles` ตอบ 422 | `limit < 20` (ข้อจำกัดของ endpoint) |
 | PyJWT เตือน key สั้น | ตั้ง `NO7_JWT_SECRET` ≥ 32 ตัวอักษร |
 
-## 6. ความปลอดภัย
+## 6. รันได้ทีละโพรเซสเท่านั้น (single-writer)
+
+runtime (tick, signal, order) ใช้ **lease** ในตาราง `kv` (`runtime_lease`) — โปรเซสเดียวเท่านั้นที่ขับเคลื่อนได้
+ถ้าเปิดโปรเซสที่สองบนฐานข้อมูลเดียวกัน:
+
+- `/api/system/health` → `status: degraded`, `services.runtime: "blocked (blocked)"`, `runtime_lease.owner` = เจ้าของตัวจริง
+- log มี `runtime-lease: another No7 runtime already owns this database (...)`
+- หน้า `/system` ขึ้นป้าย `blocked by <owner>`
+
+อย่าใช้ `uvicorn --workers N` กับ build นี้: worker ที่สองจะไม่เทรด (ซึ่งปลอดภัย) แต่ก็ไม่ได้ข้อมูลสดของตัวเอง
+ถ้าจำเป็นต้องมีหลายโปรเซสจริง ๆ ให้ตั้ง `NO7_ALLOW_MULTI_RUNTIME=1` **เฉพาะเมื่อ** ตัวที่ไม่ใช่เจ้าของเปิดอ่านอย่างเดียว
+และเข้าใจว่าออเดอร์อาจซ้ำได้ (ระบบจะขึ้น `shared` + บันทึก error ไว้)
+
+heartbeat ทุก 5 วินาที, ถือว่า lease ตายเมื่อเงียบเกิน 30 วินาที → เปิดใหม่ได้ทันทีแม้โดน `kill -9`
+
+## 7. ความปลอดภัย
 
 - อย่าเปิดพอร์ต 8000 สู่อินเทอร์เน็ตโดยไม่มี reverse proxy + TLS + auth
 - `NO7_JWT_SECRET` ต้องไม่ซ้ำกับระบบอื่น และไม่เข้า git
