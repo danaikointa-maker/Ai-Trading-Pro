@@ -132,11 +132,11 @@
         <section class="panel">
           <div class="panel-head">
             <div class="panel-title">Out-of-sample evaluation</div>
-            <span class="chip">walk-forward · time-ordered split</span>
+            <span class="chip">time-ordered split · {{ foldsLabel }}</span>
           </div>
           <div class="overflow-x-auto">
             <table class="table-base">
-              <thead><tr><th>H</th><th>Directional acc.</th><th>Brier</th><th>Baseline Brier</th><th>Δ</th><th>P10–P90 cover</th><th>Gate</th></tr></thead>
+              <thead><tr><th>H</th><th>Directional acc.</th><th>Brier</th><th>Baseline Brier</th><th>Δ</th><th>P10–P90 cover</th><th title="chronological folds that clear the same gates">Folds</th><th>Gate</th></tr></thead>
               <tbody>
                 <tr v-for="(m, key) in metrics" :key="key">
                   <td class="num">{{ key }}m</td>
@@ -145,9 +145,10 @@
                   <td class="num text-muted">{{ fmt(m.baseline_brier, 3) }}</td>
                   <td class="num" :class="m.brier_improvement > 0 ? 'text-up' : 'text-down'">{{ signed(m.brier_improvement, 4) }}</td>
                   <td class="num">{{ pct(m.coverage_p10_p90, 0) }}</td>
+                  <td class="num" :title="foldsTitle(m)" :class="foldsClass(m)">{{ foldsText(m) }}</td>
                   <td><span class="chip" :class="m.approved ? 'chip-up' : 'chip-warn'">{{ m.approved ? 'pass' : 'fail' }}</span></td>
                 </tr>
-                <tr v-if="!Object.keys(metrics).length"><td colspan="7" class="py-4 text-center text-[11px] text-muted">ยังไม่มีโมเดลที่ฝึกเสร็จ</td></tr>
+                <tr v-if="!Object.keys(metrics).length"><td colspan="8" class="py-4 text-center text-[11px] text-muted">ยังไม่มีโมเดลที่ฝึกเสร็จ</td></tr>
               </tbody>
             </table>
           </div>
@@ -191,6 +192,39 @@ const training = computed(() => ['running', 'started'].includes(state.live?.trai
 const trainingPct = computed(() => Math.round(state.live?.training?.pct || 0))
 const trainingMsg = computed(() => state.live?.training?.message || '')
 const thresholds = { dir: 0.52, brier: 0.02 }
+
+// Fold consistency: a single lucky slice used to decide approval, so the flag
+// flipped between runs. Show how many chronological folds cleared the bar.
+function foldPassed(m) {
+  const rate = m?.fold_pass_rate
+  const used = m?.folds_used ?? 0
+  if (rate === undefined || !used) return null
+  return { passed: Math.round(rate * used), used }
+}
+
+function foldsText(m) {
+  const f = foldPassed(m)
+  return f ? `${f.passed}/${f.used}` : '—'
+}
+
+function foldsClass(m) {
+  const f = foldPassed(m)
+  if (!f) return 'text-muted'
+  return f.passed / f.used >= 0.75 ? 'text-up' : 'text-down'
+}
+
+function foldsTitle(m) {
+  if (m?.fold_directional_median === undefined) return 'ยังไม่มีข้อมูล fold'
+  return `median directional ${pct(m.fold_directional_median, 1)} · `
+    + `median Brier Δ ${signed(m.fold_brier_improvement_median, 4)} · `
+    + `แย่สุด ${signed(m.fold_brier_improvement_min, 4)}`
+}
+
+const foldsLabel = computed(() => {
+  const first = Object.values(metrics.value)[0]
+  const f = foldPassed(first)
+  return f ? `${f.used} folds · ต้องผ่าน ≥75%` : 'fold check'
+})
 const selected = ref(60)
 
 watch(bundle, (b) => {

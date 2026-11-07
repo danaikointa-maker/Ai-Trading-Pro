@@ -42,6 +42,8 @@ ai:
     calibration_fraction: 0.15
     min_directional_accuracy: 0.52
     min_brier_improvement: 0.02
+    validation_folds: 4                    # chronological blocks inside the OOS set
+    min_fold_pass_rate: 0.75               # must pass the same gates in most blocks
     quantiles: [0.1, 0.25, 0.5, 0.75, 0.9]
   forecast:
     deadband_atr: 0.25                      # |ret| < x*ATR => sideways class
@@ -75,3 +77,14 @@ alerts:
 # at least this often so those panels never freeze.
 ws:
   full_snapshot_seconds: 5
+
+# Per-identity limits (token buckets). Separate from the login throttle: this is
+# about capacity, not credentials. `default` covers GETs and everything unlisted.
+ratelimit:
+  enabled: true
+  rules:
+    order: {limit: 10, window_seconds: 60}
+    explain: {limit: 20, window_seconds: 60}
+    backtest: {limit: 6, window_seconds: 60}
+    train: {limit: 2, window_seconds: 3600}
+    default: {limit: 300, window_seconds: 60}

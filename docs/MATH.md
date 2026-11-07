@@ -146,9 +146,24 @@ recovery_factor     = net / (max_dd × starting_balance)
 | SL/TP ชนในแท่งเดียวกัน | เลือก stop ก่อน target (อนุรักษ์นิยม) |
 | ค่าธรรมเนียม | ใช้ `commission_per_lot_round_turn` จาก spec (ถ้าโบรกเกอร์ไม่ให้มา = 0) |
 | swap | คิดตามโหมดที่โบรกเกอร์ประกาศ (money / points / percent) |
-| สกุลเงินกำไร ≠ USD | ยังไม่แปลงค่า |
-| walk-forward | fold ตามเวลา แต่ยังใช้ข้อมูลชุดเดียว (ไม่ใช่ tick data) |
+| สกุลเงินกำไร ≠ USD | แปลงด้วย `quote_to_account_rate` แล้ว ✅ (ถ้า resolve ไม่ได้ = บล็อกการคำนวณ lot) |
+| walk-forward | แบ่ง out-of-sample เป็น fold ตามเวลาและบังคับให้ผ่านเกณฑ์ใน ≥75% ของ fold แต่ **ไม่ฝึกใหม่ต่อ fold** — วัดความเสถียร ไม่ใช่ walk-forward เต็มรูปแบบ |
 | Sharpe | annualise จากแท่ง 5 นาที; ช่วงที่ไม่มีไม้จะได้ return = 0 ทำให้ค่าสูงเกินจริงได้ |
+
+## 9b. เกณฑ์อนุมัติโมเดล (fold consistency)
+
+```
+approved_horizon = (fold_pass_rate >= 0.75)
+                 ∧ (median directional accuracy ของ fold >= 0.52)
+                 ∧ (median Brier improvement ของ fold >= 0.02)
+                 ∧ (directional accuracy รวม >= 0.52)
+                 ∧ (Brier improvement รวม >= 0.02)
+```
+
+- fold = บล็อกต่อเนื่องตามเวลาภายใน out-of-sample set (`split_folds`, ไม่สุ่ม)
+- เดิมตัดสินจาก slice เดียว → โมเดลที่ฟลุ๊กเดือนเดียวก็ผ่าน ทำให้ `approved` แกว่งระหว่างรอบ
+- ตอนนี้ **เข้มขึ้น** ไม่ใช่ผ่อน: ต้องผ่านทั้งค่ากลางและสัดส่วน fold
+- ข้อจำกัดที่ยังเหลือ: ไม่ได้ retrain ต่อ fold (ดู `metrics.validation` ในผลเทรน)
 
 ## 10. บั๊กสูตรที่แก้ในรอบนี้
 

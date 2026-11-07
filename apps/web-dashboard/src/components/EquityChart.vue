@@ -4,7 +4,7 @@
 
 <script setup>
 import { onBeforeUnmount, onMounted, ref, watch } from 'vue'
-import * as echarts from 'echarts'
+import echarts from '../lib/echarts'
 
 const props = defineProps({ curve: { type: Array, default: () => [] }, baseline: { type: Number, default: 10000 } })
 const el = ref(null)

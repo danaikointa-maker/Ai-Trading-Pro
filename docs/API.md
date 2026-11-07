@@ -3,6 +3,24 @@
 Base: `http://127.0.0.1:8000` · interactive docs: `/api/docs` · OpenAPI: `/api/openapi.json`
 ทุก endpoint ใต้ `/api/` (ยกเว้น login/health) ต้องมี `Authorization: Bearer <jwt>`
 
+## Rate limits
+
+ทุกคำขอ (ยกเว้น `/api/system/health`, static, `/api/docs`, `/ws`) ถูกนับแบบ token bucket
+ต่อ **ผู้ใช้** (ถ้ามี bearer token ที่ถูกต้อง) หรือต่อ **IP** ถ้าไม่มี:
+
+| bucket | ครอบคลุม | limit |
+|---|---|---|
+| `order` | `POST /api/trading/order`, `/close`, `/close-all` | 10 / นาที |
+| `explain` | `POST /api/explain` | 20 / นาที |
+| `backtest` | `POST /api/backtests` | 6 / นาที |
+| `train` | `POST /api/forecast/train` | 2 / ชั่วโมง |
+| `default` | ที่เหลือ (รวม GET ทั้งหมด) | 300 / นาที |
+
+- เกิน limit → **429** พร้อม header `Retry-After` (วินาที) และ body
+  `{"detail": "...", "rule": "order", "retry_after": 2.4}`
+- ทุกคำขอที่ผ่านจะได้ header `X-RateLimit-Remaining`
+- ค่าปรับได้ที่ `config/app.yaml` → `ratelimit.rules` (ปิดทั้งบล็อกได้ด้วย `enabled: false`)
+
 ## Auth & system
 
 | Method | Path | Notes |

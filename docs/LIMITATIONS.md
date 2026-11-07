@@ -27,6 +27,9 @@
 - LightGBM ผ่านเกณฑ์เฉพาะบาง horizon; horizon ที่ไม่ผ่านถูกทำเครื่องหมาย `UNVALIDATED`
   และระบบใช้ค่าฐานสถิติแทน (ดูได้ที่หน้า Forecast)
 - Isotonic calibration ฝึกบนช่วง calibration ที่แยกจาก test แต่ยังไม่มี forward test ระยะยาว
+- การอนุมัติใช้ fold ตามเวลา (≥75% ของ fold ต้องผ่านเกณฑ์เดียวกัน) ลดการอนุมัติเพราะโชค
+  แต่ **ยังไม่ retrain ต่อ fold** และยังประเมินบน feed จำลอง — ตัวเลขจึงบอกได้แค่ว่าไปป์ไลน์ถูก
+  ไม่ได้บอกว่าโมเดลมี edge จริงในตลาด
 - ยังไม่มี Temporal CNN / ensemble — จะเพิ่มเมื่อพิสูจน์ด้วย walk-forward ว่าเหนือกว่า
 
 ## 4. Execution / MT5
@@ -44,7 +47,9 @@
 - ยังไม่มี role/permission ละเอียด (มี JWT + `owner` role เดียว)
 - Telegram/LINE/Web Push ยังไม่ต่อ (มี in-app alert แล้ว)
 - Mobile PWA ยังว่าง
-- ไม่มี rate limiting ที่ชั้น API (ควรอยู่หลัง reverse proxy)
+- มี rate limiting ในตัวแล้ว (token bucket ต่อผู้ใช้/IP: order 10/นาที, explain 20/นาที,
+  backtest 6/นาที, train 2/ชั่วโมง, อื่น ๆ 300/นาที) แต่เป็น **in-process**
+  ถ้ารันหลาย worker/หลายเครื่อง ต้องย้ายไป Redis หรือ reverse proxy
 
 ## 6. กฎหมาย / ความเสี่ยง
 

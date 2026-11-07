@@ -60,6 +60,51 @@ class HorizonModel:
         return {k: stacked[i] for i, k in enumerate(keys)}
 
 
+def split_folds(n: int, folds: int) -> list[tuple[int, int]]:
+    """Split `n` chronological rows into `folds` contiguous blocks.
+
+    Boundaries are computed from the index, never from random sampling: the whole
+    point of the check is that later data is scored by a model that never saw it.
+    """
+    if n <= 0:
+        return []
+    folds = max(1, min(int(folds), n))
+    edges = [int(n * i / folds) for i in range(folds + 1)]
+    return [(edges[i], edges[i + 1]) for i in range(folds) if edges[i + 1] > edges[i]]
+
+
+def decide_approval(folds: list[dict[str, Any]], min_dir_accuracy: float,
+                    min_brier_improvement: float, min_pass_rate: float = 0.75) -> tuple[bool, dict[str, Any]]:
+    """Approve only if the edge shows up in *most* out-of-sample blocks.
+
+    A single split can clear both gates by luck: one good month approves a model
+    that is flat the rest of the year. Requiring a majority of chronological
+    blocks — plus the median block — to clear the same bar is stricter than the
+    old rule, never looser.
+    """
+    if not folds:
+        return False, {"folds_used": 0, "fold_pass_rate": 0.0,
+                       "fold_directional_median": 0.0, "fold_brier_improvement_median": 0.0}
+
+    passing = [f for f in folds if f.get("pass")]
+    rate = len(passing) / len(folds)
+    dirs = sorted(float(f.get("directional_accuracy", 0.0)) for f in folds)
+    briers = sorted(float(f.get("brier_improvement", 0.0)) for f in folds)
+    median_dir = dirs[len(dirs) // 2] if len(dirs) % 2 else (dirs[len(dirs) // 2 - 1] + dirs[len(dirs) // 2]) / 2
+    median_brier = briers[len(briers) // 2] if len(briers) % 2 else (briers[len(briers) // 2 - 1] + briers[len(briers) // 2]) / 2
+
+    approved = bool(rate >= min_pass_rate and median_dir >= min_dir_accuracy
+                    and median_brier >= min_brier_improvement)
+    return approved, {
+        "folds_used": len(folds),
+        "fold_pass_rate": round(rate, 3),
+        "fold_directional_median": round(median_dir, 4),
+        "fold_brier_improvement_median": round(median_brier, 4),
+        "fold_directional_min": round(dirs[0], 4),
+        "fold_brier_improvement_min": round(briers[0], 4),
+    }
+
+
 @dataclass
 class TrainingResult:
     version: str
@@ -83,6 +128,8 @@ class ForecastTrainer:
         self.min_brier_improvement = float(cfg.get("min_brier_improvement", 0.02))
         self.quantiles = [float(q) for q in cfg.get("quantiles", [0.1, 0.5, 0.9])]
         self.horizons = [int(h) for h in settings.ai.get("horizons_minutes", [5, 15, 30, 60, 240])]
+        self.validation_folds = int(cfg.get("validation_folds", 4))
+        self.min_fold_pass_rate = float(cfg.get("min_fold_pass_rate", 0.75))
         self.deadband = float(settings.ai.get("forecast", {}).get("deadband_atr", 0.25))
         self.bar_minutes = 5
 
@@ -95,6 +142,29 @@ class ForecastTrainer:
         m5 = enrich(m5)
         feats = build_features(m5)
         return m5, feats
+
+    def _fold_scores(self, probs: np.ndarray, truth_idx: np.ndarray, onehot: np.ndarray,
+                     priors: np.ndarray) -> list[dict[str, Any]]:
+        """Score the out-of-sample block in chronological folds."""
+        n = len(truth_idx)
+        folds = min(max(1, self.validation_folds), max(1, n // 100))
+        out: list[dict[str, Any]] = []
+        for lo, hi in split_folds(n, folds):
+            p, t, oh = probs[lo:hi], truth_idx[lo:hi], onehot[lo:hi]
+            pred = p.argmax(axis=1)
+            nonzero = t != 1
+            dir_acc = float((pred[nonzero] == t[nonzero]).mean()) if nonzero.any() else 0.0
+            brier = float(((p - oh) ** 2).sum(axis=1).mean())
+            base = float(((np.tile(priors, (len(t), 1)) - oh) ** 2).sum(axis=1).mean())
+            improvement = base - brier
+            out.append({
+                "n": int(len(t)),
+                "directional_accuracy": round(dir_acc, 4),
+                "brier_improvement": round(improvement, 4),
+                "pass": bool(dir_acc >= self.min_dir_accuracy
+                            and improvement >= self.min_brier_improvement),
+            })
+        return out
 
     # ----------------------------------------------------------------- train
     def train(self, df_m1: pd.DataFrame, version: str,
@@ -197,8 +267,14 @@ class ForecastTrainer:
             coverage = float(((truth_fwd >= band_lo) & (truth_fwd <= band_hi)).mean())
             band_width = float(np.median(band_hi - band_lo))
 
-            approved = bool(directional >= self.min_dir_accuracy and
-                            (baseline_brier - brier) >= self.min_brier_improvement)
+            # A single split can clear both gates by luck, which is why approval
+            # kept flipping between runs. Score the same out-of-sample block in
+            # chronological folds and demand the edge in most of them.
+            folds = self._fold_scores(probs, truth_idx, onehot, prior_model.priors)
+            fold_ok, fold_summary = decide_approval(
+                folds, self.min_dir_accuracy, self.min_brier_improvement, self.min_fold_pass_rate)
+            approved = bool(fold_ok and directional >= self.min_dir_accuracy
+                            and (baseline_brier - brier) >= self.min_brier_improvement)
             prior_model.approved = approved
             prior_model.metrics = {
                 "accuracy_3class": round(accuracy, 4),
@@ -212,7 +288,9 @@ class ForecastTrainer:
                 "median_band_width_atr": round(band_width, 3),
                 "samples_train": int(len(train)),
                 "samples_test": int(len(test)),
+                "validation_folds": folds,
                 "approved": approved,
+                **fold_summary,
             }
             models[minutes] = prior_model
             overall["horizons"][str(minutes)] = prior_model.metrics
@@ -224,10 +302,15 @@ class ForecastTrainer:
         overall["train_seconds"] = round(time.time() - t0, 1)
         overall["deadband_atr"] = self.deadband
         overall["method"] = "LightGBM multiclass + isotonic calibration + quantile regression"
+        overall["validation"] = ("chronological folds inside the out-of-sample block; the model is NOT "
+                                  "retrained per fold, so this measures stability, not full walk-forward")
+        overall["validation_folds"] = self.validation_folds
+        overall["min_fold_pass_rate"] = self.min_fold_pass_rate
         notes = (
             f"{len(models)}/{len(self.horizons)} horizons trained on {overall['samples']:,} samples; "
             f"{overall['approved_horizons']} passed out-of-sample gates "
-            f"(directional accuracy >= {self.min_dir_accuracy:.0%}, Brier improvement >= {self.min_brier_improvement})."
+            f"(directional accuracy >= {self.min_dir_accuracy:.0%}, Brier improvement >= {self.min_brier_improvement}, "
+            f"in at least {self.min_fold_pass_rate:.0%} of {self.validation_folds} chronological folds)."
         )
         report("done", 1.0)
         return TrainingResult(
