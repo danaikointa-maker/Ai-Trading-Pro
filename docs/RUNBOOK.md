@@ -55,6 +55,15 @@ sqlite3 storage/db/no7.sqlite3 "SELECT id,symbol,json_extract(payload,'$.metrics
 .venv/bin/python scripts/import_candles.py --csv ~/Downloads/XAUUSD_M1.csv --symbol XAUUSD --tz Etc/GMT-3
 .venv/bin/python scripts/evaluate_dataset.py --symbol XAUUSD
 
+# freeze แท่งเทียนที่ใช้อยู่ และดู snapshot ทั้งหมด (ใช้กับ backtest ซ้ำได้)
+curl -s -X POST -H "Authorization: Bearer $TOK" -H 'Content-Type: application/json' \
+     -d '{"symbol":"XAUUSD","bars":6000}' http://127.0.0.1:8000/api/datasets
+curl -s -H "Authorization: Bearer $TOK" http://127.0.0.1:8000/api/datasets | python3 -m json.tool
+
+# รัน backtest ซ้ำบนข้อมูลชุดเดิม (ผลต้องเท่าเดิมทุกหลัก)
+curl -s -X POST -H "Authorization: Bearer $TOK" -H 'Content-Type: application/json' \
+     -d '{"symbol":"XAUUSD","snapshot_id":"DS-XXXXXXXXXX"}' http://127.0.0.1:8000/api/backtests
+
 # ให้ dashboard ทั้งระบบเดินบนข้อมูลที่นำเข้า (แล้วคืนค่ากลับเป็น simulate)
 NO7_FEED_MODE=replay .venv/bin/python -m uvicorn services.api_gateway.app:app --port 8000
 ```
@@ -80,6 +89,9 @@ NO7_FEED_MODE=replay .venv/bin/python -m uvicorn services.api_gateway.app:app --
 | ล็อกอินแล้วเด้งกลับ /login | token หมดอายุ (`NO7_JWT_TTL_MINUTES`) หรือ `NO7_JWT_SECRET` เปลี่ยนตอนรีสตาร์ต → ล็อกอินใหม่ |
 | Dashboard ว่าง/ไม่อัปเดต | WebSocket ถูก proxy บล็อก → ระบบจะ fallback polling ทุก 5s เอง; ตรวจ `/api/trading/live` |
 | ป้าย feed ขึ้น "SIMULATED FEED" ทั้งที่ตั้ง replay | replay เริ่มไม่ครบ (ขาดไฟล์/ข้อมูลน้อยกว่า warm-up) → ดู `feed_note` ใน `/api/system/health` |
+| ป้าย `snapshot` หายไปจากหน้า backtest | รายงานเก่าก่อนมี snapshot (ไม่มี `dataset` ใน payload) — รันใหม่หนึ่งครั้งเพื่อให้มี provenance |
+| `400 bars=… is too few` | engine ต้องการ ≥1700 แท่ง M1 เพื่อ warm up 320 แท่ง M5 — เพิ่ม `bars` หรือใช้ `snapshot_id` |
+| `snapshot … is corrupted` | ไฟล์ใน `storage/datasets/snapshots/` ถูกแก้/แทน — ลบ manifest+ไฟล์คู่นั้นแล้วรันใหม่ (อย่าแก้ให้ตรง) |
 | `services.feed = "exhausted"` | ข้อมูล replay เดินจนจบไฟล์แล้ว (clock หยุด, ไม่มีออเดอร์ใหม่) → นำเข้าไฟล์ที่ยาวขึ้นหรือเปิด `replay.loop` |
 | โมเดลขึ้น "approval expired" | approval ถูกให้ด้วยกฎเวอร์ชันเก่า → กดเทรนใหม่ (`POST /api/forecast/train`) เพื่อประเมินด้วยกฎปัจจุบัน |
 | `401` ทุก endpoint | ไม่ได้ส่ง `Authorization: Bearer` หรือ `security.require_auth` เปิดอยู่แต่ไม่มี token |

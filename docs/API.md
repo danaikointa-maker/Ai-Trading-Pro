@@ -95,7 +95,8 @@ Base: `http://127.0.0.1:8000` · interactive docs: `/api/docs` · OpenAPI: `/api
 | POST | `/api/brokers/{id}/activate` | สลับโบรกเกอร์ |
 | GET | `/api/brokers/{id}/symbols` | spec จริงต่อบัญชี (`source: broker|declared`) |
 | GET | `/api/brokers/{id}/account` \| `/health` | account info / health probe |
-| POST | `/api/backtests` | `{symbol,bars,spread_points?,commission_per_lot?,slippage_points,starting_balance,validate_walk_forward}` → `{job_id}` |
+| POST | `/api/backtests` | `{symbol,bars,spread_points?,commission_per_lot?,slippage_points,starting_balance,validate_walk_forward,snapshot_id?}` → `{job_id}` · `bars` ต้อง ≥ 1700 (ไม่งั้น 400 พร้อมบอกขั้นต่ำ) · ใส่ `snapshot_id` เพื่อรันซ้ำบนแท่งเทียนชุดเดิม (ตรวจ sha256 ก่อน, ผิด→400) |
+| GET | `/api/datasets` \| `POST /api/datasets` \| `GET /api/datasets/{id}` | snapshot ของแท่งเทียน: list / freeze ข้อมูลปัจจุบัน / manifest + ตรวจ hash |
 | GET | `/api/backtests/jobs/{job_id}` | `{state,pct,message,report_id,metrics}` |
 | GET | `/api/backtests` \| `/api/backtests/{id}` | รายงาน + metrics/verdict/walk_forward/assumptions |
 
@@ -170,6 +171,22 @@ training, reconcile, alerts, errors, ticker, mode, feed, virtual_time`
 | `scenarios[]` | `bull/base/bear` — `path[].p50` จบที่ `target_price` ของตัวเอง, `path[].p10 ≤ p50 ≤ p90` |
 | `volatility_points` | ATR × √(horizon/5) ÷ point |
 | `coverage_note` | ข้อจำกัดของแบบจำลอง horizon นั้น (อ่านก่อนเชื่อ) |
+
+## `dataset` ของ backtest (provenance)
+
+```json
+{
+  "id": "DS-1A2B3C4D5E", "symbol": "XAUUSD", "timeframe": "M1",
+  "rows": 6000, "first_t": 1793000000, "last_t": 1793360000,
+  "sha256": "…", "source": "simulated GBM feed (seed 7)",
+  "path": "storage/datasets/snapshots/DS-….csv.gz", "bytes": 812345,
+  "feed_mode": "simulate", "reproducible": true,
+  "reproduce_with": {"snapshot_id": "DS-1A2B3C4D5E"}
+}
+```
+
+`assumptions` มีบรรทัด `Bar data: …` ที่ตรงกับแหล่งข้อมูลจริง (simulated / replay / MT5)
+— ไม่ใช่ข้อความตายตัวว่า "simulated" อีกต่อไป
 
 ## `metrics` ของ backtest
 

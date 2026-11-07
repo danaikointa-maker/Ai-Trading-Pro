@@ -42,6 +42,12 @@ from packages.shared_schemas.models import (
 from packages.shared_schemas.settings import Settings
 from services.ai_forecast.pathprob import PathProbabilityTable
 from services.backtest_engine.metrics import compute_metrics, verdict
+
+# A decision needs warmed-up indicators on M5 *and* enough history to score folds:
+# below this the engine cannot produce an honest number, only a traceback.
+WARMUP_M5_BARS = 320
+MIN_BARS = 1200
+MIN_M1_BARS = int((WARMUP_M5_BARS + 20) * 5)
 from services.market_data.simulator import resample
 from services.risk_engine.engine import RiskEngine
 from services.risk_engine.planner import TradePlanner
@@ -112,20 +118,30 @@ class Backtester:
 
     # ------------------------------------------------------------------- run
     def run(self, m1: pd.DataFrame, spec: SymbolSpec, request: BacktestRequest,
-            broker_id: str = "connext-demo") -> BacktestReport:
+            broker_id: str = "connext-demo",
+            data_note: str = "",
+            dataset: dict[str, Any] | None = None) -> BacktestReport:
         started = time.time()
         spread_points = float(request.spread_points if request.spread_points is not None
                               else spec.spread_typical_points)
         commission = float(request.commission_per_lot if request.commission_per_lot is not None
                            else spec.commission_per_lot_round_turn)
-        m1 = m1.tail(max(1200, min(20000, request.bars))).reset_index(drop=True)
+        m1 = m1.tail(max(MIN_BARS, min(20000, request.bars))).reset_index(drop=True)
         m5 = enrich(resample(m1, "M5"))
+        if len(m5) <= WARMUP_M5_BARS + 10:
+            # Without this the failure was "single positional indexer is out-of-bounds",
+            # which tells the operator nothing about what to change.
+            needed = int((WARMUP_M5_BARS + 20) * 5)
+            raise ValueError(
+                f"not enough bars: {len(m1)} M1 bars give only {len(m5)} M5 bars, and the "
+                f"engine needs more than {WARMUP_M5_BARS + 10} to warm up. "
+                f"Ask for at least {needed} M1 bars.")
         m15 = enrich(resample(m1, "M15"))
         h1 = enrich(resample(m1, "H1"))
         h4 = enrich(resample(m1, "H4"))
         m1e = enrich(m1)
         n = len(m5)
-        warmup = 320
+        warmup = WARMUP_M5_BARS
         horizon_bars = [1, 3, 6, 12, 48]
         train_cut = int(n * 0.6)
         table = None
@@ -350,10 +366,11 @@ class Backtester:
                 "out-of-sample, so it is mildly in-sample for early folds.",
                 f"Decisions every {self.decision_stride * 5} minutes of market time; "
                 f"{len(trades)} trades from {decisions} decision points.",
-                "Simulated feed data — replace with MT5 tick history before trusting any number here.",
+                data_note or "Bar data: source not recorded — treat these numbers as unverified.",
                 *gap_notes,
             ],
             verdict=verdict(metrics),
+            dataset=dataset or {},
         )
         del started
         return report

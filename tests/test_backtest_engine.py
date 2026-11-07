@@ -77,9 +77,19 @@ def test_report_states_its_assumptions_honestly(report):
     text = " ".join(report.assumptions)
     assert "Swap basis" in text
     assert "rule proxy" in text and "NOT used" in text
-    assert "Simulated feed data" in text
+    # Without a stated data source the report must say so, not assume "simulated".
+    assert "Bar data:" in text and "unverified" in text
     assert "stop is assumed first" in text
     assert "commission" in text
+
+
+def test_the_bar_data_note_is_whatever_the_caller_recorded(engine):
+    backtester, candles, spec = engine
+    note = "Bar data: imported candles replayed from the dataset directory — real bars, no ticks."
+    report = backtester.run(candles, spec, BacktestRequest(symbol="XAUUSD", bars=BARS),
+                            data_note=note)
+    assert note in report.assumptions
+    assert not any("Simulated feed data" in line for line in report.assumptions)
 
 
 # ----------------------------------------------------------------- behaviour

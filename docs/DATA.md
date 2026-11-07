@@ -112,3 +112,25 @@ market_data:
 
 ชุดทดสอบนี้ล็อกพฤติกรรมที่เคยพลาด: pandas 3 อ่านเลข epoch เป็นนาโนวินาที (ทำให้ทุกแท่งยุบเหลือแท่งเดียว),
 naive timestamp ที่ถูกตีความเป็น UTC (เลื่อนทั้งชุด), แท่งซ้ำ, และ OHLC ที่ขัดกันเอง
+
+## Snapshot: แท่งเทียนที่ backtest ใช้ (reproducible)
+
+ทุกครั้งที่รัน backtest ระบบจะเขียนแท่งเทียนที่ใช้ลง snapshot และเก็บ id + sha256 ไว้ใน report
+
+- ที่เก็บ: `storage/datasets/snapshots/DS-<hash>.csv.gz` + `.json` (manifest)
+- **id มาจากเนื้อข้อมูล** (`sha256` ของแท่งเทียน) → ข้อมูลเดิมได้ id เดิม เสมอ, บันทึกซ้ำไม่เปลืองที่
+- รันซ้ำบนข้อมูลชุดเดิม: `POST /api/backtests {"symbol":"XAUUSD","snapshot_id":"DS-XXXXXXXXXX"}`
+  → โหลดแท่งเทียนจากไฟล์, **ตรวจ sha256 ก่อนคำนวณ**, แล้วรายงานผลพร้อม `dataset.sha256` เดิม
+- ถ้าไฟล์ถูกแก้/แทนที่ → ระบบ **ปฏิเสธ** (`400`, "corrupted … refusing to backtest on changed data")
+  เพราะ "รันซ้ำ" บนข้อมูลอื่นไม่ใช่การรันซ้ำ
+
+API:
+
+| endpoint | ทำอะไร |
+|---|---|
+| `GET /api/datasets?limit=` | snapshot ล่าสุด (newest first) |
+| `POST /api/datasets {symbol,timeframe,bars}` | freeze ข้อมูลที่ feed ให้อยู่ตอนนี้ |
+| `GET /api/datasets/{id}` | manifest + ตรวจ hash (`verified:true`) + 3 แท่งตัวอย่าง |
+
+ข้อจำกัด: snapshot เก็บ M1 bars เท่านั้น — ไม่มี tick และไม่มี intra-bar path
+(การเรียง stop/target ภายในแท่งยังเป็นการประมาณแบบ conservative)
