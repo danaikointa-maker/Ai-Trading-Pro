@@ -1034,12 +1034,36 @@ class TradingRuntime:
             "services": services,
             "notify": self.notifier.status(),
             "security": self._security_status(),
+            "ratelimit": self._ratelimit_status(),
             "cluster": {**self.shared_status, "role": role,
                         "shared_health": self.shared.healthy()},
             "runtime_lease": {**self.lease,
                               "heartbeat_age_seconds": round(time.time() - float(self.lease.get("heartbeat") or 0), 1)
                               if self.lease.get("heartbeat") else None},
         }
+
+    def _ratelimit_status(self) -> dict[str, Any]:
+        """Which budget applies, and whether it is shared by other processes.
+
+        A memory store under `uvicorn --workers N` hands out N budgets — the limit the
+        operator configured is then an illusion. Saying so here is the difference
+        between a limiter and a decoration.
+        """
+        base = dict(getattr(self, "ratelimit_status", {}) or {})
+        backend = str(base.get("backend", "memory"))
+        out = {
+            "store": backend,
+            "requested": base.get("requested", backend),
+            "shared": bool(base.get("shared", backend in ("sqlite", "redis"))),
+            "reason": base.get("reason", ""),
+        }
+        if base.get("path") and backend == "sqlite":
+            out["path"] = base["path"]
+        if not out["shared"]:
+            out["warning"] = ("store=memory: every worker process keeps its own budget, "
+                              "so --workers N multiplies the configured limit. Use "
+                              "store: sqlite (one host) or store: redis (several hosts).")
+        return out
 
     def _security_status(self) -> dict[str, Any]:
         """How the perimeter is configured right now — visible, not implied.
