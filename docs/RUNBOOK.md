@@ -45,7 +45,8 @@ cd apps/web-dashboard && npm run build
 # dev server (proxy /api และ /ws ไป backend)
 cd apps/web-dashboard && NO7_BACKEND=http://127.0.0.1:8000 npm run dev   # :5173
 
-# tests
+# tests (fakeredis/ruff/pyarrow อยู่ใน requirements-dev.txt; ไม่ลงก็แค่ skip)
+python3 -m pip install -r requirements-dev.txt
 python3 -m pytest tests/ -q
 
 # ดู report ย้อนหลังใน DB
@@ -339,6 +340,42 @@ curl -s -X POST localhost:8000/api/brokers/mt5-bridge-demo/activate \
   ต้องย้ายตาราง `bridge_*` ตามไปด้วย (ที่เหลือของแอปย้ายตามอยู่แล้ว)
 - คำสั่งที่ EA ไม่ ack จะหมดอายุ (`command_ttl_seconds` 30s / `ack_grace_seconds` 20s) และ **ไม่ส่งซ้ำ**
 - ต้องเปิด Algo Trading ในเทอร์มินัล ไม่งั้น EA ไม่ execute (ฝั่งเซิร์ฟเวอร์จะเห็นแค่ `expired`)
+
+## 12.5 Rate limit ที่ใช้ร่วมกันหลาย worker / หลายเครื่อง
+
+ค่าเริ่มต้น `ratelimit.store: memory` = bucket อยู่ในโปรเซสเดียวなので
+**`--workers N` จะได้โควตาคูณ N** (limit 6/นาที → เห็นจริง 7 ในการทดสอบ 2 worker)
+ถ้าจะรันหลาย worker/หลายเครื่อง ให้เลือก store ที่แชร์:
+
+```bash
+# หลาย worker บนเครื่องเดียว — bucket อยู่ในไฟล์ SQLite เล็ก ๆ
+NO7_RATELIMIT_STORE=sqlite scripts/run.sh
+#   ไฟล์: storage/db/ratelimit.sqlite3 (override: ratelimit.store_path)
+
+# หลายเครื่อง — Redis เป็นเจ้าของตัวนับ (ต้อง pip install redis)
+export NO7_RATELIMIT_STORE=redis
+export NO7_REDIS_URL=redis://10.0.0.5:6379/0
+export NO7_RATELIMIT_PREFIX=no7:ratelimit      # namespace ของ deployment นี้
+scripts/run.sh
+#   NO7_REDIS_URL ตัวเดียวกันนี้ยังใช้กับ cluster.backend=redis ได้ด้วย
+```
+
+ตรวจว่าที่รันอยู่ได้ผลจริง:
+
+```bash
+curl -s localhost:8000/api/system/health | jq .ratelimit
+#  {"store":"sqlite","requested":"sqlite","shared":true,"path":"…/ratelimit.sqlite3"}
+#  {"store":"memory","shared":false,"warning":"… --workers N multiplies the configured limit"}
+```
+
+**กติกาความล้มเหลว**: Redis ต่อไม่ได้ตอนบูต → ถอยไป `sqlite` (หรือ `memory` ถ้าไม่มี path)
+และบอกเหตุผลใน `reason` ไม่ใช่เงียบ ๆ; ถ้า Redis ล่ม **ระหว่างใช้งาน** คำขอยังผ่านได้ แต่ถูกจำกัด
+ด้วย bucket ในโปรเซสแทน, ตัวนับ `degraded` เพิ่มขึ้น และ response มี header
+`x-ratelimit-degraded: redis` — เลือกทางนี้เพราะการทำให้หน้าเทรดล่มทั้งระบบ
+เพราะ cache กระพริบนั้นอันตรายกว่าการจำกัดชั่วคราวในเครื่องเดียว
+
+ทดสอบฝั่งเทสต์: `tests/test_ratelimit_shared.py` รันสัญญาเดียวกันบน memory/sqlite/redis
+(fakeredis รัน Lua ตัวจริง) และมีเคส 4 โปรเซสแยกกันแย่ง bucket 40 → ปล่อยผ่านได้ 40 พอดี
 
 ## 13. ความปลอดภัย — TLS, reverse proxy และ perimeter
 

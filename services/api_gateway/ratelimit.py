@@ -8,6 +8,19 @@ model training) until the box stops answering.
 Identity is the authenticated user when a valid bearer token is present, else the
 client IP, so one noisy user cannot spend another user's budget. Limits are token
 buckets: a burst is allowed, sustained abuse is not.
+
+Where the buckets live decides who shares a budget (``build_store``):
+
+* ``memory`` — this process. One worker only; N workers means N times the limit.
+* ``sqlite`` — a small file, so every worker *on this host* shares one budget.
+* ``redis`` — every worker and every host shares one budget.
+
+A backend that cannot be used is never silently swapped: the store we ended up with,
+what was requested, and why they differ are all reported in
+``/api/system/health → ratelimit``. If Redis dies *while running*, each affected
+request still gets limited against the in-process bucket, the counter ``degraded``
+goes up, and the response carries ``x-ratelimit-degraded`` — the request is served,
+but not as if nothing happened.
 """
 from __future__ import annotations
 
@@ -61,6 +74,7 @@ class MemoryBucketStore:
     """
 
     wall_clock = False
+    name = "memory"
 
     def __init__(self, max_keys: int = 4096) -> None:
         self.max_keys = max_keys
@@ -105,6 +119,7 @@ class SqliteBucketStore:
     """
 
     wall_clock = True
+    name = "sqlite"
     PRUNE_EVERY = 512
     PRUNE_AGE = 6 * 3600
 
@@ -165,8 +180,98 @@ class SqliteBucketStore:
             self._conn.close()
 
 
+class RedisBucketStore:
+    """Token buckets in Redis, shared by every worker and every host.
+
+    The refill-and-spend is one Lua script so two workers cannot both read the same
+    token: Redis runs it atomically, which is the only reason this can replace a
+    transaction. The key expires after one window, so idle identities disappear
+    without a sweeper.
+
+    The timestamp comes from the caller (the app's clock), not from Redis: every node
+    then agrees with the same authority, at the price of needing NTP. Clock skew shows
+    up as an inaccurate refill, never as a lost or duplicated token.
+    """
+
+    wall_clock = True
+    name = "redis"
+
+    # KEYS[1] bucket key; ARGV = limit, rate (tokens/sec), now (epoch seconds), ttl ms.
+    # Returns {allowed(0|1), tokens-as-string}: Lua truncates floats, so the balance
+    # travels as a string.
+    SCRIPT = """
+local key = KEYS[1]
+local limit = tonumber(ARGV[1])
+local rate = tonumber(ARGV[2])
+local now = tonumber(ARGV[3])
+local ttl = tonumber(ARGV[4])
+local data = redis.call('HMGET', key, 'tokens', 'updated')
+local tokens = tonumber(data[1])
+local updated = tonumber(data[2])
+if tokens == nil then
+  tokens = limit
+  updated = now
+end
+local elapsed = now - updated
+if elapsed > 0 then
+  tokens = math.min(limit, tokens + elapsed * rate)
+end
+local allowed = 0
+if tokens >= 1 then
+  tokens = tokens - 1
+  allowed = 1
+end
+redis.call('HSET', key, 'tokens', tostring(tokens), 'updated', tostring(now))
+redis.call('PEXPIRE', key, ttl)
+return {allowed, tostring(tokens)}
+"""
+
+    def __init__(self, client: Any, prefix: str = "no7:ratelimit") -> None:
+        self.client = client
+        self.prefix = prefix.rstrip(":")
+        self._script = getattr(client, "register_script", None)
+        self.script = self._script(self.SCRIPT) if callable(self._script) else None
+
+    def _key(self, key: tuple[str, str]) -> str:
+        return f"{self.prefix}:{key[0]}:{key[1]}"
+
+    def _run(self, script_args: list) -> list:
+        if self.script is not None:
+            return self.script(keys=[script_args[0]], args=script_args[1:])
+        return self.client.eval(self.SCRIPT, 1, *script_args)
+
+    def spend(self, key: tuple[str, str], limit: float, rate: float,
+              now: float) -> tuple[bool, float]:
+        ttl_ms = max(1000, int((limit / rate if rate > 0 else 60) * 1000))
+        out = self._run([self._key(key), limit, rate, now, ttl_ms])
+        allowed = int(out[0]) == 1
+        tokens = float(out[1])
+        return allowed, tokens
+
+    def reset(self) -> None:
+        # Only drop our own keys: the prefix is per-deployment, not the whole database.
+        pattern = f"{self.prefix}:*"
+        scan = getattr(self.client, "scan_iter", None)
+        if callable(scan):
+            batch = [k for k in scan(match=pattern)]
+            if batch:
+                self.client.delete(*batch)
+            return
+        self.client.flushdb()
+
+    @property
+    def tracked(self) -> int:
+        scan = getattr(self.client, "scan_iter", None)
+        if not callable(scan):
+            return -1
+        return sum(1 for _ in scan(match=f"{self.prefix}:*"))
+
+
+Store = MemoryBucketStore | SqliteBucketStore | RedisBucketStore
+
+
 def make_store(kind: str | None, path: str | Path | None = None,
-               max_keys: int = 4096) -> MemoryBucketStore | SqliteBucketStore:
+               max_keys: int = 4096) -> Store:
     """Build the store named in config. Unknown kinds fail loudly, not silently."""
     name = (kind or "memory").strip().lower()
     if name in ("memory", "in-process", "inprocess", "local"):
@@ -175,7 +280,81 @@ def make_store(kind: str | None, path: str | Path | None = None,
         if not path:
             raise ValueError("ratelimit store 'sqlite' needs a path")
         return SqliteBucketStore(path)
-    raise ValueError(f"unknown ratelimit store {kind!r} — use 'memory' or 'sqlite'")
+    if name == "redis":
+        raise ValueError("ratelimit store 'redis' needs a URL — use build_store()")
+    raise ValueError(f"unknown ratelimit store {kind!r} — use 'memory', 'sqlite' or 'redis'")
+
+
+def build_store(cfg: dict[str, Any] | None = None, *, path: str | Path | None = None,
+                client_factory: Callable[[], Any] | None = None,
+                env: dict[str, str] | None = None,
+                max_keys: int = 4096) -> tuple[Store, dict[str, Any]]:
+    """Pick the store and say what actually happened.
+
+    ``cfg`` is the ``ratelimit`` block. Returns ``(store, status)`` where status always
+    carries ``backend`` (what we got), ``requested`` (what config asked for), ``shared``
+    (does another process see the same budget?) and ``reason`` when the two differ.
+    """
+    import os as _os
+
+    env = _os.environ if env is None else env
+    cfg = dict(cfg or {})
+    requested = str(cfg.get("store", "memory") or "memory").strip().lower()
+    status: dict[str, Any] = {"requested": requested, "backend": "memory", "shared": False,
+                              "reason": "", "path": str(path) if path else "", "url": ""}
+
+    if requested in ("memory", "in-process", "inprocess", "local"):
+        return MemoryBucketStore(max_keys=max_keys), status
+
+    if requested == "sqlite":
+        if not path:
+            status["reason"] = "ratelimit.store=sqlite but no store_path — using memory"
+            return MemoryBucketStore(max_keys=max_keys), status
+        status.update(backend="sqlite", shared=True)
+        return SqliteBucketStore(path), status
+
+    if requested != "redis":
+        raise ValueError(f"unknown ratelimit store {requested!r} — "
+                         f"use 'memory', 'sqlite' or 'redis'")
+
+    url = str(cfg.get("redis_url") or env.get("NO7_REDIS_URL", "") or "").strip()
+    status["url"] = url.replace("//", "//***@") if "@" in url else url
+    if not url:
+        status["reason"] = ("ratelimit.store=redis but no redis_url / NO7_REDIS_URL — "
+                            f"falling back to the {'sqlite' if path else 'memory'} store")
+        if path:
+            status.update(backend="sqlite", shared=True)
+            return SqliteBucketStore(path), status
+        status["reason"] += ", so limits are per process again"
+        return MemoryBucketStore(max_keys=max_keys), status
+
+    if client_factory is None:
+        try:
+            import redis  # type: ignore[import-not-found]
+        except ImportError:
+            status["reason"] = ("redis requested but the `redis` package is not installed "
+                                f"(pip install redis) — falling back to the "
+                                f"{'sqlite' if path else 'memory'} store")
+            if path:
+                status.update(backend="sqlite", shared=True)
+                return SqliteBucketStore(path), status
+            return MemoryBucketStore(max_keys=max_keys), status
+        client_factory = lambda: redis.Redis.from_url(  # noqa: E731
+            url, socket_timeout=2, socket_connect_timeout=2, decode_responses=True)
+
+    try:
+        client = client_factory()
+        client.ping()
+    except Exception as exc:  # noqa: BLE001 - a dead cache must not stop boot
+        status["reason"] = (f"redis unreachable ({type(exc).__name__}: {exc}) — "
+                            f"falling back to the {'sqlite' if path else 'memory'} store")
+        if path:
+            status.update(backend="sqlite", shared=True)
+            return SqliteBucketStore(path), status
+        return MemoryBucketStore(max_keys=max_keys), status
+
+    status.update(backend="redis", shared=True)
+    return RedisBucketStore(client, prefix=str(cfg.get("key_prefix", "no7:ratelimit"))), status
 
 
 class RateLimiter:
@@ -186,6 +365,13 @@ class RateLimiter:
                  store: MemoryBucketStore | SqliteBucketStore | None = None) -> None:
         self.rules: dict[str, dict[str, Any]] = {**DEFAULT_RULES, **(rules or {})}
         self.store = store if store is not None else MemoryBucketStore(max_keys=max_keys)
+        # A shared store can fail mid-flight. Requests keep being served (a trading
+        # dashboard that 500s because a cache blipped is worse), but they are limited
+        # against this process instead, and both the counter and the response header
+        # say so. Silence would turn a degraded limiter into no limiter at all.
+        self._fallback = MemoryBucketStore(max_keys=max_keys)
+        self.degraded = 0
+        self.last_error = ""
         # A shared store is read by other processes, so it must key on a clock they
         # all agree about; only the in-process store can use the cheap monotonic one.
         self.clock = clock or (time.time if getattr(self.store, "wall_clock", False)
@@ -212,7 +398,13 @@ class RateLimiter:
         """Spend one token. Returns (allowed, remaining, retry_after_seconds)."""
         limit, window = self.limit_of(rule)
         rate = limit / window
-        allowed, tokens = self.store.spend((rule, identity), limit, rate, self.clock())
+        now = self.clock()
+        try:
+            allowed, tokens = self.store.spend((rule, identity), limit, rate, now)
+        except Exception as exc:  # noqa: BLE001 - see __init__ for why this is not fatal
+            self.degraded += 1
+            self.last_error = f"{type(exc).__name__}: {exc}"
+            allowed, tokens = self._fallback.spend((rule, identity), limit, rate, now)
         if allowed:
             return True, int(tokens), 0.0
         # Never report 0 seconds: the caller would retry tighter than the refill.
@@ -225,7 +417,16 @@ class RateLimiter:
 
     @property
     def tracked(self) -> int:
-        return self.store.tracked
+        try:
+            return self.store.tracked
+        except Exception:  # noqa: BLE001 - health must never raise
+            return -1
+
+    def status(self) -> dict[str, Any]:
+        """What the limiter is doing right now, including how often it had to improvise."""
+        return {"store": getattr(self.store, "name", type(self.store).__name__),
+                "degraded": self.degraded, "last_error": self.last_error,
+                "tracked": self.tracked}
 
 
 class RateLimitMiddleware:
@@ -258,7 +459,9 @@ class RateLimitMiddleware:
 
         identity = self._identity(scope)
         rule = self.limiter.rule_for(path, method)
+        before = self.limiter.degraded
         allowed, remaining, retry_after = self.limiter.check(identity, rule)
+        degraded = self.limiter.degraded > before
         if not allowed:
             seconds = max(1, int(retry_after + 0.999))
             body = (f'{{"detail":"rate limit exceeded for {rule}; retry in {seconds}s",'
@@ -280,6 +483,10 @@ class RateLimitMiddleware:
             if message["type"] == "http.response.start":
                 headers = list(message.get("headers") or [])
                 headers.append((b"x-ratelimit-remaining", str(remaining).encode()))
+                if degraded:
+                    # The limit that applied was a local one, not the shared one.
+                    headers.append((b"x-ratelimit-degraded",
+                                    str(getattr(self.limiter.store, "name", "store")).encode()))
                 message = {**message, "headers": headers}
             await send(message)
 

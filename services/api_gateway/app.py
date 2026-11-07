@@ -19,8 +19,7 @@ from fastapi.staticfiles import StaticFiles
 
 from packages.shared_schemas.settings import get_settings
 from services.api_gateway.auth import ensure_demo_user
-from services.api_gateway.ratelimit import (RateLimiter, RateLimitMiddleware,
-                                            make_store)
+from services.api_gateway.ratelimit import RateLimiter, RateLimitMiddleware, build_store
 from services.api_gateway.netutil import parse_networks
 from services.api_gateway.security import (SecurityHeadersMiddleware,
                                            parse_origins)
@@ -78,10 +77,13 @@ def create_app(runtime: TradingRuntime | None = None) -> FastAPI:
         if not store_path.is_absolute():
             store_path = settings.root / store_path
     elif rl_cfg.get("store"):
+        # Any shared backend needs a file to fall back to, so derive one by default.
         store_path = settings.paths["database"].parent / "ratelimit.sqlite3"
-    limiter = RateLimiter(rl_cfg.get("rules"),
-                          store=make_store(rl_cfg.get("store"), store_path) if rl_cfg.get("store")
-                          else None)
+    store, store_status = build_store(rl_cfg, path=store_path)
+    limiter = RateLimiter(rl_cfg.get("rules"), store=store)
+    # The health endpoint lives on the runtime; hand it what the limiter ended up with
+    # so the answer comes from the same object that enforces the limit.
+    runtime.ratelimit_status = store_status
     app.state.ratelimit = limiter
     trusted = parse_networks(settings.trusted_proxies)
     app.add_middleware(RateLimitMiddleware, limiter=limiter, settings=settings,

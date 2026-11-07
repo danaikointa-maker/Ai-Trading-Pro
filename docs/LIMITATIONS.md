@@ -59,10 +59,17 @@
 - Telegram/LINE/Web Push ยังไม่ต่อ (มี in-app alert แล้ว)
 - Mobile PWA ยังว่าง
 - มี rate limiting ในตัวแล้ว (token bucket ต่อผู้ใช้/IP: order 10/นาที, explain 20/นาที,
-  backtest 6/นาที, train 2/ชั่วโมง, อื่น ๆ 300/นาที) ค่าเริ่มต้นเก็บในโปรเซสเดียว
-  (`ratelimit.store: memory`) → หลาย worker แต่ละตัวจะได้โควตาเต็มของตัวเอง
-  ตั้ง `store: sqlite` เพื่อให้ worker บนเครื่องเดียวกันใช้ร่วมกันได้ (write ต่อคำขอที่ถูกจำกัด)
-  แต่ **หลายเครื่องยังต้องใช้ Redis หรือ reverse proxy** ซึ่งยังไม่ได้ทำ
+  backtest 6/นาที, train 2/ชั่วโมง, อื่น ๆ 300/นาที) — **รอบ 19** เพิ่ม store ที่แชร์ได้:
+  `memory` (ต่อโปรเซส, ค่าเริ่มต้น) / `sqlite` (worker บนเครื่องเดียว, write ต่อคำขอที่ถูกจำกัด) /
+  `redis` (ข้ามเครื่อง, Lua atomic, key มี TTL)
+  - วัดจริง: 2 worker + memory → limit 6/นาที ปล่อยผ่าน **7**; 2 worker + sqlite → **6 เท่าพอดี**
+  - Redis: **ยังไม่ได้ทดสอบกับ redis-server จริง** ในเครื่องนี้ (ไม่มี binary) — ทดสอบผ่าน
+    fakeredis ที่รัน Lua เดียวกัน; เมื่อมี `NO7_REDIS_URL` จริง เทสต์ชุดเดียวกันจะยิงของจริง
+  - ถ้า Redis ล่มกลางทาง ระบบ **จำกัดด้วย bucket ในโปรเซสต่อไป** + `degraded++` +
+    header `x-ratelimit-degraded` (เลือกทางนี้แทนการปล่อยผ่านโล่ง ๆ หรือทำให้ระบบล่ม)
+  - ตัวนับใช้เวลาของแอป (ไม่ใช่ Redis TIME) → ต้องมี NTP; clock skew ทำให้ refill คลาดเคลื่อน
+    ไม่ทำให้ token หายหรือเพิ่ม
+  - ยังไม่มี quota ต่อ IP แบบ distributed สำหรับ WebSocket (จำกัดเฉพาะ HTTP) และไม่มี WAF
 - ตัว runtime เอง (simulator, scheduler, websocket hub) ออกแบบสำหรับ **โปรเซสเดียว**
   ดังนั้น `--workers N` ยังไม่ใช่โหมดที่รองรับ: store แบบ sqlite เป็นการวางพื้นฐานให้โควตาร่วม
   ไม่ใช่การประกาศว่า multi-worker พร้อมใช้

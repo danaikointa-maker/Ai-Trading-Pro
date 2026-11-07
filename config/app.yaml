@@ -158,11 +158,17 @@ ws:
 # about capacity, not credentials. `default` covers GETs and everything unlisted.
 ratelimit:
   enabled: true
-  # memory = buckets live in this process (default, one uvicorn worker).
-  # sqlite = buckets live in a small SQLite file, so several workers on this host
-  #          share one budget. Costs a write per limited request; the file defaults
-  #          to storage/db/ratelimit.sqlite3 (override with store_path).
-  store: memory
+  # Who shares a budget:
+  # memory = this process only. One worker; with --workers N each gets its own budget.
+  # sqlite = a small SQLite file, so every worker on this host shares one budget.
+  #          Costs a write per limited request; file defaults to
+  #          storage/db/ratelimit.sqlite3 (override with store_path).
+  # redis  = every worker and every host shares one budget (needs `pip install redis`
+  #          and redis_url / NO7_REDIS_URL). Falls back to sqlite (or memory, and says
+  #          why) if Redis is unreachable — reported in /api/system/health → ratelimit.
+  store: ${NO7_RATELIMIT_STORE:memory}
+  redis_url: ${NO7_REDIS_URL:}
+  key_prefix: ${NO7_RATELIMIT_PREFIX:no7:ratelimit}
   rules:
     order: {limit: 10, window_seconds: 60}
     explain: {limit: 20, window_seconds: 60}

@@ -39,6 +39,10 @@ service worker **ไม่แคช** `/api/*` และ `/ws` (ราคา/ค
 
 ## Rate limits
 
+ตัวนับ rate limit อยู่ที่ `ratelimit.store` — `memory` (ต่อโปรเซส), `sqlite` (ต่อเครื่อง),
+`redis` (ข้ามเครื่อง) และทุก response ที่ถูกจำกัดจะแนบ `x-ratelimit-remaining`;
+ถ้า Redis ล่มกลางทางจะแนบ `x-ratelimit-degraded: redis` มาด้วย (จำกัดด้วย bucket ในเครื่องแทน)
+
 CORS เป็น **allowlist**: ค่าเริ่มต้นไม่ให้ origin อื่นเลย (dashboard เสิร์ฟจาก origin เดียวกัน
 และ Vite dev proxy `/api` ให้อยู่แล้ว) — เปิดเฉพาะที่ตั้งใจด้วย
 `NO7_CORS_ORIGINS=https://dash.example.com`; `*` ใช้ได้แต่ `/api/system/health` จะรายงาน
@@ -104,6 +108,7 @@ CORS เป็น **allowlist**: ค่าเริ่มต้นไม่ใ�
 | GET | `/api/system/health` → `cluster` | `{role: leader\|replica\|blocked\|solo, backend, requested, reason, shared_health}` + `runtime_lease` |
 | GET | `/api/system/notify` | สถานะช่องทางแจ้งเตือน (`inapp`/`telegram`/`line`/`webhook`), error ล่าสุด, จำนวนครั้งที่พลาด (ไม่คืน token) |
 | POST | `/api/system/alerts/test` | ส่งข้อความทดสอบจริงผ่านทุกช่องทางที่เปิดใช้ → `{ok, deliveries:[{channel, ok, status, error}]}` · ถ้ายังไม่ตั้งค่า จะคืน `ok:false` + `reason` แทนการเงียบ |
+| GET | `/api/system/health` → `ratelimit` | `{store: memory\|sqlite\|redis, requested, shared, reason, path?, warning?}` — `shared:false` = โควตาคูณตามจำนวน worker |
 | GET | `/api/system/health` → `security` | `{require_auth, jwt_secret_from_env, cors:{origins, wildcard, cross_origin_allowed}, trusted_proxies, csp_mode, hsts_when_https}` — perimeter ที่ใช้งานจริง (ไม่มีความลับ) |
 
 ## Market & analysis
