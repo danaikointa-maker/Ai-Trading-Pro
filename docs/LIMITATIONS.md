@@ -123,8 +123,12 @@
   แต่การคอมไพล์/รันครั้งแรกต้องทำบนเครื่องคุณ
 - ไม่มี TLS/HTTPS ในตัว: token วิ่งแบบ plaintext ถ้าไม่ได้อยู่หลัง reverse proxy — ห้ามใช้ข้ามอินเทอร์เน็ต
   โดยไม่ใส่ HTTPS (หรือ VPN)
-- state ของ bridge อยู่ใน memory ของโปรเซสเดียว: รีสตาร์ทเซิร์ฟเวอร์ = session/คิวหาย (EA จะ register ใหม่ใน 1 รอบ)
-  และห้ามรันหลาย worker เมื่อใช้ bridge
+- state ของ bridge อยู่ในตาราง `bridge_*` ของฐานข้อมูล (แชร์ข้าม worker) แต่ **รีสตาร์ทเซิร์ฟเวอร์ = คิวที่ยังไม่ส่งหาย**
+  (session ยังอยู่แต่ heartbeat เก่า → EA register ใหม่ใน 1 รอบ) — ตั้งใจไม่กู้คิวเก่า
+- หลาย worker บน SQLite ไฟล์เดียวใช้ได้จริง (claim เป็น conditional UPDATE + WAL) แต่ยังไม่ได้ทดสอบกับ
+  Postgres/Redis: ถ้าย้ายที่เก็บต้องคง semantics "ส่งครั้งเดียว" ไว้ให้ได้
+- multi-worker startup: `uvicorn --workers 2` เคยพังเพราะสองโปรเซส insert demo user พร้อมกัน (แก้แล้วด้วย
+  `INSERT OR IGNORE` + migration ทน `duplicate column`) — ยังไม่มี distributed lock ตอน bootstrap
 - ไม่มี background sync: คำสั่งที่ค้างตอนเซิร์ฟเวอร์ปิดหายไป (ไม่มีการกู้คิว) — ตั้งใจ เพราะคำสั่งเทรดเก่าไม่ควรถูกส่งย้อนหลัง
 - EA จำกัดที่ symbol ที่ใส่ใน `InpSymbols`, M1 rates ที่ `InpRatesBars` และกรองเฉพาะโพซิชัน magic `70707`
   หรือคอมเมนต์ที่มี `no7` (โพซิชันของ EA ตัวอื่นจะไม่ถูกแตะ)

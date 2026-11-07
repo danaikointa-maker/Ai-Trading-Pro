@@ -69,7 +69,7 @@ class BridgeBroker(BrokerAdapter):
                                                                           Health.disconnected)
 
     def _snapshot(self) -> dict[str, Any]:
-        session = self.relay.sessions.get(self.account_id)
+        session = self.relay.get(self.account_id)
         if session is None:
             raise BrokerError(f"no EA session for {self.account_id!r}: start the bridge EA "
                               f"(it must call /api/bridge/register)")
@@ -111,15 +111,13 @@ class BridgeBroker(BrokerAdapter):
         )
 
     def symbol_names(self) -> list[str]:
-        session = self.relay.sessions.get(self.account_id)
-        if session is not None and session.symbols:
-            return list(session.symbols)
-        return list(self.declared)
+        reported = self.relay.symbols(self.account_id)
+        return reported or list(self.declared)
 
     def symbol_spec(self, symbol: str) -> SymbolSpec:
         """Contract specs come from the EA when it reports them, else from the profile."""
-        snapshot = self.relay.sessions.get(self.account_id)
-        reported = ((snapshot.snapshot.get("symbols") or {}) if snapshot else {}).get(symbol) or {}
+        snapshot = self.relay.snapshot(self.account_id)
+        reported = (snapshot.get("symbols") or {}).get(symbol) or {}
         declared = self.declared.get(symbol) or {}
         merged = {**declared, **{k: v for k, v in reported.items() if v is not None}}
         merged.setdefault("symbol", symbol)
@@ -270,8 +268,8 @@ class BridgeBroker(BrokerAdapter):
             "health": self.health().value, "live_allowed": self.live_allowed,
             "regulated_note": self.regulated_note, "symbols": self.symbol_names(),
             "bridge_account": self.account_id,
-            "bridge_session": (self.relay.sessions.get(self.account_id).session_id
-                               if self.account_id in self.relay.sessions else None),
+            "bridge_session": (session.session_id if (session := self.relay.get(self.account_id))
+                               else None),
             "last_command": self.last_command,
         }
         try:

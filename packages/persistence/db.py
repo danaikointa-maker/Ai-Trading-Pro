@@ -96,6 +96,24 @@ CREATE TABLE IF NOT EXISTS users (
 CREATE TABLE IF NOT EXISTS kv (
     key TEXT PRIMARY KEY, value TEXT, updated_at REAL
 );
+
+-- EA bridge state. This lives in the database (not in a process) because the EA's
+-- poll can land on any worker: a per-process queue would silently drop orders.
+CREATE TABLE IF NOT EXISTS bridge_sessions (
+    account_id TEXT PRIMARY KEY, session_id TEXT, generation INTEGER DEFAULT 0,
+    created_at REAL, last_seen REAL, terminal TEXT, symbols TEXT,
+    seq INTEGER DEFAULT 0, snapshot TEXT, snapshot_at REAL,
+    polls INTEGER DEFAULT 0, duplicates INTEGER DEFAULT 0,
+    unknown_results INTEGER DEFAULT 0, expiries INTEGER DEFAULT 0, last_error TEXT
+);
+
+CREATE TABLE IF NOT EXISTS bridge_commands (
+    id TEXT PRIMARY KEY, account_id TEXT NOT NULL, seq INTEGER, kind TEXT,
+    payload TEXT, created_at REAL, expires_at REAL, state TEXT,
+    delivered_at REAL, acked_at REAL, result TEXT
+);
+CREATE INDEX IF NOT EXISTS idx_bridge_commands
+    ON bridge_commands(account_id, state, seq);
 """
 
 
@@ -129,7 +147,12 @@ class Database:
                 continue
             for name, ddl in columns.items():
                 if name not in existing:
-                    self._conn.execute(f"ALTER TABLE {table} ADD COLUMN {name} {ddl}")
+                    try:
+                        self._conn.execute(f"ALTER TABLE {table} ADD COLUMN {name} {ddl}")
+                    except sqlite3.OperationalError as exc:
+                        # another worker added it between the PRAGMA and the ALTER
+                        if "duplicate column" not in str(exc).lower():
+                            raise
 
     # ------------------------------------------------------------------ core
     @contextmanager
