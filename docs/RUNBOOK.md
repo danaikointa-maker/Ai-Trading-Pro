@@ -178,7 +178,36 @@ runtime (tick, signal, order) ใช้ **lease** ในตาราง `kv` (`r
 
 heartbeat ทุก 5 วินาที, ถือว่า lease ตายเมื่อเงียบเกิน 30 วินาที → เปิดใหม่ได้ทันทีแม้โดน `kill -9`
 
-## 9. ความปลอดภัย
+## 9. ผู้ใช้และสิทธิ์
+
+บัญชี demo เป็น `admin` โดยอัตโนมัติ (`NO7_DEMO_ROLE` เปลี่ยนได้, ค่าเริ่มต้น `admin`)
+
+```bash
+TOK=$(curl -s -X POST -H 'Content-Type: application/json' \
+  -d '{"email":"demo@no7.ai","password":"no7demo1234"}' \
+  http://127.0.0.1:8000/api/auth/login | python3 -c 'import sys,json;print(json.load(sys.stdin)["token"])')
+
+# ดูผู้ใช้ทั้งหมด
+curl -s -H "Authorization: Bearer $TOK" http://127.0.0.1:8000/api/users | python3 -m json.tool
+
+# เพิ่ม viewer
+curl -s -X POST -H "Authorization: Bearer $TOK" -H 'Content-Type: application/json' \
+  -d '{"email":"somchai@example.com","password":"อย่างน้อย8ตัว","role":"viewer"}' \
+  http://127.0.0.1:8000/api/users
+
+# เปลี่ยน role / ปิดบัญชี (มีผลกับ token ที่ใช้งานอยู่ทันที)
+curl -s -X PATCH -H "Authorization: Bearer $TOK" -H 'Content-Type: application/json' \
+  -d '{"role":"trader"}' http://127.0.0.1:8000/api/users/somchai@example.com
+curl -s -X PATCH -H "Authorization: Bearer $TOK" -H 'Content-Type: application/json' \
+  -d '{"active":false}' http://127.0.0.1:8000/api/users/somchai@example.com
+```
+
+หรือทำผ่านหน้า **/system → ผู้ใช้และสิทธิ์** (เห็นเฉพาะ admin)
+
+> ถ้าติด lockout (ไม่มี admin ที่ใช้งานอยู่เลย) ให้แก้ที่ฐานข้อมูลโดยตรง:
+> `sqlite3 storage/db/no7.sqlite3 "UPDATE users SET role='admin', active=1 WHERE email='...';"`
+
+## 10. ความปลอดภัย
 
 - อย่าเปิดพอร์ต 8000 สู่อินเทอร์เน็ตโดยไม่มี reverse proxy + TLS + auth
 - `NO7_JWT_SECRET` ต้องไม่ซ้ำกับระบบอื่น และไม่เข้า git

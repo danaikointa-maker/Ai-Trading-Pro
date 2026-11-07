@@ -67,6 +67,10 @@ security:
   jwt_secret_env: NO7_JWT_SECRET
   demo_user: ${NO7_DEMO_USER:demo@no7.ai}
   demo_password: ${NO7_DEMO_PASSWORD:no7demo1234}
+  # Roles: admin > trader > viewer. The demo account is admin so a fresh install is
+  # usable; create a viewer/trader account before handing this to anyone else.
+  # Existing "owner" roles are mapped to admin on boot.
+  demo_role: ${NO7_DEMO_ROLE:admin}
   require_auth: true
   allow_full_auto: ${NO7_ALLOW_FULL_AUTO:false}
 

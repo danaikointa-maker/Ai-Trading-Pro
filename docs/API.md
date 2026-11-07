@@ -27,6 +27,24 @@ Base: `http://127.0.0.1:8000` · interactive docs: `/api/docs` · OpenAPI: `/api
     (แต่ละครั้งเป็น `BEGIN IMMEDIATE` จึงไม่มีการใช้โทเคนซ้ำข้าม worker)
   - ค่าอื่น → app ไม่ start (ผิดชัดเจน ดีกว่าเงียบ ๆ ใช้ memory)
 
+## สิทธิ์ (roles)
+
+สามระดับ เรียงตามลำดับ: **admin > trader > viewer**
+
+| role | ทำอะไรได้ |
+|---|---|
+| `viewer` | ทุก GET — POST/PUT/PATCH/DELETE ทุกเส้นทาง (ยกเว้น `/api/auth/login`) ได้ **403** |
+| `trader` | ทุกอย่างของผู้ใช้จริง: ออเดอร์, ปิดไม้, kill switch, เทรน, backtest, dataset, สลับ symbol |
+| `admin` | เพิ่มจาก trader: จัดการผู้ใช้ (`/api/users`) และเปลี่ยน security posture |
+
+กติกาที่บังคับในโค้ด:
+
+- **สิทธิ์มาจากฐานข้อมูล ไม่ใช่ token** — token บอกว่าเป็นใคร; `users.role` บอกว่าทำอะไรได้
+  → ปิดบัญชีหรือลด role มีผลกับ request ถัดไปทันที (ไม่ต้องรอ token หมดอายุ)
+- role ที่ไม่รู้จัก/ว่างเปล่า → **viewer** (fail closed) · `owner` (ของเดิม) → `admin`
+- ปิด/ลด role/ลบ **admin ที่ยังใช้งานคนสุดท้าย** ไม่ได้ (กัน lockout)
+- ทุกการเปลี่ยนผู้ใช้ถูกบันทึกใน audit (`users.create`, `users.update`, `users.delete`)
+
 ## Auth & system
 
 | Method | Path | Notes |
@@ -39,6 +57,8 @@ Base: `http://127.0.0.1:8000` · interactive docs: `/api/docs` · OpenAPI: `/api
 | GET | `/api/system/audit?limit=` | audit trail (ใครทำอะไร) |
 | GET | `/api/system/alerts?limit=` | alert ล่าสุด |
 | GET | `/api/system/errors` | error buffer ของ runtime |
+| GET | `/api/users` · `POST /api/users` · `PATCH /api/users/{email}` · `DELETE /api/users/{email}` | จัดการผู้ใช้ (**admin เท่านั้น**) |
+| GET | `/api/users/me/permissions` | `{role, can_trade, can_manage_users, roles}` — UI ใช้ปิดปุ่ม |
 | GET | `/api/system/health` → `cluster` | `{role: leader\|replica\|blocked\|solo, backend, requested, reason, shared_health}` + `runtime_lease` |
 | GET | `/api/system/notify` | สถานะช่องทางแจ้งเตือน (`inapp`/`telegram`/`line`/`webhook`), error ล่าสุด, จำนวนครั้งที่พลาด (ไม่คืน token) |
 | POST | `/api/system/alerts/test` | ส่งข้อความทดสอบจริงผ่านทุกช่องทางที่เปิดใช้ → `{ok, deliveries:[{channel, ok, status, error}]}` · ถ้ายังไม่ตั้งค่า จะคืน `ok:false` + `reason` แทนการเงียบ |

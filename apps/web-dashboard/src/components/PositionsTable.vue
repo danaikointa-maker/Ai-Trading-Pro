@@ -5,7 +5,7 @@
         <div class="panel-title">Open Positions</div>
         <div class="panel-sub">{{ positions.length }} ไม้ · จัดการ SL/TP อัตโนมัติโดย Risk Engine</div>
       </div>
-      <button class="btn py-1" :disabled="!positions.length" @click="closeAll">Close all</button>
+      <button class="btn py-1" :disabled="!positions.length || !perms.canTrade" :title="perms.reason" @click="closeAll">Close all</button>
     </div>
     <div class="overflow-x-auto">
       <table class="table-base">
@@ -44,7 +44,10 @@
 <script setup>
 import { api } from '../lib/api'
 import { fmt, money } from '../lib/format'
-import { positions, toast } from '../lib/store'
+import { permissions, positions, toast } from '../lib/store'
+
+// Read-only accounts see the buttons disabled — the server refuses them anyway.
+const perms = computed(() => permissions.value)
 
 async function close(ticket) {
   try {

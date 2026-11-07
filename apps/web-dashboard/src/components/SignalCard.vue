@@ -34,8 +34,8 @@
     </div>
 
     <div class="grid grid-cols-2 gap-2 px-4 pt-3 sm:grid-cols-3">
-      <button class="btn btn-buy py-2" :disabled="busy" @click="manual('up')">Buy <span class="text-[10px] opacity-70">manual</span></button>
-      <button class="btn btn-sell py-2" :disabled="busy" @click="manual('down')">Sell <span class="text-[10px] opacity-70">manual</span></button>
+      <button class="btn btn-buy py-2" :disabled="busy || !perms.canTrade" :title="perms.reason" @click="manual('up')">Buy <span class="text-[10px] opacity-70">manual</span></button>
+      <button class="btn btn-sell py-2" :disabled="busy || !perms.canTrade" :title="perms.reason" @click="manual('down')">Sell <span class="text-[10px] opacity-70">manual</span></button>
       <button
         class="btn btn-gold py-2"
         :disabled="busy || !canApprove"
@@ -109,7 +109,10 @@ import ExplainPanel from './ExplainPanel.vue'
 import ScoreGauge from './ScoreGauge.vue'
 import { api } from '../lib/api'
 import { fmt, money, pct } from '../lib/format'
-import { mode, signal as liveSignal, state, toast } from '../lib/store'
+import { mode, permissions, signal as liveSignal, state, toast } from '../lib/store'
+
+// Read-only accounts see the buttons disabled — the server refuses them anyway.
+const perms = computed(() => permissions.value)
 
 const props = defineProps({ gate: { type: Object, default: null } })
 const busy = ref(false)

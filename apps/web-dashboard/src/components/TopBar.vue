@@ -69,6 +69,8 @@
           <div class="num text-[12px] text-slate-300">{{ clock(state.live?.virtual_time) }}</div>
         </div>
 
+        <span v-if="role" class="chip" :class="roleTone" :title="roleHint">{{ role }}</span>
+
         <button class="btn px-2" title="Sign out" @click="signOut">
           <span class="text-[11px]">{{ initials }}</span>
         </button>
@@ -104,6 +106,16 @@ const fullAutoAllowed = computed(
   () => Boolean(state.config?.security?.allow_full_auto && state.config?.security?.full_auto_enabled),
 )
 const initials = computed(() => (state.user?.email || 'N7').slice(0, 2).toUpperCase())
+// The account's role decides what the server will accept; the UI says so rather
+// than letting a viewer discover it through 403s.
+const role = computed(() => state.user?.role || '')
+const roleTone = computed(() => (role.value === 'admin' ? 'chip-up'
+  : role.value === 'trader' ? 'chip-warn' : 'chip-down'))
+const roleHint = computed(() => ({
+  admin: 'จัดการผู้ใช้และเปลี่ยน security posture ได้',
+  trader: 'สั่งออเดอร์/เทรน/backtest ได้ — จัดการผู้ใช้ไม่ได้',
+  viewer: 'อ่านได้เท่านั้น — ปุ่มที่เปลี่ยนสถานะจะถูกปฏิเสธ',
+}[role.value] || ''))
 
 const change = computed(() => {
   const c = state.candles || []

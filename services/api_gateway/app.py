@@ -32,6 +32,7 @@ from services.api_gateway.routes import (
     signals,
     system,
     trading,
+    users,
     ws,
 )
 from services.api_gateway.state import TradingRuntime
@@ -86,7 +87,7 @@ def create_app(runtime: TradingRuntime | None = None) -> FastAPI:
         allow_headers=["*"],
     )
     for module in (auth, system, market, analysis, signals, trading, risk, brokers, backtest,
-               datasets, explain, ws):
+               datasets, users, explain, ws):
         app.include_router(module.router)
 
     @app.get("/api", include_in_schema=False)

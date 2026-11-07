@@ -30,10 +30,10 @@
     </dl>
     <div v-if="risk?.kill_switch_active" class="mx-4 mb-3 rounded-lg border border-down/30 bg-down/10 p-2.5 text-[11px] text-down">
       {{ risk.kill_switch_reason }}
-      <button class="btn btn-danger mt-2 w-full py-1.5" @click="resetKill">Reset kill switch</button>
+      <button class="btn btn-danger mt-2 w-full py-1.5" :disabled="!perms.canTrade" :title="perms.reason" @click="resetKill">Reset kill switch</button>
     </div>
     <div v-else class="flex gap-2 px-4 pb-3">
-      <button class="btn btn-danger flex-1 py-1.5" @click="kill(true)">Emergency close all</button>
+      <button class="btn btn-danger flex-1 py-1.5" :disabled="!perms.canTrade" :title="perms.reason" @click="kill(true)">Emergency close all</button>
       <RouterLink to="/risk" class="btn flex-1 py-1.5 text-center">Settings</RouterLink>
     </div>
   </section>
@@ -43,7 +43,10 @@
 import { computed } from 'vue'
 import { api } from '../lib/api'
 import { clock, fmt, money } from '../lib/format'
-import { riskState as risk, state, toast } from '../lib/store'
+import { permissions, riskState as risk, state, toast } from '../lib/store'
+
+// Read-only accounts see the buttons disabled — the server refuses them anyway.
+const perms = computed(() => permissions.value)
 
 const limits = computed(() => ({
   daily: state.live?.limits?.max_daily_loss_pct ?? 2.0,

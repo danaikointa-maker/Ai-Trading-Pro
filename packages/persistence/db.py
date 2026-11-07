@@ -89,7 +89,8 @@ CREATE TABLE IF NOT EXISTS journal (
 
 CREATE TABLE IF NOT EXISTS users (
     id INTEGER PRIMARY KEY AUTOINCREMENT, email TEXT UNIQUE, password_hash TEXT,
-    role TEXT DEFAULT 'trader', created_at REAL
+    role TEXT DEFAULT 'trader', created_at REAL,
+    active INTEGER DEFAULT 1, last_login_at REAL
 );
 
 CREATE TABLE IF NOT EXISTS kv (
@@ -110,7 +111,25 @@ class Database:
             self._conn.execute("PRAGMA synchronous=NORMAL")
             self._conn.execute("PRAGMA busy_timeout=8000")
             self._conn.executescript(SCHEMA)
+            self._migrate()
             self._conn.commit()
+
+    # ------------------------------------------------------------- migrations
+    # Columns added after a database may already exist. `CREATE TABLE IF NOT
+    # EXISTS` will not add them, and a missing `users.active` would either crash
+    # the login path or (worse) be read as "active" — so add them explicitly.
+    MIGRATIONS: dict[str, dict[str, str]] = {
+        "users": {"active": "INTEGER DEFAULT 1", "last_login_at": "REAL"},
+    }
+
+    def _migrate(self) -> None:
+        for table, columns in self.MIGRATIONS.items():
+            existing = {row["name"] for row in self._conn.execute(f"PRAGMA table_info({table})")}
+            if not existing:
+                continue
+            for name, ddl in columns.items():
+                if name not in existing:
+                    self._conn.execute(f"ALTER TABLE {table} ADD COLUMN {name} {ddl}")
 
     # ------------------------------------------------------------------ core
     @contextmanager

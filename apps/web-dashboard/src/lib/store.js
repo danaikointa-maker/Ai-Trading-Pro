@@ -31,6 +31,20 @@ export const positions = computed(() => state.live?.positions || [])
 export const account = computed(() => state.live?.account || null)
 export const mode = computed(() => state.live?.mode || 'manual')
 
+// Mirror of the server's role rules (services/api_gateway/roles.py). The UI uses it
+// to disable actions honestly; the server still decides, so a stale client cannot
+// grant itself anything.
+export const permissions = computed(() => {
+  const role = state.user?.role || 'viewer'
+  const rank = { viewer: 1, trader: 2, admin: 3 }[role] || 1
+  return {
+    role,
+    canTrade: rank >= 2,
+    canManageUsers: rank >= 3,
+    reason: rank >= 2 ? '' : 'บัญชีนี้เป็น viewer — อ่านได้อย่างเดียว',
+  }
+})
+
 export function toast(message, type = 'info', timeout = 4200) {
   const id = Math.random().toString(36).slice(2)
   state.toasts.push({ id, message, type })
