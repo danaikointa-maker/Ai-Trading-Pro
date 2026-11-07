@@ -39,8 +39,19 @@ percent : swap_night = notional × pct / 100 / 360 × lot        # ดอกเ�
 - คิด **คืนละครั้ง** ทุกเที่ยงคืน UTC และ **วันพุธคูณ 3** (โบรกเกอร์รวม funding ของสุดสัปดาห์ไว้คืนพุธ)
   ✅ `swap_night_multiplier()` ใน `models.py` ใช้ร่วมกันทั้ง paper และ backtest
 - คิดบน volume ที่ยังเปิดอยู่ ณ คืนนั้น (partial close แล้วลดตามจริง)
-- MT5: `swap_mode` ของเทอร์มินัลถูกแปลงเป็นหน่วยของเรา (`_swap_fields`)
-  1 → points, 3/5 → percent, 2 → money (แปลง profit currency → สกุลบัญชี), 6/7 (reopen) → 0
+- MT5: `swap_mode` ของเทอร์มินัลถูกแปลงเป็นหน่วยของเรา (`_swap_fields`) ตามเลข enum จริง
+  | mode | ความหมาย | แปลงเป็น |
+  |---|---|---|
+  | 1 | POINTS | points |
+  | 5 | INTEREST_CURRENT (% ของราคา ณ วันคิด) | percent |
+  | 6 | INTEREST_OPEN (% ของราคาเปิดโพซิชัน) | percent (คิดบนราคา ณ วันคิด — ประมาณ, ผลน้อย) |
+  | 2 | CURRENCY_SYMBOL (สกุลฐาน) | money × rate ของสกุลฐาน (แปลงไม่ได้ → 0 ไม่เดา 1.0) |
+  | 9 | CURRENCY_PROFIT | money × quote_to_account_rate |
+  | 3 / 4 | CURRENCY_MARGIN / DEPOSIT | money (สกุลบัญชีอยู่แล้ว) |
+  | 7 / 8 | REOPEN_CURRENT / REOPEN_BID | 0 — ส่วนต่างราคาตอน reopen เป็นค่าที่โบรกเกอร์กำหนด ตรวจไม่ได้ถ้าไม่มีเทอร์มินัล |
+  | 0 | DISABLED | 0 |
+
+  ✅ `tests/test_mt5_swap_modes.py` (เดิม 3/5 ถูกอ่านเป็น percent ซึ่งทำให้ swap แบบ money พองขึ้นตาม notional และ 6 ถูกทำให้เป็น 0)
 - รายงานแยกเป็นฟิลด์ `swap` ใน `TradeRecord` ไม่ปนกับ `costs` (ค่าคอมมิชชัน)
   และ `gross_pnl - pnl = costs - swap` ✅ `tests/test_swap.py`
 

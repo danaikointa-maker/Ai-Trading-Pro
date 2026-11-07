@@ -79,7 +79,8 @@
 - ต้นทุน spread/slippage ถูกคิดที่ราคาเข้าและรายงานเป็นเงินแล้ว (`total_costs`) แต่ SL/TP ยังตัดสินจากราคา mid ของแท่ง ไม่ใช่ bid/ask รายแท่ง
 - ถ้าแท่งเดียวชนทั้ง SL และ TP จะถือว่า stop ชนก่อน (conservative) — อาจทำให้ผลลบกว่าความจริงเล็กน้อย
 - swap ถูกคิดแล้วทั้งใน paper และ backtest (คืนละครั้งตามเวลา UTC, พุธ ×3) รองรับ money / points / percent
-  — แต่ `swap_mode` แบบ reopen (MT5 mode 6/7) ยังไม่รองรับ จึงรายงานเป็น 0 แทนการเดา
+  — MT5 mode 7/8 (reopen) ยังไม่รองรับ จึงรายงานเป็น 0 แทนการเดา (mode 5/6 = percent รองรับแล้ว
+  โดย mode 6 คิดบนราคา ณ วันคิดแทนราคาเปิดโพซิชัน)
 - ดอกเบี้ยโหมด percent ใช้ฐาน 360 วันคงที่ (โบรกเกอร์บางรายใช้ 365) — ระบุไว้ใน assumption ของผล backtest
 - สกุลเงินกำไรที่ไม่ใช่ USD: แปลงเป็นสกุลบัญชีแล้วด้วย `quote_to_account_rate` ในทุกเอนจิน
   (backtest / paper / MT5 offline estimate / risk notional) ✅ — แต่ rate มาจาก ticker ที่มีอยู่
