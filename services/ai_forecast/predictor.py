@@ -12,6 +12,7 @@ from typing import Any
 import numpy as np
 import pandas as pd
 
+from services.ai_forecast.approval import APPROVAL_RULE_VERSION
 from packages.indicators.pipeline import enrich
 from packages.shared_schemas.models import (
     ForecastBundle,
@@ -64,9 +65,15 @@ class ForecastPredictor:
         self.version = payload.get("version", "unknown")
         self.symbol = payload.get("symbol", "")
         self.metrics = payload.get("metrics", {})
-        self.approved = bool(payload.get("approved", False))
         self.trained_at = int(payload.get("trained_at", 0))
         self.notes = payload.get("notes", "")
+        # An approval measured under an older rule is not evidence under this one.
+        stored = bool(payload.get("approved", False))
+        rule = int((self.metrics or {}).get("approval_rule") or 0)
+        self.approved = stored and rule >= APPROVAL_RULE_VERSION
+        if stored and not self.approved:
+            self.notes = (f"{self.notes} | stored approval predates approval rule "
+                          f"v{APPROVAL_RULE_VERSION} (model v{rule}); retrain to re-evaluate").strip(" |")
         if arrays:
             self.path_table = PathProbabilityTable.from_arrays(arrays, bar_minutes=5)
         for model in self.models.values():

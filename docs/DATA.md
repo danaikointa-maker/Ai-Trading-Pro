@@ -70,10 +70,33 @@ Brier improvement, fold pass rate, วิธี validation, verdict) → ผล 
 - backtest ตัดสินใจบนแท่ง M5 ที่ปิดแล้ว, fill ที่ open ของแท่งถัดไป, คิด spread + slippage + commission
   และ swap (คืนละครั้ง) — ถ้าในแท่งเดียวชนทั้ง SL และ TP จะถือว่า SL ชนก่อน (conservative)
 
-## 5. ข้อจำกัดที่ยังต้องรู้
+## 5. ให้ dashboard ทั้งระบบเดินบนข้อมูลจริง (replay)
 
-- **dashboard ที่รันอยู่ยังใช้ feed จำลอง** — ไฟล์นี้ใช้สำหรับ *ประเมิน* แบบ offline
-  การสลับ feed สดทั้งระบบไปเป็น replay ยังไม่ได้ทำ
+```yaml
+# config/app.yaml
+market_data:
+  feed_mode: replay          # simulate | mt5 | replay
+  replay:
+    dataset_dir: storage/datasets
+    timeframe: M1
+    warmup_bars: 6000        # แท่งที่ analysis เห็นก่อนเริ่มเดิน
+    speed_minutes_per_second: 6.0
+    loop: false
+```
+
+- ต้องมีไฟล์ของ **ทุก symbol ที่ broker ที่ใช้งานอยู่เทรด** (XAUUSD, XAGUSD, EURUSD)
+  symbol ของ broker profile อื่นไม่จำเป็น — ถ้าไม่มี ระบบจะบอกไว้ใน `feed_note`
+- `warmup_bars` ต้องพอกับหน้าต่างที่ analysis/forecast ใช้: forecast ต้องมี M5 ≥ 260 แท่ง
+  (≈ 1,300 แท่ง M1) และ analysis ขอ M5 900 / M15 600 / H1 500 / H4 300 →
+  ในทางปฏิบัติควรมีข้อมูลอย่างน้อย **6,000–10,000 แท่ง M1** ต่อ symbol
+- ระหว่างเดิน: `GET /api/system/health` → `feed_mode: "replay"`, `feed.symbols[*].progress`,
+  และ `analysis.data_quality.feed = "replay"` (label บอกแหล่งข้อมูลจริง ไม่ได้ดูจากชนิด adapter)
+- เมื่อข้อมูลหมด: clock หยุด, `services.feed = "exhausted"`, ไม่มีแท่งใหม่ถูกสร้างขึ้นมาเอง
+- replay ยังไม่ใช่ tick data — ราคาภายในแท่งเดินตามเส้นทาง open→close ในกรอบ high/low
+
+คำสั่งตรวจเร็ว ๆ ว่า replay ทำงาน: `python scripts/smoke.py` แล้วดูบรรทัด `feed`
+
+## 6. ข้อจำกัดที่ยังต้องรู้
 - `ai.training.max_rows` (12,000) คือเพดานจำนวน sample ต่อการฝึก และ trainer ทำ stride
   ทุก 5 แท่ง → ฐานข้อมูลจริงประมาณ ~60,000 แท่งต่อรอบฝึก ถ้ามากกว่านั้นใช้เฉพาะช่วงท้าย
 - walk-forward ต้องมี sample อย่างน้อย `walk_forward_min_train_rows` (900) ในช่วงฝึกแรก
@@ -81,7 +104,7 @@ Brier improvement, fold pass rate, วิธี validation, verdict) → ผล 
 - spread ต่อแท่งมาจากค่า `spread_typical_points` ของ symbol (ไม่ใช่ spread จริงรายแท่ง)
 - ยังไม่มี tick data จริง → การทดสอบ slippage/queue ในระดับ tick ยังทำไม่ได้
 
-## 6. ตรวจว่าข้อมูลที่นำเข้าใช้ได้จริง
+## 7. ตรวจว่าข้อมูลที่นำเข้าใช้ได้จริง
 
 ```bash
 .venv/bin/python -m pytest tests/test_dataset_import.py -q

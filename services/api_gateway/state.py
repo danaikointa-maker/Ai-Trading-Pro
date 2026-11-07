@@ -43,7 +43,7 @@ from services.ai_forecast.trainer import ForecastTrainer
 from services.execution_gateway.gateway import ExecutionGateway
 from services.market_data.news import NewsService
 from services.market_data.service import MarketDataService
-from services.market_data.simulator import SyntheticFeed
+from services.market_data.replay import build_feed
 from services.notification.notifier import Notifier
 from services.risk_engine.engine import RiskEngine, default_risk_state
 from services.risk_engine.manager import PositionAction, PositionManager
@@ -55,25 +55,22 @@ class TradingRuntime:
     def __init__(self, settings: Settings | None = None) -> None:
         self.settings = settings or get_settings()
         self.db = Database(self.settings.database_path)
-        md = self.settings.market_data
-        sim = md.get("simulation", {})
-
         # --- market data: union of symbols from every simulated broker profile
         symbols: dict[str, dict[str, Any]] = {}
         for profile in self.settings.brokers.get("brokers", []):
             if profile.get("adapter") in ("simulated_mt5", "paper"):
                 for symbol, spec in (profile.get("symbols") or {}).items():
                     symbols.setdefault(symbol, spec)
-        self.feed = SyntheticFeed(
-            symbols=symbols or {"XAUUSD": self.settings.symbol_spec("connext-demo", "XAUUSD")},
-            history_bars=int(md.get("history_bars", 60000)),
-            seed=int(sim.get("seed", 7)),
-            start_price=float(sim.get("start_price", 4180.0)),
-            annual_vol=float(sim.get("annual_volatility", 0.16)),
-            speed_minutes_per_second=float(sim.get("speed_minutes_per_second", 6.0)),
-            tick_seconds=float(sim.get("tick_seconds", 0.5)),
-            news_shock_probability=float(sim.get("news_shock_probability", 0.0015)),
-        )
+        # feed_mode decides what the whole platform reads. A replay that cannot
+        # start falls back to the simulator and records why, so health can never
+        # present simulated prices as if they were imported ones.
+        active_broker = self.settings.default_broker_id()
+        self.feed, self.feed_mode, self.feed_note = build_feed(
+            self.settings,
+            symbols or {"XAUUSD": self.settings.symbol_spec(active_broker, "XAUUSD")},
+            required=list(self.settings.broker_symbols(active_broker)))
+        if self.feed_note:
+            self.settings.app.setdefault("_feed_notes", []).append(self.feed_note)
         self.db.kv_set("virtual_clock_start", self.feed.end_time)
 
         self.registry = BrokerRegistry(self.settings, self.feed)
@@ -85,6 +82,7 @@ class TradingRuntime:
         self.news = NewsService(self.db, high_impact_currencies=["USD"], now=self.feed.end_time)
         self.market = MarketDataService(self.settings, self.registry, self.news)
         self.market.set_virtual_now(self.feed.end_time)
+        self.market.feed_mode = self.feed_mode
 
         # --- engines
         self.risk = RiskEngine(self.settings, self.db)
@@ -113,6 +111,7 @@ class TradingRuntime:
         self.started_at = time.time()
         self.last_decision_at = 0.0
         self.last_tick_at = 0.0
+        self.last_tick_wall = time.time()
         self.last_reconcile: dict[str, Any] = {}
         self.errors: deque[dict[str, Any]] = deque(maxlen=25)
         self.mode = self.risk.record_mode()
@@ -195,6 +194,10 @@ class TradingRuntime:
         with self.lock:
             self.ticks.update(ticks)
             self.last_tick_at = now
+            # The loop's heartbeat is measured on the wall clock: a replayed series
+            # lives in the past, so comparing virtual time to time.time() called a
+            # healthy feed stale.
+            self.last_tick_wall = time.time()
         for adapter in self.registry.all():
             try:
                 closed = adapter.on_tick(ticks)
@@ -722,7 +725,8 @@ class TradingRuntime:
             "training": training,
             "reconcile": self.last_reconcile,
             "errors": errors,
-            "feed": "simulated" if self.adapter.adapter_type == "simulated_mt5" else "mt5",
+            "feed": getattr(self, "feed_mode", None)
+            or ("simulated" if self.adapter.adapter_type == "simulated_mt5" else "mt5"),
             "alerts": self.notifier.recent(8),
         }
         if not light:
@@ -731,9 +735,11 @@ class TradingRuntime:
         return payload
 
     def health(self) -> dict[str, Any]:
+        exhausted = bool(getattr(self.feed, "exhausted", False))
         services = {
             "db": "ok",
-            "feed": "ok" if (time.time() - self.last_tick_at) < 10 else "stale",
+            "feed": "exhausted" if exhausted else (
+                "ok" if (time.time() - self.last_tick_wall) < 10 else "stale"),
             "runtime": "running" if self._thread and self._thread.is_alive() else "stopped",
             "model": "approved" if self.predictor.approved else "baseline",
             "training": self.training.get("state", "idle"),
@@ -745,11 +751,23 @@ class TradingRuntime:
             "server_time": time.time(),
             "virtual_time": self.market.now(),
             "uptime_seconds": round(time.time() - self.started_at, 1),
-            "feed_mode": self.settings.market_data.get("feed_mode", "simulate"),
+            "feed_mode": getattr(self, "feed_mode", None)
+            or self.settings.market_data.get("feed_mode", "simulate"),
+            "feed_note": getattr(self, "feed_note", None),
+            "feed": self._feed_status(),
             "broker_health": self.registry.health_map(),
             "model": self.predictor.status().model_dump() if self.predictor.status() else None,
             "services": services,
         }
+
+    def _feed_status(self) -> dict[str, Any]:
+        describe = getattr(self.feed, "describe", None)
+        if callable(describe):
+            try:
+                return describe()
+            except Exception as exc:  # noqa: BLE001 - health must never raise
+                return {"mode": getattr(self, "feed_mode", "?"), "error": str(exc)}
+        return {"mode": getattr(self, "feed_mode", "simulate")}
 
     # ------------------------------------------------------------------ misc
     def snapshot(self, symbol: str) -> AnalysisSnapshot | None:

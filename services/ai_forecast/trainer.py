@@ -14,6 +14,7 @@ from typing import Any, Callable
 
 import numpy as np
 import pandas as pd
+from services.ai_forecast.approval import APPROVAL_RULE_VERSION
 from lightgbm import LGBMClassifier, LGBMRegressor
 from sklearn.isotonic import IsotonicRegression
 
@@ -74,17 +75,28 @@ def split_folds(n: int, folds: int) -> list[tuple[int, int]]:
 
 
 def decide_approval(folds: list[dict[str, Any]], min_dir_accuracy: float,
-                    min_brier_improvement: float, min_pass_rate: float = 0.75) -> tuple[bool, dict[str, Any]]:
-    """Approve only if the edge shows up in *most* out-of-sample blocks.
+                    min_brier_improvement: float, min_pass_rate: float = 0.75,
+                    min_folds: int = 3) -> tuple[bool, dict[str, Any]]:
+    """Approve only if the edge shows up in *most* of several out-of-sample blocks.
 
     A single split can clear both gates by luck: one good month approves a model
     that is flat the rest of the year. Requiring a majority of chronological
     blocks — plus the median block — to clear the same bar is stricter than the
     old rule, never looser.
+
+    `min_folds` closes the loop that a majority rule leaves open: with one scored
+    fold, "100% of folds pass" is one block passing, and the median is that same
+    block. Too little evidence is reported as too little evidence, not as approval.
     """
     if not folds:
         return False, {"folds_used": 0, "fold_pass_rate": 0.0,
-                       "fold_directional_median": 0.0, "fold_brier_improvement_median": 0.0}
+                       "fold_directional_median": 0.0, "fold_brier_improvement_median": 0.0,
+                       "approval_note": "no out-of-sample fold was scored"}
+    if len(folds) < max(1, int(min_folds)):
+        return False, {"folds_used": len(folds), "fold_pass_rate": 0.0,
+                       "fold_directional_median": 0.0, "fold_brier_improvement_median": 0.0,
+                       "approval_note": (f"only {len(folds)} fold(s) scored; at least "
+                                         f"{int(min_folds)} are required to approve")}
 
     passing = [f for f in folds if f.get("pass")]
     rate = len(passing) / len(folds)
@@ -95,7 +107,12 @@ def decide_approval(folds: list[dict[str, Any]], min_dir_accuracy: float,
 
     approved = bool(rate >= min_pass_rate and median_dir >= min_dir_accuracy
                     and median_brier >= min_brier_improvement)
+    note = "" if approved else (
+        f"fold pass rate {rate:.0%} (needs {min_pass_rate:.0%}), median directional "
+        f"{median_dir:.3f} (needs {min_dir_accuracy}), median Brier improvement "
+        f"{median_brier:+.3f} (needs {min_brier_improvement})")
     return approved, {
+        "approval_note": note,
         "folds_used": len(folds),
         "fold_pass_rate": round(rate, 3),
         "fold_directional_median": round(median_dir, 4),
@@ -136,6 +153,8 @@ class ForecastTrainer:
         self.horizons = [int(h) for h in settings.ai.get("horizons_minutes", [5, 15, 30, 60, 240])]
         self.validation_folds = int(cfg.get("validation_folds", 4))
         self.min_fold_pass_rate = float(cfg.get("min_fold_pass_rate", 0.75))
+        # A majority of one fold is just one fold; approval needs several.
+        self.min_validation_folds = int(cfg.get("min_validation_folds", 3))
         # Refit-per-fold walk-forward: the honest version of the fold check, at the
         # cost of one extra classifier fit per fold. 0 disables it and falls back
         # to scoring slices of the single fitted model.
@@ -357,7 +376,8 @@ class ForecastTrainer:
                 folds = self._fold_scores(probs, truth_idx, onehot, prior_model.priors)
                 validation_method = "block slices of one fitted model (not refit)"
             fold_ok, fold_summary = decide_approval(
-                folds, self.min_dir_accuracy, self.min_brier_improvement, self.min_fold_pass_rate)
+                folds, self.min_dir_accuracy, self.min_brier_improvement, self.min_fold_pass_rate,
+                self.min_validation_folds)
             approved = bool(fold_ok and directional >= self.min_dir_accuracy
                             and (baseline_brier - brier) >= self.min_brier_improvement)
             prior_model.approved = approved
@@ -406,11 +426,14 @@ class ForecastTrainer:
         overall["walk_forward_min_train_rows"] = self.walk_forward_min_train_rows
         overall["validation_folds"] = self.validation_folds
         overall["min_fold_pass_rate"] = self.min_fold_pass_rate
+        overall["min_validation_folds"] = self.min_validation_folds
+        overall["approval_rule"] = APPROVAL_RULE_VERSION
         notes = (
             f"{len(models)}/{len(self.horizons)} horizons trained on {overall['samples']:,} samples; "
             f"{overall['approved_horizons']} passed out-of-sample gates "
             f"(directional accuracy >= {self.min_dir_accuracy:.0%}, Brier improvement >= {self.min_brier_improvement}, "
-            f"in at least {self.min_fold_pass_rate:.0%} of {self.validation_folds} chronological folds)."
+            f"in at least {self.min_fold_pass_rate:.0%} of the chronological folds; "
+            f"at least {self.min_validation_folds} folds must be scored at all)."
         )
         report("done", 1.0)
         return TrainingResult(

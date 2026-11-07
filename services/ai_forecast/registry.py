@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import json
 import time
+from services.ai_forecast.approval import APPROVAL_RULE_VERSION
 from pathlib import Path
 from typing import Any
 
@@ -83,7 +84,9 @@ class ModelRegistry:
                 version=row["version"],
                 created_at=int(row["created_at"] or 0),
                 method=row["method"] or "",
-                approved=bool(row["approved"]),
+                # demote approvals granted under an older rule, same as the predictor
+                approved=bool(row["approved"]) and int(metrics.get("approval_rule") or 0)
+                >= APPROVAL_RULE_VERSION,
                 horizons=[int(h) for h in metrics.get("horizons", {}).keys()],
                 metrics=metrics,
                 samples=int(row["samples"] or 0),

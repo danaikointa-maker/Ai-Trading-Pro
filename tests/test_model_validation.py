@@ -59,6 +59,34 @@ def test_median_fold_must_clear_the_bar():
     assert ok is False
 
 
+def test_a_majority_of_one_fold_is_not_approval():
+    """Seen live: a 9000-bar file produced a single fold, 100% passed, "approved".
+
+    One block passing is one block passing — there is no distribution to be a
+    majority of, so the gate must answer "not enough evidence".
+    """
+    ok, summary = decide_approval([fold(0.97, 0.44)], 0.52, 0.02, 0.75, 3)
+    assert ok is False
+    assert summary["folds_used"] == 1
+    assert "at least 3" in summary["approval_note"]
+
+
+def test_two_folds_are_still_too_few():
+    ok, summary = decide_approval([fold(0.90, 0.30), fold(0.88, 0.28)], 0.52, 0.02, 0.75, 3)
+    assert ok is False
+    assert summary["folds_used"] == 2
+
+
+def test_three_strong_folds_can_still_approve():
+    ok, summary = decide_approval([fold(0.60, 0.06)] * 3, 0.52, 0.02, 0.75, 3)
+    assert ok is True and summary["folds_used"] == 3
+
+
+def test_rejection_says_which_condition_failed():
+    _, summary = decide_approval([fold(0.50, 0.0)] * 3, 0.52, 0.02, 0.75, 3)
+    assert "median directional" in summary["approval_note"]
+
+
 def test_no_folds_is_never_approved():
     ok, summary = decide_approval([], 0.52, 0.02, 0.75)
     assert ok is False
@@ -146,3 +174,22 @@ def test_walk_forward_can_be_disabled(settings):
     metrics = result.metrics["horizons"]["5"]
     assert metrics["validation_method"].startswith("block slices")
     assert all(f["retrained"] is False for f in metrics["validation_folds"])
+
+
+# -------------------------------------------------- approval rules are versioned
+def test_stored_approval_from_an_older_rule_is_demoted(runtime):
+    """A model approved under a weaker gate must not stay approved after a change."""
+    from services.ai_forecast.approval import APPROVAL_RULE_VERSION
+    from services.ai_forecast.predictor import ForecastPredictor
+
+    predictor = ForecastPredictor(runtime.settings, runtime.model_registry)
+    legacy = {"version": "old-model", "approved": True, "models": {},
+              "metrics": {"horizons": {}}}          # no approval_rule recorded at all
+    predictor.install_payload(legacy, {})
+    assert predictor.approved is False
+    assert str(APPROVAL_RULE_VERSION) in predictor.notes
+
+    current = {"version": "new-model", "approved": True, "models": {},
+               "metrics": {"horizons": {}, "approval_rule": APPROVAL_RULE_VERSION}}
+    predictor.install_payload(current, {})
+    assert predictor.approved is True
