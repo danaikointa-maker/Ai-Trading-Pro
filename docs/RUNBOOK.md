@@ -163,6 +163,11 @@ export NO7_REDIS_URL=redis://127.0.0.1:6379/0
 ระบบจะ **ถอยไปใช้ in-process store** และบอกเหตุผลใน `cluster.reason` — replica จะไม่มีอะไรอ่าน
 จึงกลายเป็น `blocked` ตามเดิม (ไม่แอบทำงานครึ่ง ๆ กลาง ๆ)
 
+**หมายเหตุ (bridge)**: state ของ EA bridge อยู่ในตาราง `bridge_sessions`/`bridge_commands`
+ในฐานข้อมูล ไม่ใช่ในหน่วยความจำโปรเซส — ดังนั้นเมื่อรัน `--workers N` คำสั่งที่คิวโดย worker ที่ถือ lease
+จะถูกส่งให้ EA ไม่ว่า poll จะไปตกที่ worker ตัวไหน และการ claim คำสั่งเป็น `UPDATE ... WHERE state='pending'`
+จึงมี worker เดียวที่ได้คำสั่งไป (ทดสอบไว้ใน `tests/test_bridge.py` แล้ว)
+
 ## 8. รันได้ทีละโพรเซสเท่านั้น (single-writer)
 
 runtime (tick, signal, order) ใช้ **lease** ในตาราง `kv` (`runtime_lease`) — โปรเซสเดียวเท่านั้นที่ขับเคลื่อนได้
@@ -172,7 +177,8 @@ runtime (tick, signal, order) ใช้ **lease** ในตาราง `kv` (`r
 - log มี `runtime-lease: another No7 runtime already owns this database (...)`
 - หน้า `/system` ขึ้นป้าย `blocked by <owner>`
 
-อย่าใช้ `uvicorn --workers N` กับ build นี้: worker ที่สองจะไม่เทรด (ซึ่งปลอดภัย) แต่ก็ไม่ได้ข้อมูลสดของตัวเอง
+ระวัง: worker ที่สองจะไม่เทรด (ซึ่งปลอดภัย) และจะไม่เห็นข้อมูลสดของ leader เว้นแต่ตั้ง `cluster.backend: redis`
+หรืออ่านผ่าน DB — bridge เป็นข้อยกเว้น เพราะ state อยู่ใน DB ร่วม (ดู §7)
 ถ้าจำเป็นต้องมีหลายโปรเซสจริง ๆ ให้ตั้ง `NO7_ALLOW_MULTI_RUNTIME=1` **เฉพาะเมื่อ** ตัวที่ไม่ใช่เจ้าของเปิดอ่านอย่างเดียว
 และเข้าใจว่าออเดอร์อาจซ้ำได้ (ระบบจะขึ้น `shared` + บันทึก error ไว้)
 
@@ -283,7 +289,10 @@ curl -s -X POST localhost:8000/api/brokers/mt5-bridge-demo/activate \
 (ดูใน `/api/bridge/status`) และ snapshot เก่าถูกล้าง — ระบบไม่เอา state ของเทอร์มินัลเก่ามาใช้ต่อ
 
 **ข้อบังคับจากการออกแบบ**
-- รัน **worker เดียว** เมื่อเทรดผ่าน bridge (คิวอยู่ในโปรเซส; หลาย worker = หลายคิว)
+- ใช้ `--workers N` ได้ (state อยู่ใน DB ร่วม) แต่ยังมี **โปรเซสเดียวที่เทรด** ตาม runtime lease —
+  worker อื่นรับ HTTP (รวม poll ของ EA) และอ่าน state ร่วมกัน
+- ถ้าฐานข้อมูลเป็นไฟล์เดียวกันบนเครื่องเดียว: SQLite WAL รองรับหลาย worker; ถ้าย้ายไป Postgres
+  ต้องย้ายตาราง `bridge_*` ตามไปด้วย (ที่เหลือของแอปย้ายตามอยู่แล้ว)
 - คำสั่งที่ EA ไม่ ack จะหมดอายุ (`command_ttl_seconds` 30s / `ack_grace_seconds` 20s) และ **ไม่ส่งซ้ำ**
 - ต้องเปิด Algo Trading ในเทอร์มินัล ไม่งั้น EA ไม่ execute (ฝั่งเซิร์ฟเวอร์จะเห็นแค่ `expired`)
 

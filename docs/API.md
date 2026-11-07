@@ -12,7 +12,7 @@ Base: `http://127.0.0.1:8000` · interactive docs: `/api/docs` · OpenAPI: `/api
 |---|---|---|---|
 | POST | `/api/bridge/register` | `Authorization: Bearer <bridge token>` | `{account_id, session_id?, terminal, symbols}` → `{session_id, generation, poll_interval_ms, fresh_seconds, stale_seconds}` · session ใหม่ (EA รีสตาร์ท) = ทิ้งคิว+snapshot เก่า (`generation` +1) |
 | POST | `/api/bridge/poll` | session id ในบอดี้ | `{session_id, snapshot, results:[{id, ok, status, ticket, …}]}` → `{commands, results, expired_unacked, health}` · 409 = session ตายแล้ว ให้ register ใหม่ |
-| GET | `/api/bridge/status` | admin JWT | session/health/queue/polls/duplicates/expiries + `orphaned_commands` (คำสั่งที่ EA ไม่ตอบก่อนรีสตาร์ท) + `tokens` เป็น sha256 8 ตัวแรกเท่านั้น |
+| GET | `/api/bridge/status` | admin JWT | session/health/queue/polls/duplicates/expiries + `orphaned_commands` (คำสั่งที่ EA ไม่ตอบก่อนรีสตาร์ท) + `store` (`sqlite` = แชร์ข้าม worker, `memory` = โปรเซสเดียว) + `tokens` เป็น sha256 8 ตัวแรกเท่านั้น |
 | POST | `/api/bridge/cancel` | admin JWT | ทิ้งทุกคำสั่งที่ยังไม่ถูกส่ง (`pending`) — kill switch ฝั่งคิว |
 | GET | `/api/bridge/session` | ทุก role | มุมมองแดชบอร์ด: มี EA ต่ออยู่ไหม, snapshot อายุเท่าไร |
 
@@ -22,6 +22,8 @@ Base: `http://127.0.0.1:8000` · interactive docs: `/api/docs` · OpenAPI: `/api
 - `results` ที่ซ้ำ → ตอบ `duplicate: true` ไม่ apply ซ้ำ; id ที่ไม่รู้จัก → `accepted: false` พร้อมเหตุผล (ไม่กลืนหาย)
 - `enqueue` ถูกปฏิเสธถ้า session ไม่ fresh (`fresh_seconds`) หรือคิวเต็ม (`max_pending`) หรือยังไม่มี EA
 - snapshot เก่ากว่า `stale_seconds` → adapter **raise** (`account_info/positions/ticker/candles`) ไม่คืนค่าเก่า
+- state อยู่ในตาราง `bridge_sessions`/`bridge_commands` → หลาย worker เห็นคิวเดียวกัน และ claim แบบ atomic
+  (คำสั่งเดียวถูกส่งให้ EA ครั้งเดียวแม้สอง worker ตอบพร้อมกัน)
 - EA แจ้ง `rates` เอง; ถ้าไม่มี rates → `candles()` error ไม่ synthesize
 
 ## PWA (manifest / service worker / offline)

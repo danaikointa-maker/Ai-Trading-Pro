@@ -49,10 +49,15 @@ def ensure_demo_user(db: Database, settings: Settings) -> str:
     role = normalize_role(sec.get("demo_role", ADMIN))
     row = db.query_one("SELECT email, role FROM users WHERE email = ?", (email,))
     if row is None:
-        db.execute("INSERT INTO users(email, password_hash, role, created_at, active) "
+        # Two workers starting at the same instant both see "no row" and both insert;
+        # the loser must not take the whole process down (uvicorn --workers N).
+        db.execute("INSERT OR IGNORE INTO users(email, password_hash, role, created_at, active) "
                    "VALUES(?,?,?,?,1)",
                    (email, hash_password(password), role, time.time()))
-    elif normalize_role(row["role"]) != str(row["role"]).lower():
+        row = db.query_one("SELECT email, role FROM users WHERE email = ?", (email,))
+    if row is None:  # pragma: no cover - only if the insert was rejected for another reason
+        raise RuntimeError(f"could not create the demo user {email!r}")
+    if normalize_role(row["role"]) != str(row["role"]).lower():
         # e.g. the old "owner" role: keep the data, make it canonical
         db.execute("UPDATE users SET role = ? WHERE email = ?", (normalize_role(row["role"]), email))
     return email

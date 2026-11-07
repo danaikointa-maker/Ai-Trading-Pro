@@ -152,8 +152,13 @@ def release_runtime_lease(db: Any, owner: str) -> tuple[bool, dict[str, Any]]:
     return True, record
 
 
-def build_bridge_relay(settings: Settings, audit=None) -> BridgeRelay:
-    """Relay configured from `bridge:` in app.yaml (empty tokens disable accounts)."""
+def build_bridge_relay(settings: Settings, audit=None, db=None) -> BridgeRelay:
+    """Relay configured from `bridge:` in app.yaml (empty tokens disable accounts).
+
+    With a database the relay keeps its session/queue in the shared `bridge_*` tables:
+    the EA's poll can land on any worker, so per-process state would lose the leader's
+    orders and let the EA flap between workers.
+    """
     cfg = dict(settings.app.get("bridge") or {})
     accounts = {str(row.get("id")): str(row.get("token") or "")
                 for row in (cfg.get("accounts") or []) if row.get("id")}
@@ -167,6 +172,7 @@ def build_bridge_relay(settings: Settings, audit=None) -> BridgeRelay:
         poll_interval_ms=int(cfg.get("poll_interval_ms", 1000)),
         order_timeout_seconds=float(cfg.get("order_timeout_seconds", 20)),
         enabled=bool(cfg.get("enabled", False)),
+        db=db,
     )
     if audit is not None:
         relay.audit = audit
@@ -195,7 +201,7 @@ class TradingRuntime:
             self.settings.app.setdefault("_feed_notes", []).append(self.feed_note)
         self.db.kv_set("virtual_clock_start", self.feed.end_time)
 
-        self.bridge = build_bridge_relay(self.settings, audit=self.db.audit)
+        self.bridge = build_bridge_relay(self.settings, audit=self.db.audit, db=self.db)
         self.registry = BrokerRegistry(self.settings, self.feed, relay=self.bridge)
         self.registry.build()
         for adapter in self.registry.all():

@@ -10,12 +10,15 @@ from __future__ import annotations
 
 import threading
 import time
+from dataclasses import replace
 
 import pytest
 
 from integrations.brokers.base import BrokerError
+from packages.persistence.db import Database
 from packages.shared_schemas.models import OrderRequest, OrderSide, OrderState
 from services.bridge.relay import ACKED, EXPIRED, ORPHANED, BridgeError, BridgeRelay
+from services.bridge.store import MemoryStore
 
 ACCOUNT = "mt5-bridge-demo"
 TOKEN = "test-bridge-token-0123456789"
@@ -44,6 +47,47 @@ def snapshot(symbol: str = "XAUUSD", bid: float = 2000.0, ask: float = 2000.25,
 
 
 # --------------------------------------------------------------------- protocol
+class FakeClock:
+    """Bridge time we can move: staleness and expiry are the whole point here."""
+
+    def __init__(self, start: float | None = None) -> None:
+        self.t = time.time() if start is None else start
+
+    def __call__(self) -> float:
+        return self.t
+
+    def advance(self, seconds: float) -> float:
+        self.t += seconds
+        return self.t
+
+
+def relay_with_clock(**kwargs) -> BridgeRelay:
+    """A relay whose clock we control, for tests that need to age a session."""
+    clock = FakeClock()
+    instance = BridgeRelay({ACCOUNT: TOKEN}, clock=clock, **kwargs)
+    instance.clock_for_tests = clock
+    return instance
+
+
+@pytest.fixture(params=["memory", "sqlite"])
+def relay(request, tmp_path):
+    """Every protocol rule runs against the in-process store *and* the shared one.
+
+    The shared store is what a multi-worker deployment uses, so a rule that only holds
+    in memory is not a rule.
+    """
+    clock = FakeClock()
+    if request.param == "memory":
+        instance = BridgeRelay({ACCOUNT: TOKEN}, store=MemoryStore(), clock=clock)
+        instance.clock_for_tests = clock
+        yield instance
+        return
+    db = Database(tmp_path / f"bridge-{request.param}.sqlite3")
+    instance = BridgeRelay({ACCOUNT: TOKEN}, db=db, clock=clock)
+    instance.clock_for_tests = clock
+    assert instance.store.kind == "sqlite"
+    yield instance
+    db.close()
 def test_bridge_disabled_fails_closed():
     relay = BridgeRelay({ACCOUNT: TOKEN}, enabled=False)
     with pytest.raises(BridgeError, match="disabled"):
@@ -64,18 +108,18 @@ def test_wrong_token_is_refused():
         relay.check_token(ACCOUNT, "nope")
     with pytest.raises(BridgeError, match="invalid bridge token"):
         relay.register(ACCOUNT, "nope", SID)   # register cannot skip the check
-    assert ACCOUNT not in relay.sessions
+    assert relay.get(ACCOUNT) is None
     relay.check_token(ACCOUNT, TOKEN)  # correct token passes
 
 
 def test_register_returns_the_protocol_parameters():
-    relay = BridgeRelay({ACCOUNT: TOKEN}, fresh_seconds=5, stale_seconds=15)
+    relay = relay_with_clock(fresh_seconds=5, stale_seconds=15)
     out = relay.register(ACCOUNT, TOKEN, SID, symbols=["XAUUSD"], terminal={"build": 4020})
     assert out["session_id"] == SID and out["restarted"] is False
     assert out["poll_interval_ms"] == 1000
     assert out["fresh_seconds"] == 5 and out["stale_seconds"] == 15
     assert relay.session_health(ACCOUNT) == "connected"
-    assert relay.sessions[ACCOUNT].symbols == ["XAUUSD"]
+    assert relay.get(ACCOUNT).symbols == ["XAUUSD"]
 
 
 def test_http_register_rejects_a_bad_token(client):
@@ -105,33 +149,33 @@ def test_command_is_delivered_exactly_once():
 
 
 def test_unacked_command_expires_and_is_never_resent():
-    relay = BridgeRelay({ACCOUNT: TOKEN}, command_ttl_seconds=30, ack_grace_seconds=20)
+    relay = relay_with_clock(command_ttl_seconds=30, ack_grace_seconds=20)
     relay.register(ACCOUNT, TOKEN, SID)
     relay.poll(SID, snapshot=snapshot())
     command = relay.enqueue(ACCOUNT, "order", {"symbol": "XAUUSD", "volume": 0.1})
     relay.poll(SID)  # delivered now
 
     # the EA goes silent past the grace window
-    relay.sessions[ACCOUNT].commands[command.id].delivered_at -= 60
+    relay.clock_for_tests.advance(60)
     after = relay.poll(SID)
     assert after["commands"] == []
     assert [c["id"] for c in after["expired_unacked"]] == [command.id]
-    assert relay.sessions[ACCOUNT].commands[command.id].state == EXPIRED
-    assert relay.sessions[ACCOUNT].expiries == 1
+    assert relay.command(ACCOUNT, command.id).state == EXPIRED
+    assert relay.get(ACCOUNT).expiries == 1
 
 
 def test_expired_command_ack_is_still_accepted_for_the_record():
     """A late ack is recorded (it may have executed) but never redispatched."""
-    relay = BridgeRelay({ACCOUNT: TOKEN}, ack_grace_seconds=0.01)
+    relay = relay_with_clock(ack_grace_seconds=0.01)
     relay.register(ACCOUNT, TOKEN, SID)
     relay.poll(SID, snapshot=snapshot())
     command = relay.enqueue(ACCOUNT, "close", {"ticket": "50001"})
     relay.poll(SID)
-    relay.sessions[ACCOUNT].commands[command.id].delivered_at -= 60
+    relay.clock_for_tests.advance(60)
     relay.poll(SID)  # sweeps it to expired
     late = relay.poll(SID, results=[{"id": command.id, "ok": True, "status": "closed"}])
     assert late["results"][0]["accepted"] is True
-    assert relay.sessions[ACCOUNT].commands[command.id].state == ACKED
+    assert relay.command(ACCOUNT, command.id).state == ACKED
 
 
 def test_duplicate_ack_is_idempotent():
@@ -146,8 +190,8 @@ def test_duplicate_ack_is_idempotent():
     assert first["results"][0]["accepted"] is True
     assert second["results"][0]["duplicate"] is True
     assert second["results"][0]["result"]["ticket"] == "55001"
-    assert relay.sessions[ACCOUNT].duplicates == 1
-    assert relay.sessions[ACCOUNT].commands[command.id].state == ACKED
+    assert relay.get(ACCOUNT).duplicates == 1
+    assert relay.command(ACCOUNT, command.id).state == ACKED
 
 
 def test_result_for_unknown_command_is_reported_not_swallowed():
@@ -156,11 +200,11 @@ def test_result_for_unknown_command_is_reported_not_swallowed():
     out = relay.poll(SID, results=[{"id": "CMD-NOPE", "ok": True}])
     assert out["results"][0]["accepted"] is False
     assert "unknown command" in out["results"][0]["reason"]
-    assert relay.sessions[ACCOUNT].unknown_results == 1
+    assert relay.get(ACCOUNT).unknown_results == 1
 
 
 def test_queue_cap_prevents_an_unbounded_backlog():
-    relay = BridgeRelay({ACCOUNT: TOKEN}, max_pending=2)
+    relay = relay_with_clock(max_pending=2)
     relay.register(ACCOUNT, TOKEN, SID)
     relay.poll(SID, snapshot=snapshot())
     relay.enqueue(ACCOUNT, "order", {"volume": 0.1})
@@ -180,10 +224,10 @@ def test_reconnect_discards_the_old_queue_and_snapshot():
     restarted = relay.register(ACCOUNT, TOKEN, "EA-NEW")
     assert restarted["restarted"] is True and restarted["generation"] == 1
     # the old command is not silently forgotten: it may already be live at the broker
-    assert [c.id for c in relay.orphaned] == [command.id]
-    assert relay.orphaned[0].state == ORPHANED
+    assert [c.id for c in relay.store.orphaned(ACCOUNT)] == [command.id]
+    assert relay.command(ACCOUNT, command.id).state == ORPHANED
     assert relay.status()["orphaned_commands"][0]["id"] == command.id
-    assert relay.sessions[ACCOUNT].snapshot == {}          # old state thrown away
+    assert relay.snapshot(ACCOUNT) == {}                   # old state thrown away
     assert relay.snapshot_age(ACCOUNT) is None
     with pytest.raises(BridgeError, match="unknown or superseded session"):
         relay.poll("EA-OLD")
@@ -194,13 +238,13 @@ def test_reconnect_discards_the_old_queue_and_snapshot():
 
 
 def test_stale_heartbeat_blocks_new_commands():
-    relay = BridgeRelay({ACCOUNT: TOKEN}, fresh_seconds=5, stale_seconds=15)
+    relay = relay_with_clock(fresh_seconds=5, stale_seconds=15)
     relay.register(ACCOUNT, TOKEN, SID)
-    relay.sessions[ACCOUNT].last_seen -= 8
+    relay.clock_for_tests.advance(8)
     assert relay.session_health(ACCOUNT) == "stale"
     with pytest.raises(BridgeError, match="is stale"):
         relay.enqueue(ACCOUNT, "order", {"volume": 0.1})
-    relay.sessions[ACCOUNT].last_seen -= 60
+    relay.clock_for_tests.advance(60)
     assert relay.session_health(ACCOUNT) == "disconnected"
     assert relay.age(ACCOUNT) > 15
 
@@ -225,8 +269,9 @@ def bridge(client, runtime):
     assert res.status_code == 200, res.text
     poll = client.post("/api/bridge/poll", json={"session_id": SID, "snapshot": snapshot()}, headers=AUTH)
     assert poll.status_code == 200, poll.text
-    yield {"session_id": SID, "relay": relay, "adapter": runtime.registry.get(ACCOUNT)}
-    relay.sessions.pop(ACCOUNT, None)
+    yield {"session_id": SID, "relay": relay, "adapter": runtime.registry.get(ACCOUNT),
+           "clock": runtime.bridge.clock}
+    relay.forget(ACCOUNT)
 
 
 def test_poll_requires_a_live_session(client):
@@ -277,9 +322,9 @@ def test_positions_are_replaced_not_merged(bridge):
 
 def test_old_snapshot_is_refused_not_served(bridge):
     adapter = bridge["adapter"]
-    session = bridge["relay"].sessions[ACCOUNT]
-    session.snapshot_at -= 120
-    session.last_seen -= 120
+    session = bridge["relay"].get(ACCOUNT)
+    bridge["relay"].store.save(replace(session, snapshot_at=session.snapshot_at - 120,
+                                       last_seen=session.last_seen - 120))
     with pytest.raises(BrokerError, match="old|stale"):
         adapter.account_info()
     with pytest.raises(BrokerError, match="old|stale"):
@@ -319,7 +364,7 @@ def test_order_round_trip_waits_for_the_ea(client, bridge):
     pending: list = []
     deadline = time.time() + 5
     while time.time() < deadline:
-        pending = [c for c in bridge["relay"].sessions[ACCOUNT].commands.values()
+        pending = [c for c in bridge["relay"].commands(ACCOUNT)
                    if c.state == "pending"]
         if pending:
             break
@@ -392,7 +437,7 @@ def test_cancel_drops_queued_commands(client, bridge):
     assert res.status_code == 200
     assert res.json()["dropped"][ACCOUNT] == 1
     assert all(c.state != "pending"
-               for c in bridge["relay"].sessions[ACCOUNT].commands.values())
+               for c in bridge["relay"].commands(ACCOUNT))
 
 
 def test_session_view_for_the_dashboard(client, bridge):
@@ -403,3 +448,92 @@ def test_session_view_for_the_dashboard(client, bridge):
     row = next(r for r in res.json()["bridges"] if r["account"] == ACCOUNT)
     assert row["session_id"] == SID and row["health"] == "connected"
     assert row["snapshot_age_seconds"] is not None
+
+
+# ------------------------------------------------------- several workers, one truth
+@pytest.fixture()
+def two_workers(tmp_path):
+    """Two relays on one database file — i.e. `uvicorn --workers 2` on this host.
+
+    The EA's poll can land on either worker, so the queue cannot live in one process.
+    """
+    path = tmp_path / "shared.sqlite3"
+    db_a, db_b = Database(path), Database(path)
+    clock = FakeClock()
+    worker_a = BridgeRelay({ACCOUNT: TOKEN}, db=db_a, clock=clock)
+    worker_b = BridgeRelay({ACCOUNT: TOKEN}, db=db_b, clock=clock)
+    yield {"a": worker_a, "b": worker_b, "clock": clock, "path": path}
+    db_a.close()
+    db_b.close()
+
+
+def test_a_command_queued_by_the_leader_is_delivered_through_another_worker(two_workers):
+    leader, other = two_workers["b"], two_workers["a"]
+    # the EA happened to register on worker A ...
+    leader.register(ACCOUNT, TOKEN, SID)
+    other.register(ACCOUNT, TOKEN, SID)          # same session, different process
+    other.poll(SID, snapshot=snapshot(), token=TOKEN)
+    # ... while the order is queued by the process that actually trades (B)
+    command = leader.enqueue(ACCOUNT, "order", {"symbol": "XAUUSD", "volume": 0.1})
+
+    delivered = other.poll(SID, token=TOKEN)
+    assert [c["id"] for c in delivered["commands"]] == [command.id]
+    # and B sees the acknowledgement that A received — one state, two processes
+    other.poll(SID, token=TOKEN, results=[{"id": command.id, "ok": True, "status": "filled",
+                                           "ticket": "56001"}])
+    assert leader.command(ACCOUNT, command.id).state == ACKED
+    assert leader.wait_result(ACCOUNT, command.id, timeout=0.1)["ticket"] == "56001"
+
+
+def test_two_workers_polling_at_once_deliver_the_command_once(two_workers):
+    worker_a, worker_b = two_workers["a"], two_workers["b"]
+    worker_a.register(ACCOUNT, TOKEN, SID)
+    worker_a.poll(SID, snapshot=snapshot(), token=TOKEN)
+    command = worker_a.enqueue(ACCOUNT, "order", {"volume": 0.1})
+
+    first = worker_a.poll(SID, token=TOKEN)
+    second = worker_b.poll(SID, token=TOKEN)
+    assert [c["id"] for c in first["commands"]] == [command.id]
+    assert second["commands"] == []          # claimed by A, never handed out twice
+
+
+def test_staleness_is_shared_not_per_worker(two_workers):
+    """A worker that never saw the EA must still know its data is too old to use."""
+    from integrations.brokers.bridge import BridgeBroker
+
+    worker_a, worker_b = two_workers["a"], two_workers["b"]
+    worker_a.register(ACCOUNT, TOKEN, SID)
+    worker_a.poll(SID, snapshot=snapshot(), token=TOKEN)
+    adapter_b = BridgeBroker({"id": "b2", "bridge_account": ACCOUNT, "symbols": {}}, worker_b)
+    assert adapter_b.health().value == "connected"
+    assert adapter_b.positions()[0].ticket == "50001"
+
+    two_workers["clock"].advance(20)
+    assert worker_b.session_health(ACCOUNT) == "disconnected"
+    assert adapter_b.health().value == "disconnected"
+    with pytest.raises(BrokerError, match="old|stale"):
+        adapter_b.positions()          # shared staleness, not a per-worker cache
+    with pytest.raises(BridgeError, match="is disconnected"):
+        worker_b.enqueue(ACCOUNT, "order", {"volume": 0.1})
+
+
+def test_reconnect_on_one_worker_discards_the_other_workers_queue(two_workers):
+    worker_a, worker_b = two_workers["a"], two_workers["b"]
+    worker_a.register(ACCOUNT, TOKEN, "EA-OLD")
+    worker_a.poll("EA-OLD", snapshot=snapshot(), token=TOKEN)
+    command = worker_a.enqueue(ACCOUNT, "order", {"serial": 1})
+
+    restarted = worker_b.register(ACCOUNT, TOKEN, "EA-NEW")
+    assert restarted["generation"] == 1
+    assert worker_a.command(ACCOUNT, command.id).state == ORPHANED
+    assert worker_a.snapshot(ACCOUNT) == {}
+    with pytest.raises(BridgeError, match="unknown or superseded session"):
+        worker_a.poll("EA-OLD", token=TOKEN)
+
+
+def test_status_reports_the_shared_store_and_drops_the_single_worker_warning(two_workers):
+    worker_a = two_workers["a"]
+    worker_a.register(ACCOUNT, TOKEN, SID)
+    status = worker_a.status()
+    assert status["store"] == "sqlite"
+    assert status["multi_worker_warning"] is None

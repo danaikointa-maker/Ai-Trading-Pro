@@ -103,7 +103,7 @@ def cancel_pending(runtime: TradingRuntime = Depends(get_runtime), user=Depends(
     """Drop everything not yet delivered — the money-side kill switch for the queue."""
     relay = _relay(runtime)
     dropped = {account: relay.cancel_pending(account, reason=f"cancelled by {user['email']}")
-               for account in list(relay.sessions)}
+               for account in relay.accounts}
     runtime.db.audit(user["email"], "bridge.cancel_pending", dropped)
     return {"dropped": dropped}
 
@@ -121,8 +121,7 @@ def my_session(runtime: TradingRuntime = Depends(get_runtime), user=Depends(curr
             "broker_id": adapter.id,
             "account": account,
             "health": adapter.health().value,
-            "session_id": (relay.sessions[account].session_id
-                           if account in relay.sessions else None),
+            "session_id": (session.session_id if (session := relay.get(account)) else None),
             "last_seen_age_seconds": relay.age(account),
             "snapshot_age_seconds": relay.snapshot_age(account),
             "symbols": getattr(adapter, "symbol_names", lambda: [])(),
