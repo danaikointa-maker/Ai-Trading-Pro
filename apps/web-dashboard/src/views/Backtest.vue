@@ -43,7 +43,7 @@
             {{ running ? `${job?.message || 'running'} ${job?.pct || 0}%` : 'Run backtest' }}
           </button>
           <p class="text-[9.5px] leading-relaxed text-muted">
-            ใช้ข้อมูลที่ระบบมี (simulated feed หรือ MT5 history) · แนะนำให้เปลี่ยนเป็น tick data จริงก่อนตัดสินใจ
+            ใช้ข้อมูลที่ระบบมี (simulated / replay จากไฟล์ที่นำเข้า / MT5 history) · แนะนำให้ใช้ข้อมูลจริงและ tick data ก่อนตัดสินใจ
           </p>
         </div>
       </section>
@@ -74,6 +74,46 @@
               :hint="`${report.metrics.trades} trades · overnight financing`"
             />
           </div>
+
+          <section v-if="report.diagnostics?.decision_points" class="panel">
+            <div class="panel-head">
+              <div class="panel-title">ทำไมได้ไม้เท่านี้</div>
+              <span class="chip">{{ report.diagnostics.no_trade_rate_basis }}</span>
+            </div>
+            <div class="flex flex-wrap gap-2 px-4 py-2.5 text-[10.5px] text-muted">
+              <span class="chip">วิเคราะห์ {{ fmt(report.diagnostics.analysed, 0) }}/{{ fmt(report.diagnostics.decision_points, 0) }} จุด</span>
+              <span class="chip chip-warn" :title="'ข้ามเพราะ higher-timeframe history ยังไม่พอ'">
+                ข้าม {{ fmt(report.diagnostics.no_context, 0) }} (history ไม่พอ)
+              </span>
+              <span class="chip">actionable {{ fmt(report.diagnostics.actionable, 0) }}</span>
+              <span class="chip">gate บล็อก {{ fmt(report.diagnostics.gate_blocked, 0) }}</span>
+              <span class="chip">fill drift {{ fmt(report.diagnostics.fill_skipped, 0) }}</span>
+              <span class="chip chip-up">เปิดไม้ {{ fmt(report.diagnostics.trades_opened, 0) }}</span>
+            </div>
+            <p class="px-4 pb-2.5 text-[9.5px] leading-relaxed text-muted">
+              จุดตัดสินใจที่ถูกข้ามเพราะข้อมูลยังไม่พอ <b>ไม่</b> ถูกนับเป็น “ไม่เทรด”
+              — no-trade rate คิดจากจุดที่วิเคราะห์จริงเท่านั้น รายงานเก่าก่อนมีช่องนี้ใช้ตัวหารแบบเดิม
+            </p>
+          </section>
+
+          <section v-if="report.dataset?.id" class="panel">
+            <div class="panel-head">
+              <div class="panel-title">ข้อมูลที่ใช้ตัดสิน</div>
+              <span class="chip chip-up" :title="`sha256 ${report.dataset.sha256}`">snapshot {{ report.dataset.id }}</span>
+            </div>
+            <div class="flex flex-wrap items-center gap-2 px-4 py-2.5 text-[10.5px] text-muted">
+              <span class="chip">{{ fmt(report.dataset.rows, 0) }} bars</span>
+              <span class="chip">{{ report.dataset.source }}</span>
+              <span class="chip">{{ datetime(report.dataset.created_at) }}</span>
+              <button class="btn ml-auto py-1 text-[10px]" :disabled="running" @click="rerunFromSnapshot">
+                รันซ้ำจาก snapshot นี้
+              </button>
+            </div>
+            <p class="px-4 pb-2.5 text-[9.5px] leading-relaxed text-muted">
+              ผลนี้ถูกคำนวณบนแท่งเทียนชุดนี้เท่านั้น (sha256 {{ String(report.dataset.sha256).slice(0, 12) }}…)
+              — กดปุ่มด้านขวาเพื่อรันซ้ำบนข้อมูลชุดเดิม ไม่ใช่ข้อมูลที่ feed ผลิตตอนนี้
+            </p>
+          </section>
 
           <div class="grid gap-3 lg:grid-cols-[minmax(0,1fr)_320px]">
             <section class="panel">
@@ -189,14 +229,24 @@ async function loadReports() {
   }
 }
 
+async function rerunFromSnapshot() {
+  const id = report.value?.dataset?.id
+  if (!id) return
+  await startBacktest({ ...form, symbol: report.value.symbol, snapshot_id: id })
+}
+
 async function run() {
+  const payload = { ...form }
+  if (!payload.spread_points) delete payload.spread_points
+  if (!payload.commission_per_lot) delete payload.commission_per_lot
+  await startBacktest(payload)
+}
+
+async function startBacktest(payload) {
   running.value = true
   try {
-    const payload = { ...form }
-    if (!payload.spread_points) delete payload.spread_points
-    if (!payload.commission_per_lot) delete payload.commission_per_lot
     const started = await api.post('/api/backtests', payload)
-    toast('เริ่มทดสอบย้อนหลัง…', 'info')
+    toast(payload.snapshot_id ? 'รันซ้ำบน snapshot เดิม…' : 'เริ่มทดสอบย้อนหลัง…', 'info')
     timer = setInterval(async () => {
       const j = await api.get(`/api/backtests/jobs/${started.job_id}`).catch(() => null)
       job.value = j

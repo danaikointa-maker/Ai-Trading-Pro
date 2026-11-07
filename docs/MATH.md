@@ -39,8 +39,19 @@ percent : swap_night = notional × pct / 100 / 360 × lot        # ดอกเ�
 - คิด **คืนละครั้ง** ทุกเที่ยงคืน UTC และ **วันพุธคูณ 3** (โบรกเกอร์รวม funding ของสุดสัปดาห์ไว้คืนพุธ)
   ✅ `swap_night_multiplier()` ใน `models.py` ใช้ร่วมกันทั้ง paper และ backtest
 - คิดบน volume ที่ยังเปิดอยู่ ณ คืนนั้น (partial close แล้วลดตามจริง)
-- MT5: `swap_mode` ของเทอร์มินัลถูกแปลงเป็นหน่วยของเรา (`_swap_fields`)
-  1 → points, 3/5 → percent, 2 → money (แปลง profit currency → สกุลบัญชี), 6/7 (reopen) → 0
+- MT5: `swap_mode` ของเทอร์มินัลถูกแปลงเป็นหน่วยของเรา (`_swap_fields`) ตามเลข enum จริง
+  | mode | ความหมาย | แปลงเป็น |
+  |---|---|---|
+  | 1 | POINTS | points |
+  | 5 | INTEREST_CURRENT (% ของราคา ณ วันคิด) | percent |
+  | 6 | INTEREST_OPEN (% ของราคาเปิดโพซิชัน) | percent (คิดบนราคา ณ วันคิด — ประมาณ, ผลน้อย) |
+  | 2 | CURRENCY_SYMBOL (สกุลฐาน) | money × rate ของสกุลฐาน (แปลงไม่ได้ → 0 ไม่เดา 1.0) |
+  | 9 | CURRENCY_PROFIT | money × quote_to_account_rate |
+  | 3 / 4 | CURRENCY_MARGIN / DEPOSIT | money (สกุลบัญชีอยู่แล้ว) |
+  | 7 / 8 | REOPEN_CURRENT / REOPEN_BID | 0 — ส่วนต่างราคาตอน reopen เป็นค่าที่โบรกเกอร์กำหนด ตรวจไม่ได้ถ้าไม่มีเทอร์มินัล |
+  | 0 | DISABLED | 0 |
+
+  ✅ `tests/test_mt5_swap_modes.py` (เดิม 3/5 ถูกอ่านเป็น percent ซึ่งทำให้ swap แบบ money พองขึ้นตาม notional และ 6 ถูกทำให้เป็น 0)
 - รายงานแยกเป็นฟิลด์ `swap` ใน `TradeRecord` ไม่ปนกับ `costs` (ค่าคอมมิชชัน)
   และ `gross_pnl - pnl = costs - swap` ✅ `tests/test_swap.py`
 
@@ -130,7 +141,8 @@ expectancy_r        = mean(pnl / risk_at_fill)     # risk ที่วัดต�
 directional_accuracy= สัดส่วนไม้ที่ราคาไปถูกทาง (points > 0) ไม่นับต้นทุน ✅
 tp_before_sl_rate   = สัดส่วนไม้ที่แตะ target อย่างน้อย TP1 ก่อนค่อยโดน stop ✅
 max_drawdown_pct    = max |equity − peak| / peak
-no_trade_rate       = 1 − trades / decisions
+no_trade_rate       = 1 − trades / decision points ที่ **วิเคราะห์แล้ว**
+                      (จุดที่ข้ามเพราะ history ยังไม่พอ *ไม่* ถูกนับในตัวหาร — รายงานแยกใน `diagnostics.no_context`)
 sharpe              = mean(bar returns)/std × sqrt(252×288)   (แท่ง 5 นาที)
 recovery_factor     = net / (max_dd × starting_balance)
 ```
@@ -147,7 +159,7 @@ recovery_factor     = net / (max_dd × starting_balance)
 | ค่าธรรมเนียม | ใช้ `commission_per_lot_round_turn` จาก spec (ถ้าโบรกเกอร์ไม่ให้มา = 0) |
 | swap | คิดตามโหมดที่โบรกเกอร์ประกาศ (money / points / percent) |
 | สกุลเงินกำไร ≠ USD | แปลงด้วย `quote_to_account_rate` แล้ว ✅ (ถ้า resolve ไม่ได้ = บล็อกการคำนวณ lot) |
-| walk-forward | แบ่ง out-of-sample เป็น fold ตามเวลาและบังคับให้ผ่านเกณฑ์ใน ≥75% ของ fold แต่ **ไม่ฝึกใหม่ต่อ fold** — วัดความเสถียร ไม่ใช่ walk-forward เต็มรูปแบบ |
+| walk-forward | แบ่งข้อมูลเป็น fold ตามเวลาและ **ฝึกใหม่ทุก fold** (expanding window) ต้องผ่านเกณฑ์ใน ≥75% ของ fold; ยังประเมินบน feed จำลอง |
 | Sharpe | annualise จากแท่ง 5 นาที; ช่วงที่ไม่มีไม้จะได้ return = 0 ทำให้ค่าสูงเกินจริงได้ |
 
 ## 9b. เกณฑ์อนุมัติโมเดล (fold consistency)
@@ -160,10 +172,30 @@ approved_horizon = (fold_pass_rate >= 0.75)
                  ∧ (Brier improvement รวม >= 0.02)
 ```
 
-- fold = บล็อกต่อเนื่องตามเวลาภายใน out-of-sample set (`split_folds`, ไม่สุ่ม)
+- fold = บล็อกต่อเนื่องตามเวลาภายในข้อมูล (`split_folds`, ไม่สุ่ม)
 - เดิมตัดสินจาก slice เดียว → โมเดลที่ฟลุ๊กเดือนเดียวก็ผ่าน ทำให้ `approved` แกว่งระหว่างรอบ
 - ตอนนี้ **เข้มขึ้น** ไม่ใช่ผ่อน: ต้องผ่านทั้งค่ากลางและสัดส่วน fold
-- ข้อจำกัดที่ยังเหลือ: ไม่ได้ retrain ต่อ fold (ดู `metrics.validation` ในผลเทรน)
+
+### วิธีสร้าง fold (walk-forward)
+
+```
+blocks = split_folds(n_rows, folds + 1)      # บล็อกแรก = ช่วงฝึกเริ่มต้น
+for block_i in blocks[1:]:
+    train_end = block_i.start × (1 − calibration_fraction)
+    ถ้า train_end < walk_forward_min_train_rows → ข้าม fold (ประวัติไม่พอ)
+    fit classifier บน rows[:train_end]        ← ฝึกใหม่ทุก fold
+    score บน rows[block_i]                    ← ข้อมูลที่โมเดลนั้นไม่เคยเห็น
+```
+
+- ประเมินเฉพาะ **classification** (directional accuracy + Brier เทียบ prior ของ training window)
+  ส่วน quantile regressors ไม่ถูก refit ใน fold (ไม่ได้ใช้ตัดสิน gate) → fold ละ 1 fit
+- ถ้าข้อมูลไม่พอจนได้ fold < 2 จะถอยไปใช้วิธี "แบ่ง slice ของโมเดลที่ fit แล้ว"
+  และ `metrics.validation_method` จะบอกว่าใช้วิธีไหน
+- **ต้องมี fold อย่างน้อย `min_validation_folds` (3)** ถึงจะอนุมัติได้
+  เหตุผล: กติกา "ผ่าน ≥75% ของ fold" ไม่มีความหมายเมื่อมี fold เดียว — 100% ของหนึ่ง블็อก
+  คือหนึ่งบล็อกที่ผ่าน และ median ก็คือบล็อกนั้นเอง (เคยเกิดจริงกับข้อมูล 9,000 แท่งที่ให้ fold เดียวแล้ว approved)
+  ถ้า fold ไม่พอ ระบบตอบว่า *หลักฐานไม่พอ* ไม่ใช่ *ผ่าน*
+- ยังประเมินบน **feed จำลอง** — ตัวเลขบอกได้ว่าไปป์ไลน์ถูก ไม่ได้บอกว่าโมเดลมี edge จริง
 
 ## 10. บั๊กสูตรที่แก้ในรอบนี้
 

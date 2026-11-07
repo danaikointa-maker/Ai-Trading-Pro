@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import json
 import time
+from services.ai_forecast.approval import APPROVAL_RULE_VERSION
 from pathlib import Path
 from typing import Any
 
@@ -66,6 +67,17 @@ class ModelRegistry:
                 arrays = {k: data[k] for k in data.files}
         return payload, arrays
 
+    def latest(self) -> str | None:
+        """Newest model on disk, approved or not.
+
+        The predictor loads this so the numbers on screen belong to the most recent
+        training run. Loading only the newest *approved* model went wrong twice: after
+        a tighter approval rule it kept serving a stale model's metrics, and after a
+        fresh (rejected) run it still showed the previous one's.
+        """
+        row = self.db.query_one("SELECT version FROM models ORDER BY created_at DESC LIMIT 1")
+        return row["version"] if row else None
+
     def latest_approved(self) -> str | None:
         row = self.db.query_one(
             "SELECT version FROM models WHERE approved = 1 ORDER BY created_at DESC LIMIT 1")
@@ -83,7 +95,9 @@ class ModelRegistry:
                 version=row["version"],
                 created_at=int(row["created_at"] or 0),
                 method=row["method"] or "",
-                approved=bool(row["approved"]),
+                # demote approvals granted under an older rule, same as the predictor
+                approved=bool(row["approved"]) and int(metrics.get("approval_rule") or 0)
+                >= APPROVAL_RULE_VERSION,
                 horizons=[int(h) for h in metrics.get("horizons", {}).keys()],
                 metrics=metrics,
                 samples=int(row["samples"] or 0),

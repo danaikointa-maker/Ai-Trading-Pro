@@ -11,8 +11,11 @@ buckets: a burst is allowed, sustained abuse is not.
 """
 from __future__ import annotations
 
+import sqlite3
+import threading
 import time
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Any, Callable
 
 # rule -> {limit, window_seconds}; `default` covers everything not listed below.
@@ -44,15 +47,143 @@ class _Bucket:
     updated: float
 
 
-class RateLimiter:
-    """In-process token buckets keyed by (rule, identity)."""
+class MemoryBucketStore:
+    """Token buckets in this process only (the default).
 
-    def __init__(self, rules: dict[str, dict[str, Any]] | None = None,
-                 clock: Callable[[], float] = time.monotonic, max_keys: int = 4096) -> None:
-        self.rules: dict[str, dict[str, Any]] = {**DEFAULT_RULES, **(rules or {})}
-        self.clock = clock
+    Correct for a single uvicorn worker; with several workers each one would hand
+    out its own full budget, so the effective limit multiplies by the worker count.
+    """
+
+    wall_clock = False
+
+    def __init__(self, max_keys: int = 4096) -> None:
         self.max_keys = max_keys
         self._buckets: dict[tuple[str, str], _Bucket] = {}
+
+    def spend(self, key: tuple[str, str], limit: float, rate: float,
+              now: float) -> tuple[bool, float]:
+        bucket = self._buckets.get(key)
+        if bucket is None:
+            if len(self._buckets) >= self.max_keys:
+                self._evict()
+            bucket = _Bucket(tokens=limit, updated=now)
+            self._buckets[key] = bucket
+        else:
+            bucket.tokens = min(limit, bucket.tokens + max(0.0, now - bucket.updated) * rate)
+            bucket.updated = now
+        if bucket.tokens >= 1.0:
+            bucket.tokens -= 1.0
+            return True, bucket.tokens
+        return False, bucket.tokens
+
+    def _evict(self) -> None:
+        ordered = sorted(self._buckets.items(), key=lambda item: item[1].updated)
+        for key, _ in ordered[: max(1, len(ordered) // 2)]:
+            self._buckets.pop(key, None)
+
+    def reset(self) -> None:
+        self._buckets.clear()
+
+    @property
+    def tracked(self) -> int:
+        return len(self._buckets)
+
+
+class SqliteBucketStore:
+    """Token buckets in a small SQLite file, shared by every worker on this host.
+
+    Each spend is one `BEGIN IMMEDIATE` transaction so two workers cannot both read
+    the same token and both spend it. That costs a write per limited request — fine
+    for a dashboard, and the reason this is opt-in rather than the default. Use a
+    separate file from the application database to keep the hot path off it.
+    """
+
+    wall_clock = True
+    PRUNE_EVERY = 512
+    PRUNE_AGE = 6 * 3600
+
+    def __init__(self, path: str | Path, busy_timeout: float = 2.0) -> None:
+        self.path = Path(path)
+        self.path.parent.mkdir(parents=True, exist_ok=True)
+        self._lock = threading.Lock()
+        self._spends = 0
+        self._conn = sqlite3.connect(self.path, timeout=busy_timeout, check_same_thread=False)
+        self._conn.execute("PRAGMA journal_mode=WAL")
+        self._conn.execute("PRAGMA synchronous=NORMAL")
+        self._conn.execute(
+            "CREATE TABLE IF NOT EXISTS buckets("
+            " key TEXT PRIMARY KEY, tokens REAL NOT NULL, updated REAL NOT NULL)")
+
+    def spend(self, key: tuple[str, str], limit: float, rate: float,
+              now: float) -> tuple[bool, float]:
+        k = "\x1f".join(key)
+        with self._lock:
+            self._conn.execute("BEGIN IMMEDIATE")
+            try:
+                row = self._conn.execute(
+                    "SELECT tokens, updated FROM buckets WHERE key = ?", (k,)).fetchone()
+                if row is None:
+                    tokens = limit
+                    self._conn.execute(
+                        "INSERT INTO buckets(key, tokens, updated) VALUES(?,?,?)", (k, tokens, now))
+                else:
+                    tokens = min(limit, float(row[0]) + max(0.0, now - float(row[1])) * rate)
+                allowed = tokens >= 1.0
+                if allowed:
+                    tokens -= 1.0
+                self._conn.execute(
+                    "UPDATE buckets SET tokens = ?, updated = ? WHERE key = ?", (tokens, now, k))
+                self._spends += 1
+                if self._spends % self.PRUNE_EVERY == 0:
+                    self._conn.execute("DELETE FROM buckets WHERE updated < ?",
+                                       (now - self.PRUNE_AGE,))
+                self._conn.commit()
+            except Exception:
+                self._conn.rollback()
+                raise
+        return allowed, tokens
+
+    def reset(self) -> None:
+        with self._lock:
+            self._conn.execute("DELETE FROM buckets")
+            self._conn.commit()
+
+    @property
+    def tracked(self) -> int:
+        with self._lock:
+            row = self._conn.execute("SELECT COUNT(*) FROM buckets").fetchone()
+        return int(row[0])
+
+    def close(self) -> None:
+        with self._lock:
+            self._conn.close()
+
+
+def make_store(kind: str | None, path: str | Path | None = None,
+               max_keys: int = 4096) -> MemoryBucketStore | SqliteBucketStore:
+    """Build the store named in config. Unknown kinds fail loudly, not silently."""
+    name = (kind or "memory").strip().lower()
+    if name in ("memory", "in-process", "inprocess", "local"):
+        return MemoryBucketStore(max_keys=max_keys)
+    if name == "sqlite":
+        if not path:
+            raise ValueError("ratelimit store 'sqlite' needs a path")
+        return SqliteBucketStore(path)
+    raise ValueError(f"unknown ratelimit store {kind!r} — use 'memory' or 'sqlite'")
+
+
+class RateLimiter:
+    """Token buckets keyed by (rule, identity), backed by a pluggable store."""
+
+    def __init__(self, rules: dict[str, dict[str, Any]] | None = None,
+                 clock: Callable[[], float] | None = None, max_keys: int = 4096,
+                 store: MemoryBucketStore | SqliteBucketStore | None = None) -> None:
+        self.rules: dict[str, dict[str, Any]] = {**DEFAULT_RULES, **(rules or {})}
+        self.store = store if store is not None else MemoryBucketStore(max_keys=max_keys)
+        # A shared store is read by other processes, so it must key on a clock they
+        # all agree about; only the in-process store can use the cheap monotonic one.
+        self.clock = clock or (time.time if getattr(self.store, "wall_clock", False)
+                               else time.monotonic)
 
     # ------------------------------------------------------------------ rules
     @staticmethod
@@ -75,38 +206,20 @@ class RateLimiter:
         """Spend one token. Returns (allowed, remaining, retry_after_seconds)."""
         limit, window = self.limit_of(rule)
         rate = limit / window
-        now = self.clock()
-        key = (rule, identity)
-        bucket = self._buckets.get(key)
-        if bucket is None:
-            if len(self._buckets) >= self.max_keys:
-                self._evict()
-            bucket = _Bucket(tokens=limit, updated=now)
-            self._buckets[key] = bucket
-        else:
-            bucket.tokens = min(limit, bucket.tokens + max(0.0, now - bucket.updated) * rate)
-            bucket.updated = now
-
-        if bucket.tokens >= 1.0:
-            bucket.tokens -= 1.0
-            return True, int(bucket.tokens), 0.0
-
+        allowed, tokens = self.store.spend((rule, identity), limit, rate, self.clock())
+        if allowed:
+            return True, int(tokens), 0.0
         # Never report 0 seconds: the caller would retry tighter than the refill.
-        retry_after = min(window, max(rate and (1.0 - bucket.tokens) / rate, 1.0))
+        retry_after = min(window, max((1.0 - tokens) / rate, 1.0))
         return False, 0, retry_after
 
     # ------------------------------------------------------------------ upkeep
-    def _evict(self) -> None:
-        ordered = sorted(self._buckets.items(), key=lambda item: item[1].updated)
-        for key, _ in ordered[: max(1, len(ordered) // 2)]:
-            self._buckets.pop(key, None)
-
     def reset(self) -> None:
-        self._buckets.clear()
+        self.store.reset()
 
     @property
     def tracked(self) -> int:
-        return len(self._buckets)
+        return self.store.tracked
 
 
 class RateLimitMiddleware:

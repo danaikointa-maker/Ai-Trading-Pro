@@ -42,6 +42,12 @@ from packages.shared_schemas.models import (
 from packages.shared_schemas.settings import Settings
 from services.ai_forecast.pathprob import PathProbabilityTable
 from services.backtest_engine.metrics import compute_metrics, verdict
+
+# A decision needs warmed-up indicators on M5 *and* enough history to score folds:
+# below this the engine cannot produce an honest number, only a traceback.
+WARMUP_M5_BARS = 320
+MIN_BARS = 1200
+MIN_M1_BARS = int((WARMUP_M5_BARS + 20) * 5)
 from services.market_data.simulator import resample
 from services.risk_engine.engine import RiskEngine
 from services.risk_engine.planner import TradePlanner
@@ -112,20 +118,30 @@ class Backtester:
 
     # ------------------------------------------------------------------- run
     def run(self, m1: pd.DataFrame, spec: SymbolSpec, request: BacktestRequest,
-            broker_id: str = "connext-demo") -> BacktestReport:
+            broker_id: str = "connext-demo",
+            data_note: str = "",
+            dataset: dict[str, Any] | None = None) -> BacktestReport:
         started = time.time()
         spread_points = float(request.spread_points if request.spread_points is not None
                               else spec.spread_typical_points)
         commission = float(request.commission_per_lot if request.commission_per_lot is not None
                            else spec.commission_per_lot_round_turn)
-        m1 = m1.tail(max(1200, min(20000, request.bars))).reset_index(drop=True)
+        m1 = m1.tail(max(MIN_BARS, min(20000, request.bars))).reset_index(drop=True)
         m5 = enrich(resample(m1, "M5"))
+        if len(m5) <= WARMUP_M5_BARS + 10:
+            # Without this the failure was "single positional indexer is out-of-bounds",
+            # which tells the operator nothing about what to change.
+            needed = int((WARMUP_M5_BARS + 20) * 5)
+            raise ValueError(
+                f"not enough bars: {len(m1)} M1 bars give only {len(m5)} M5 bars, and the "
+                f"engine needs more than {WARMUP_M5_BARS + 10} to warm up. "
+                f"Ask for at least {needed} M1 bars.")
         m15 = enrich(resample(m1, "M15"))
         h1 = enrich(resample(m1, "H1"))
         h4 = enrich(resample(m1, "H4"))
         m1e = enrich(m1)
         n = len(m5)
-        warmup = 320
+        warmup = WARMUP_M5_BARS
         horizon_bars = [1, 3, 6, 12, 48]
         train_cut = int(n * 0.6)
         table = None
@@ -145,7 +161,15 @@ class Backtester:
             "kill": False, "kill_reason": "", "day_pnl": 0.0,
         }
         pos: SimPosition | None = None
+        # `decisions` is the denominator of no_trade_rate, so it may only count the
+        # points where analysis actually ran. Points skipped for lack of
+        # higher-timeframe history are a data limitation, not a trading decision,
+        # and are reported separately instead of quietly diluting the rate.
         decisions = 0
+        decision_points = 0
+        no_context = 0
+        actionable = 0
+        gate_blocked = 0
         skipped = 0
         last_ctx = None
         fold_marks: list[dict[str, Any]] = []
@@ -203,10 +227,12 @@ class Backtester:
             # ---------------- decision
             if i % self.decision_stride != 0 or pos is not None:
                 continue
-            decisions += 1
+            decision_points += 1
             ctx = self._context(m5, m15, h1, h4, m1e, i, spec, spread_points, broker_id)
             if ctx is None:
+                no_context += 1
                 continue
+            decisions += 1
             last_ctx = ctx
             price = float(bar["c"])
             horizon_choice = 30
@@ -218,6 +244,7 @@ class Backtester:
                                        Health.connected, forecast, equity, now=bar_time)
             if signal.action not in (SignalAction.buy, SignalAction.sell) or signal.plan is None:
                 continue
+            actionable += 1
             risk_state = RiskState(
                 balance=balance, equity=equity, peak_equity=sim["peak"],
                 daily_pnl=round(equity - sim["day_start_equity"], 2),
@@ -235,6 +262,7 @@ class Backtester:
                 Health.connected, False,
                 ctx.snapshot.indicators.atr14 / price * 100 if price else 0.0)
             if not gate.allow:
+                gate_blocked += 1
                 continue
 
             # ---------------- open on the next bar's open
@@ -348,12 +376,26 @@ class Backtester:
                 "forecast component is a deterministic rule proxy and is discounted as unvalidated.",
                 "TP-before-SL probability table is fitted on the first 60% of the sample and reused "
                 "out-of-sample, so it is mildly in-sample for early folds.",
-                f"Decisions every {self.decision_stride * 5} minutes of market time; "
-                f"{len(trades)} trades from {decisions} decision points.",
-                "Simulated feed data — replace with MT5 tick history before trusting any number here.",
+                f"Decisions every {self.decision_stride * 5} minutes of market time: "
+                f"analysis ran on {decisions} of {decision_points} decision points "
+                f"({no_context} skipped — not enough higher-timeframe history yet); "
+                f"{actionable} were actionable, the risk gate blocked {gate_blocked}, "
+                f"{skipped} were skipped on fill drift, and {len(trades)} trades opened.",
+                data_note or "Bar data: source not recorded — treat these numbers as unverified.",
                 *gap_notes,
             ],
             verdict=verdict(metrics),
+            dataset=dataset or {},
+            diagnostics={
+                "decision_points": decision_points,
+                "analysed": decisions,
+                "no_context": no_context,
+                "actionable": actionable,
+                "gate_blocked": gate_blocked,
+                "fill_skipped": skipped,
+                "trades_opened": len(trades),
+                "no_trade_rate_basis": "trades / analysed decision points",
+            },
         )
         del started
         return report

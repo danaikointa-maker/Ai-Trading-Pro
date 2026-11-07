@@ -17,7 +17,7 @@ paths:
   logs: ${NO7_LOG_DIR:storage/logs}
 
 market_data:
-  feed_mode: ${NO7_FEED_MODE:simulate}     # simulate | mt5
+  feed_mode: ${NO7_FEED_MODE:simulate}     # simulate | mt5 | replay (imported candles)
   default_symbol: XAUUSD
   default_broker: connext-demo
   timeframes: [M1, M5, M15, H1, H4]
@@ -31,6 +31,16 @@ market_data:
     tick_seconds: 0.5
     news_shock_probability: 0.0015          # per bar
     regime_duration_bars: [180, 900]
+  # feed_mode: replay -> walk real candles imported with scripts/import_candles.py.
+  # When the file runs out the clock stops and the feed reports `exhausted`; it never
+  # invents bars past the end of the data.
+  replay:
+    dataset_dir: storage/datasets
+    timeframe: M1
+    warmup_bars: 6000                       # bars visible to analysis before replay starts
+    speed_minutes_per_second: 6.0           # market minutes per real second
+    tick_seconds: 0.5
+    loop: false                             # true replays from the start again (never mixes with the old tail)
 
 ai:
   enabled: true
@@ -43,7 +53,10 @@ ai:
     min_directional_accuracy: 0.52
     min_brier_improvement: 0.02
     validation_folds: 4                    # chronological blocks inside the OOS set
-    min_fold_pass_rate: 0.75               # must pass the same gates in most blocks
+    min_fold_pass_rate: 0.75
+    min_validation_folds: 3                # a majority of one fold is one fold — no approval               # must pass the same gates in most blocks
+    walk_forward_folds: 3                  # refit per fold (0 = score slices of one model)
+    walk_forward_min_train_rows: 900       # skip folds with less history than this
     quantiles: [0.1, 0.25, 0.5, 0.75, 0.9]
   forecast:
     deadband_atr: 0.25                      # |ret| < x*ATR => sideways class
@@ -68,10 +81,19 @@ execution:
   verify_after_send: true
 
 alerts:
-  channels: [inapp]
-  telegram_enabled: false
-  line_enabled: false
+  # In-app alerts are always on. External channels are opt-in: an outbound
+  # message leaves this machine, so it needs a token *and* an explicit enable.
+  # Tokens are read from env only and never written to config or API responses.
+  channels: [inapp]                        # add telegram / line / webhook to enable
   min_score: 70
+  dedupe_seconds: 60                       # identical title+symbol inside this window is skipped
+  timeout_seconds: 5
+  telegram_enabled: ${NO7_TELEGRAM_ENABLED:false}   # needs TELEGRAM_BOT_TOKEN + chat id
+  telegram_chat_id: ${NO7_TELEGRAM_CHAT_ID:}
+  line_enabled: ${NO7_LINE_ENABLED:false}          # needs LINE_CHANNEL_TOKEN + target id
+  line_target_id: ${NO7_LINE_TARGET_ID:}
+  webhook_enabled: ${NO7_WEBHOOK_ENABLED:false}    # needs NO7_WEBHOOK_URL
+  webhook_url: ${NO7_WEBHOOK_URL:}
 
 # WebSocket: a light frame every second, a full payload (with analysis/forecast)
 # at least this often so those panels never freeze.
@@ -82,6 +104,11 @@ ws:
 # about capacity, not credentials. `default` covers GETs and everything unlisted.
 ratelimit:
   enabled: true
+  # memory = buckets live in this process (default, one uvicorn worker).
+  # sqlite = buckets live in a small SQLite file, so several workers on this host
+  #          share one budget. Costs a write per limited request; the file defaults
+  #          to storage/db/ratelimit.sqlite3 (override with store_path).
+  store: memory
   rules:
     order: {limit: 10, window_seconds: 60}
     explain: {limit: 20, window_seconds: 60}

@@ -152,8 +152,9 @@ class MT5Broker(BrokerAdapter):
         if not info.visible:
             mt5.symbol_select(broker_symbol, True)
         rate, rate_source = self._quote_rate(str(info.currency_profit))
+        base_rate, base_source = self._quote_rate(str(getattr(info, "currency_base", "") or ""))
         return SymbolSpec(
-            **self._swap_fields(info, rate),
+            **self._swap_fields(info, rate, base_rate if base_source != "unknown" else None),
             symbol=symbol,
             description=info.description,
             quote_to_account_rate=rate,
@@ -173,29 +174,70 @@ class MT5Broker(BrokerAdapter):
             source="broker",
         )
 
-    @staticmethod
-    def _swap_fields(info: Any, rate: float) -> dict[str, Any]:
-        """Translate MT5's swap_mode into our money/points/percent contract.
+    # ENUM_SYMBOL_SWAP_MODE as MT5 numbers it. The numbers are not a detail: read
+    # "money per lot" as "percent per year" and the cost is multiplied by the whole
+    # notional, read a reopen price shift as money and a dollar figure appears from
+    # nowhere. Named constants, so the mapping cannot drift silently again.
+    SWAP_MODE_DISABLED = 0
+    SWAP_MODE_POINTS = 1
+    SWAP_MODE_CURRENCY_SYMBOL = 2
+    SWAP_MODE_CURRENCY_MARGIN = 3
+    SWAP_MODE_CURRENCY_DEPOSIT = 4
+    SWAP_MODE_INTEREST_CURRENT = 5
+    SWAP_MODE_INTEREST_OPEN = 6
+    SWAP_MODE_REOPEN_CURRENT = 7
+    SWAP_MODE_REOPEN_BID = 8
+    SWAP_MODE_CURRENCY_PROFIT = 9
 
-        MT5 quotes swap in four different units; taking `swap_long` at face value
-        without knowing the mode turns a points figure into dollars or vice versa.
-        Modes 6/7 (reopen) have no equivalent here, so the swap is reported as
-        zero rather than guessed.
+    @classmethod
+    def _swap_fields(cls, info: Any, rate: float,
+                     base_rate: float | None = None) -> dict[str, Any]:
+        """Translate MT5's `swap_mode` into our money/points/percent contract.
+
+        MT5 quotes swap in nine units and they are not interchangeable, so the mode
+        decides what the numbers mean:
+
+        * 1 points            -> points per lot per night
+        * 5/6 interest        -> annual % of the instrument price / open price
+        * 2 currency symbol   -> money in the symbol's *base* currency
+        * 9 currency profit   -> money in the profit currency
+        * 3 margin / 4 deposit-> money already in the account currency
+        * 7/8 reopen          -> a price shift applied on reopen; broker-specific
+                                 and unobservable without a terminal, so zero
+        * 0 disabled          -> zero
+
+        Two approximations are deliberate and stated rather than hidden: modes 5/6
+        are charged on the price at rollover (INTEREST_OPEN asks for the position's
+        open price, which our spec does not carry), and any mode we cannot convert
+        to the account currency gives zero instead of a wrong magnitude.
         """
         mode = int(getattr(info, "swap_mode", 0) or 0)
         long_raw = float(getattr(info, "swap_long", 0.0) or 0.0)
         short_raw = float(getattr(info, "swap_short", 0.0) or 0.0)
-        if mode == 1:  # SYMBOL_SWAP_MODE_POINTS
-            return {"swap_mode": "points", "swap_long_points": long_raw, "swap_short_points": short_raw}
-        if mode in (3, 5):  # INTEREST_CURRENT / INTEREST_OPEN -> annual %
-            return {"swap_mode": "percent", "swap_long_pct": long_raw, "swap_short_pct": short_raw}
-        if mode == 2:  # CURRENCY_SYMBOL -> profit currency, convert to account
+        zero = {"swap_mode": "money", "swap_long_per_lot": 0.0, "swap_short_per_lot": 0.0}
+
+        if mode == cls.SWAP_MODE_POINTS:
+            return {"swap_mode": "points", "swap_long_points": long_raw,
+                    "swap_short_points": short_raw}
+        if mode in (cls.SWAP_MODE_INTEREST_CURRENT, cls.SWAP_MODE_INTEREST_OPEN):
+            return {"swap_mode": "percent", "swap_long_pct": long_raw,
+                    "swap_short_pct": short_raw}
+        if mode == cls.SWAP_MODE_CURRENCY_SYMBOL:
+            if base_rate is None or base_rate <= 0:
+                return dict(zero)          # base currency unknown: do not apply 1.0
+            return {"swap_mode": "money", "swap_long_per_lot": long_raw * base_rate,
+                    "swap_short_per_lot": short_raw * base_rate}
+        if mode == cls.SWAP_MODE_CURRENCY_PROFIT:
             return {"swap_mode": "money", "swap_long_per_lot": long_raw * rate,
                     "swap_short_per_lot": short_raw * rate}
-        if mode in (6, 7):  # REOPEN_* -> unsupported, do not invent a number
-            return {"swap_mode": "money", "swap_long_per_lot": 0.0, "swap_short_per_lot": 0.0}
-        # 0 disabled / 4 margin currency -> already account currency
-        return {"swap_mode": "money", "swap_long_per_lot": long_raw, "swap_short_per_lot": short_raw}
+        if mode in (cls.SWAP_MODE_DISABLED, cls.SWAP_MODE_CURRENCY_MARGIN,
+                    cls.SWAP_MODE_CURRENCY_DEPOSIT):
+            # margin / deposit currency is the account currency in every deployment
+            # we support, so the figures already need no conversion
+            return {"swap_mode": "money", "swap_long_per_lot": long_raw,
+                    "swap_short_per_lot": short_raw}
+        # 7/8 reopen and anything newer than we know: zero, never face value
+        return dict(zero)
 
     def _quote_rate(self, profit_currency: str) -> tuple[float, str]:
         """Resolve profit currency -> account currency using visible MT5 quotes."""

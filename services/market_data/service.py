@@ -61,10 +61,13 @@ class MarketDataService:
         last_t = int(raw["t"].iloc[-1]) if len(raw) else 0
         cached = self._cache.get(key)
         if cached and not force and cached[0] == last_t and len(cached[1]) >= min(limit, len(raw)):
-            return cached[1].copy()
+            # The cache may hold a longer frame than this caller asked for (analysis
+            # asks for 600 bars, /api/market/candles may ask for 20). Returning the
+            # whole cache ignored `limit` and shipped 181 candles for limit=20.
+            return cached[1].tail(limit).reset_index(drop=True).copy()
         enriched = enrich(raw)
         self._cache[key] = (last_t, enriched)
-        return enriched.copy()
+        return enriched.tail(limit).reset_index(drop=True).copy()
 
     def invalidate(self, symbol: str | None = None) -> None:
         for key in list(self._cache):
@@ -101,7 +104,11 @@ class MarketDataService:
             "spread_points": tick.spread_points,
             "gaps_last_10": gaps,
             "reason": reason,
-            "feed": "simulated" if adapter.adapter_type == "simulated_mt5" else "mt5-live",
+            # The label must describe where the prices came from, not which adapter
+            # happens to be loaded: with `feed_mode: replay` the adapter is still the
+            # paper one, but the bars are imported candles.
+            "feed": getattr(self, "feed_mode", None)
+            or ("simulated" if adapter.adapter_type == "simulated_mt5" else "mt5-live"),
         }
 
     def require_fresh(self, symbol: str, timeframe: str = "M1") -> dict[str, Any]:

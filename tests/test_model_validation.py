@@ -59,6 +59,34 @@ def test_median_fold_must_clear_the_bar():
     assert ok is False
 
 
+def test_a_majority_of_one_fold_is_not_approval():
+    """Seen live: a 9000-bar file produced a single fold, 100% passed, "approved".
+
+    One block passing is one block passing — there is no distribution to be a
+    majority of, so the gate must answer "not enough evidence".
+    """
+    ok, summary = decide_approval([fold(0.97, 0.44)], 0.52, 0.02, 0.75, 3)
+    assert ok is False
+    assert summary["folds_used"] == 1
+    assert "at least 3" in summary["approval_note"]
+
+
+def test_two_folds_are_still_too_few():
+    ok, summary = decide_approval([fold(0.90, 0.30), fold(0.88, 0.28)], 0.52, 0.02, 0.75, 3)
+    assert ok is False
+    assert summary["folds_used"] == 2
+
+
+def test_three_strong_folds_can_still_approve():
+    ok, summary = decide_approval([fold(0.60, 0.06)] * 3, 0.52, 0.02, 0.75, 3)
+    assert ok is True and summary["folds_used"] == 3
+
+
+def test_rejection_says_which_condition_failed():
+    _, summary = decide_approval([fold(0.50, 0.0)] * 3, 0.52, 0.02, 0.75, 3)
+    assert "median directional" in summary["approval_note"]
+
+
 def test_no_folds_is_never_approved():
     ok, summary = decide_approval([], 0.52, 0.02, 0.75)
     assert ok is False
@@ -81,9 +109,10 @@ def trained(settings):
 def test_training_reports_chronological_folds(trained):
     metrics = trained.metrics["horizons"]["5"]
     folds = metrics["validation_folds"]
-    assert len(folds) == 4
-    assert all({"n", "directional_accuracy", "brier_improvement", "pass"} <= set(f) for f in folds)
-    assert metrics["folds_used"] == 4
+    assert len(folds) >= 2
+    assert all({"n", "directional_accuracy", "brier_improvement", "retrained", "pass"} <= set(f)
+               for f in folds)
+    assert metrics["folds_used"] == len(folds) >= 2
     assert 0.0 <= metrics["fold_pass_rate"] <= 1.0
 
 
@@ -98,5 +127,97 @@ def test_approval_matches_the_fold_summary(trained):
 
 
 def test_overall_result_states_the_method_honestly(trained):
-    assert "NOT retrained per fold" in trained.metrics["validation"]
-    assert trained.metrics["validation_folds"] == 4
+    text = trained.metrics["validation"]
+    # Either the refitting walk-forward or the honest fallback label must appear.
+    assert "walk-forward (refit per fold)" in text or "block slices" in text
+    assert "never saw" in text
+    assert trained.metrics["walk_forward_folds"] >= 0
+
+
+# ------------------------------------------------------- walk-forward (refit)
+@pytest.fixture(scope="module")
+def walk_forward_run(settings):
+    from services.market_data.simulator import SyntheticFeed
+
+    feed = SyntheticFeed({"XAUUSD": {"digits": 2, "point": 0.01, "contract_size": 100}},
+                         history_bars=20000, seed=7)
+    trainer = ForecastTrainer(settings)
+    trainer.horizons = [5]
+    trainer.max_rows = 12000
+    trainer.walk_forward_folds = 2
+    return trainer.train(feed.warm_history("XAUUSD", 20000), "TEST-WF")
+
+
+def test_walk_forward_refits_and_expands(walk_forward_run):
+    metrics = walk_forward_run.metrics["horizons"]["5"]
+    assert metrics["validation_method"].startswith("walk-forward")
+    folds = metrics["validation_folds"]
+    assert len(folds) >= 2
+    assert all(f["retrained"] is True for f in folds)
+    train_sizes = [f["samples_train"] for f in folds]
+    assert train_sizes == sorted(train_sizes), "each fold must train on more history than the last"
+    assert train_sizes[0] < train_sizes[-1]
+
+
+def test_walk_forward_can_be_disabled(settings):
+    """With refitting off, the same data falls back to slices of one model."""
+    from services.market_data.simulator import SyntheticFeed
+
+    feed = SyntheticFeed({"XAUUSD": {"digits": 2, "point": 0.01, "contract_size": 100}},
+                         history_bars=20000, seed=7)
+    trainer = ForecastTrainer(settings)
+    trainer.horizons = [5]
+    trainer.max_rows = 12000
+    trainer.walk_forward_folds = 0
+    result = trainer.train(feed.warm_history("XAUUSD", 20000), "TEST-SLICES")
+
+    metrics = result.metrics["horizons"]["5"]
+    assert metrics["validation_method"].startswith("block slices")
+    assert all(f["retrained"] is False for f in metrics["validation_folds"])
+
+
+# -------------------------------------------------- approval rules are versioned
+def test_stored_approval_from_an_older_rule_is_demoted(runtime):
+    """A model approved under a weaker gate must not stay approved after a change."""
+    from services.ai_forecast.approval import APPROVAL_RULE_VERSION
+    from services.ai_forecast.predictor import ForecastPredictor
+
+    predictor = ForecastPredictor(runtime.settings, runtime.model_registry)
+    legacy = {"version": "old-model", "approved": True, "models": {},
+              "metrics": {"horizons": {}}}          # no approval_rule recorded at all
+    predictor.install_payload(legacy, {})
+    assert predictor.approved is False
+    assert str(APPROVAL_RULE_VERSION) in predictor.notes
+
+    current = {"version": "new-model", "approved": True, "models": {},
+               "metrics": {"horizons": {}, "approval_rule": APPROVAL_RULE_VERSION}}
+    predictor.install_payload(current, {})
+    assert predictor.approved is True
+
+
+def test_predictor_loads_the_newest_run_not_the_newest_approval(runtime):
+    """A fresher rejected run must replace the metrics of an older approved model."""
+    from services.ai_forecast.predictor import ForecastPredictor
+
+    registry = runtime.model_registry
+    for version, created, approved in (("m-old-approved", 100, 1),
+                                       ("m-new-rejected", 200, 0)):
+        registry.db.execute(
+            "INSERT OR REPLACE INTO models(version, created_at, method, approved, samples,"
+            " metrics, notes, path) VALUES(?,?,?,?,?,?,?,?)",
+            (version, created, "test", approved, 10, '{"horizons": {}, "approval_rule": 2}',
+             "", str(registry.model_dir / version)))
+    assert registry.latest() == "m-new-rejected"
+
+    import joblib
+
+    target = registry.model_dir / "m-new-rejected"
+    target.mkdir(parents=True, exist_ok=True)
+    joblib.dump({"version": "m-new-rejected", "approved": False, "models": {},
+                 "metrics": {"horizons": {}, "approval_rule": 2}, "symbol": "XAUUSD",
+                 "trained_at": 200, "notes": "rejected on evidence"}, target / "models.joblib")
+
+    predictor = ForecastPredictor(runtime.settings, registry)
+    predictor.load_latest()
+    assert predictor.version == "m-new-rejected"
+    assert predictor.approved is False

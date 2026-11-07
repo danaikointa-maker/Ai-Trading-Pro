@@ -20,6 +20,12 @@ Base: `http://127.0.0.1:8000` · interactive docs: `/api/docs` · OpenAPI: `/api
   `{"detail": "...", "rule": "order", "retry_after": 2.4}`
 - ทุกคำขอที่ผ่านจะได้ header `X-RateLimit-Remaining`
 - ค่าปรับได้ที่ `config/app.yaml` → `ratelimit.rules` (ปิดทั้งบล็อกได้ด้วย `enabled: false`)
+- **ที่เก็บ bucket** เลือกได้ที่ `ratelimit.store`:
+  - `memory` (ค่าเริ่มต้น) — bucket อยู่ในโปรเซสเดียว เหมาะกับ uvicorn worker เดียว
+  - `sqlite` — bucket อยู่ในไฟล์ SQLite (`store_path` หรือ `storage/db/ratelimit.sqlite3`)
+    ทำให้ **หลาย worker บนเครื่องเดียวกันใช้โควตาร่วมกัน** แลกกับ write ต่อคำขอที่ถูกจำกัด
+    (แต่ละครั้งเป็น `BEGIN IMMEDIATE` จึงไม่มีการใช้โทเคนซ้ำข้าม worker)
+  - ค่าอื่น → app ไม่ start (ผิดชัดเจน ดีกว่าเงียบ ๆ ใช้ memory)
 
 ## Auth & system
 
@@ -33,6 +39,8 @@ Base: `http://127.0.0.1:8000` · interactive docs: `/api/docs` · OpenAPI: `/api
 | GET | `/api/system/audit?limit=` | audit trail (ใครทำอะไร) |
 | GET | `/api/system/alerts?limit=` | alert ล่าสุด |
 | GET | `/api/system/errors` | error buffer ของ runtime |
+| GET | `/api/system/notify` | สถานะช่องทางแจ้งเตือน (`inapp`/`telegram`/`line`/`webhook`), error ล่าสุด, จำนวนครั้งที่พลาด (ไม่คืน token) |
+| POST | `/api/system/alerts/test` | ส่งข้อความทดสอบจริงผ่านทุกช่องทางที่เปิดใช้ → `{ok, deliveries:[{channel, ok, status, error}]}` · ถ้ายังไม่ตั้งค่า จะคืน `ok:false` + `reason` แทนการเงียบ |
 
 ## Market & analysis
 
@@ -59,7 +67,7 @@ Base: `http://127.0.0.1:8000` · interactive docs: `/api/docs` · OpenAPI: `/api
 |---|---|---|
 | GET | `/api/signals/latest?symbol=` | signal + gate + forecast บางส่วน |
 | GET | `/api/signals/history?limit=` | ประวัติสัญญาณ |
-| POST | `/api/signals/{id}/approve` \| `/reject` | semi-auto flow |
+| POST | `/api/signals/{id}/approve` \| `/reject` | semi-auto flow; approve รัน gate ใหม่ทุกครั้ง และปฏิเสธถ้า score ต่ำกว่า `scoring.min_score_to_execute` (ปกติ 70) — ปุ่มนี้ไม่ใช่ override |
 | GET | `/api/trading/live` | **payload เดียวกับ WebSocket** (polling fallback) |
 | GET | `/api/trading/state` | account/positions/risk/mode/reconcile/broker |
 | POST | `/api/trading/order` | `{symbol,direction}` manual; ผ่าน gate เท่านั้น |
@@ -87,7 +95,8 @@ Base: `http://127.0.0.1:8000` · interactive docs: `/api/docs` · OpenAPI: `/api
 | POST | `/api/brokers/{id}/activate` | สลับโบรกเกอร์ |
 | GET | `/api/brokers/{id}/symbols` | spec จริงต่อบัญชี (`source: broker|declared`) |
 | GET | `/api/brokers/{id}/account` \| `/health` | account info / health probe |
-| POST | `/api/backtests` | `{symbol,bars,spread_points?,commission_per_lot?,slippage_points,starting_balance,validate_walk_forward}` → `{job_id}` |
+| POST | `/api/backtests` | `{symbol,bars,spread_points?,commission_per_lot?,slippage_points,starting_balance,validate_walk_forward,snapshot_id?}` → `{job_id}` · `bars` ต้อง ≥ 1700 (ไม่งั้น 400 พร้อมบอกขั้นต่ำ) · ใส่ `snapshot_id` เพื่อรันซ้ำบนแท่งเทียนชุดเดิม (ตรวจ sha256 ก่อน, ผิด→400) |
+| GET | `/api/datasets` \| `POST /api/datasets` \| `GET /api/datasets/{id}` | snapshot ของแท่งเทียน: list / freeze ข้อมูลปัจจุบัน / manifest + ตรวจ hash |
 | GET | `/api/backtests/jobs/{job_id}` | `{state,pct,message,report_id,metrics}` |
 | GET | `/api/backtests` \| `/api/backtests/{id}` | รายงาน + metrics/verdict/walk_forward/assumptions |
 
@@ -162,6 +171,22 @@ training, reconcile, alerts, errors, ticker, mode, feed, virtual_time`
 | `scenarios[]` | `bull/base/bear` — `path[].p50` จบที่ `target_price` ของตัวเอง, `path[].p10 ≤ p50 ≤ p90` |
 | `volatility_points` | ATR × √(horizon/5) ÷ point |
 | `coverage_note` | ข้อจำกัดของแบบจำลอง horizon นั้น (อ่านก่อนเชื่อ) |
+
+## `dataset` ของ backtest (provenance)
+
+```json
+{
+  "id": "DS-1A2B3C4D5E", "symbol": "XAUUSD", "timeframe": "M1",
+  "rows": 6000, "first_t": 1793000000, "last_t": 1793360000,
+  "sha256": "…", "source": "simulated GBM feed (seed 7)",
+  "path": "storage/datasets/snapshots/DS-….csv.gz", "bytes": 812345,
+  "feed_mode": "simulate", "reproducible": true,
+  "reproduce_with": {"snapshot_id": "DS-1A2B3C4D5E"}
+}
+```
+
+`assumptions` มีบรรทัด `Bar data: …` ที่ตรงกับแหล่งข้อมูลจริง (simulated / replay / MT5)
+— ไม่ใช่ข้อความตายตัวว่า "simulated" อีกต่อไป
 
 ## `metrics` ของ backtest
 

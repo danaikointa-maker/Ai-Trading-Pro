@@ -11,7 +11,7 @@
 ## 2. ชั้นข้อมูล (data flow)
 
 ```
-SimulatedFeed / MT5 ─┐
+SimulatedFeed / ReplayFeed (CSV ที่นำเข้า) / MT5 ─┐
                      ├─► MarketDataService (ticks, M1..H4, staleness)
 NewsService ─────────┘             │
                                    ▼
@@ -114,13 +114,24 @@ volume profile, VWAP, EMA, equal highs/lows, round number, reaction history
 ## 8. Accuracy & honesty
 
 - Directional accuracy, precision, Brier vs baseline, P10–P90 coverage ต่อ horizon
-- Walk-forward folds ใน backtest, out-of-sample split ตอน train, calibration บนช่วงที่ไม่ได้ใช้ฝึก
+- **การอนุมัติโมเดล**: walk-forward ที่ *ฝึกใหม่ทุก fold* (expanding window) เมื่อประวัติพอ
+  ถ้าไม่พอจะถอยไปให้คะแนน slice ของโมเดลเดียว **และระบุว่าถอย** · ต้องผ่าน ≥75% ของ fold,
+  ค่ากลางของ fold ต้องผ่านเกณฑ์เดียวกัน และต้องมี **อย่างน้อย 3 fold** — fold เดียวคือหลักฐานไม่พอ
+- กฎการอนุมัติมีเวอร์ชัน (`approval_rule`) ฝังในไฟล์โมเดล: กฎเข้มขึ้นเมื่อไร approval เก่าจะถูก demote
+  และบอกเหตุผล ไม่ใช่สืบทอดต่อ
+- feed ที่ใช้อยู่ (simulate / replay / mt5) ถูกแสดงบนหน้าจอพร้อมข้อจำกัดของมัน ไม่ใช่เดาจากชนิด adapter
 - `no_trade_rate` ถูกวัดและรายงาน — "ไม่เทรด" คือผลลัพธ์ที่ถูกต้องได้
-- Backtest มี cost model: spread, commission, slippage, และ conservative intrabar assumption (stop ชนก่อน target)
+- Backtest มี cost model: spread, commission, slippage, swap (คืนละครั้ง, พุธ ×3) และ conservative intrabar assumption (stop ชนก่อน target)
 
 ## 9. สิ่งที่ยังขาด (ตามลำดับความสำคัญ)
 
-1. **MQL5 EA** — ต้องดูแล SL/TP ในเทอร์มินัลเพื่อให้ risk control อยู่รอดเมื่อ AI ดับ
-2. **tick data จริง + dataset snapshot** เพื่อให้ backtest reproducible
-3. Mobile PWA + Telegram/LINE push
-4. Full Auto เปิดใช้หลัง paper forward test ต่อเนื่อง
+1. **MQL5 EA + bridge** — ต้องดูแล SL/TP ในเทอร์มินัลเพื่อให้ risk control อยู่รอดเมื่อ AI ดับ
+   (ยังทำไม่ได้: ต้องมี Windows + MT5)
+2. **tick data จริง** — นำเข้า M1 จากไฟล์ได้แล้วและ replay ผ่านไปป์ไลน์สดได้ แต่ intra-bar path
+   ยังเป็นการประมาณ; snapshot ของ dataset สำหรับ reproducible backtest ก็ยังไม่มี
+3. **หลาย worker / หลายเครื่อง** — runtime ถูกล็อกให้มี **เจ้าของเดียว** ต่อฐานข้อมูลผ่าน lease
+   (`runtime_lease`, heartbeat 5s / stale 30s) โปรเซสที่สองจะไม่เทรดและรายงานว่าถูกบล็อก แต่ยังไม่มี
+   การแชร์สถานะสดระหว่างโปรเซส (ws hub/scheduler ยังอยู่ในโปรเซสเดียว) — ข้ามเครื่องต้องใช้ Redis/pub-sub
+   และ rate limit ข้ามเครื่อง (`ratelimit.store: sqlite` แชร์ได้เฉพาะในเครื่องเดียว)
+4. Mobile PWA + Telegram/LINE push
+5. Full Auto เปิดใช้หลัง paper forward test ต่อเนื่อง

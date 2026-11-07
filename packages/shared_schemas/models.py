@@ -644,6 +644,9 @@ class BacktestRequest(BaseModel):
     slippage_points: float = 2.0
     starting_balance: float = 10000.0
     validate_walk_forward: bool = True
+    # Re-run on the exact bars of an earlier run instead of whatever the feed
+    # produces now; the snapshot's hash is verified before anything is computed.
+    snapshot_id: str | None = None
 
 
 class BacktestMetrics(BaseModel):
@@ -699,6 +702,10 @@ class BacktestReport(BaseModel):
     walk_forward: list[dict[str, Any]] = Field(default_factory=list)
     assumptions: list[str] = Field(default_factory=list)
     verdict: dict[str, Any] = Field(default_factory=dict)
+    # Provenance: which bars produced these numbers, and can they be replayed.
+    dataset: dict[str, Any] = Field(default_factory=dict)
+    # Why the trade count is what it is: analysed vs skipped decision points.
+    diagnostics: dict[str, Any] = Field(default_factory=dict)
 
 
 # --------------------------------------------------------------------------- misc

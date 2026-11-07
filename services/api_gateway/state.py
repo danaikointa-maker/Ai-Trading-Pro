@@ -10,6 +10,8 @@ trading and vice versa.
 from __future__ import annotations
 
 import json
+import os
+import socket
 import threading
 import time
 import traceback
@@ -43,7 +45,7 @@ from services.ai_forecast.trainer import ForecastTrainer
 from services.execution_gateway.gateway import ExecutionGateway
 from services.market_data.news import NewsService
 from services.market_data.service import MarketDataService
-from services.market_data.simulator import SyntheticFeed
+from services.market_data.replay import build_feed
 from services.notification.notifier import Notifier
 from services.risk_engine.engine import RiskEngine, default_risk_state
 from services.risk_engine.manager import PositionAction, PositionManager
@@ -51,29 +53,94 @@ from services.risk_engine.planner import PlanInputs, TradePlanner
 from services.strategy_engine.analysis import AnalysisContext, AnalysisService
 from services.strategy_engine.engine import StrategyEngine
 
+def _truthy(value: Any) -> bool:
+    return str(value or "").strip().lower() in ("1", "true", "yes", "on")
+
+
+LEASE_KEY = "runtime_lease"
+LEASE_STALE_SECONDS = 30.0
+
+
+def lease_owner() -> str:
+    """Identify this process in the lease record."""
+    return f"{socket.gethostname()}#{os.getpid()}"
+
+
+def claim_runtime_lease(db: Any, owner: str, now: float | None = None,
+                        stale_seconds: float = LEASE_STALE_SECONDS,
+                        force: bool = False) -> tuple[bool, dict[str, Any]]:
+    """Take the single-writer lease on the trading runtime.
+
+    Only one process may drive ticks, decisions and orders against a database:
+    two runtimes would each see the same signal and each send their own order.
+    A lease whose heartbeat is older than ``stale_seconds`` is treated as a
+    crashed process and taken over, so a hard kill cannot lock the system out.
+    """
+    now = time.time() if now is None else float(now)
+    current = db.kv_get(LEASE_KEY, {}) or {}
+    other = current.get("owner")
+    beat = float(current.get("heartbeat") or 0)
+    age = (now - beat) if beat else None
+    if other and other != owner and age is not None and age < stale_seconds and not force:
+        return False, {
+            "state": "blocked",
+            "owner": other,
+            "heartbeat_age_seconds": round(age, 1),
+            "blocked_owner": owner,
+        }
+    started = float(current.get("started_at") or now) if other == owner else now
+    record = {
+        "state": "shared" if (force and other and other != owner) else "held",
+        "owner": owner,
+        "heartbeat": now,
+        "started_at": started,
+    }
+    db.kv_set(LEASE_KEY, record)
+    return True, dict(record)
+
+
+def heartbeat_lease(db: Any, owner: str, now: float | None = None) -> dict[str, Any]:
+    """Refresh the heartbeat, reporting ``lost`` if another process took over."""
+    now = time.time() if now is None else float(now)
+    current = db.kv_get(LEASE_KEY, {}) or {}
+    if current.get("owner") and current.get("owner") != owner:
+        return {"state": "lost", "owner": current.get("owner")}
+    record = {**current, "state": "held", "owner": owner, "heartbeat": now}
+    db.kv_set(LEASE_KEY, record)
+    return dict(record)
+
+
+def release_runtime_lease(db: Any, owner: str) -> tuple[bool, dict[str, Any]]:
+    """Release the lease if this process holds it; never touch another owner's."""
+    current = db.kv_get(LEASE_KEY, {}) or {}
+    if current.get("owner") != owner:
+        return False, current
+    record = {"state": "released", "owner": owner, "heartbeat": 0.0,
+              "started_at": current.get("started_at")}
+    db.kv_set(LEASE_KEY, record)
+    return True, record
+
+
 class TradingRuntime:
     def __init__(self, settings: Settings | None = None) -> None:
         self.settings = settings or get_settings()
         self.db = Database(self.settings.database_path)
-        md = self.settings.market_data
-        sim = md.get("simulation", {})
-
         # --- market data: union of symbols from every simulated broker profile
         symbols: dict[str, dict[str, Any]] = {}
         for profile in self.settings.brokers.get("brokers", []):
             if profile.get("adapter") in ("simulated_mt5", "paper"):
                 for symbol, spec in (profile.get("symbols") or {}).items():
                     symbols.setdefault(symbol, spec)
-        self.feed = SyntheticFeed(
-            symbols=symbols or {"XAUUSD": self.settings.symbol_spec("connext-demo", "XAUUSD")},
-            history_bars=int(md.get("history_bars", 60000)),
-            seed=int(sim.get("seed", 7)),
-            start_price=float(sim.get("start_price", 4180.0)),
-            annual_vol=float(sim.get("annual_volatility", 0.16)),
-            speed_minutes_per_second=float(sim.get("speed_minutes_per_second", 6.0)),
-            tick_seconds=float(sim.get("tick_seconds", 0.5)),
-            news_shock_probability=float(sim.get("news_shock_probability", 0.0015)),
-        )
+        # feed_mode decides what the whole platform reads. A replay that cannot
+        # start falls back to the simulator and records why, so health can never
+        # present simulated prices as if they were imported ones.
+        active_broker = self.settings.default_broker_id()
+        self.feed, self.feed_mode, self.feed_note = build_feed(
+            self.settings,
+            symbols or {"XAUUSD": self.settings.symbol_spec(active_broker, "XAUUSD")},
+            required=list(self.settings.broker_symbols(active_broker)))
+        if self.feed_note:
+            self.settings.app.setdefault("_feed_notes", []).append(self.feed_note)
         self.db.kv_set("virtual_clock_start", self.feed.end_time)
 
         self.registry = BrokerRegistry(self.settings, self.feed)
@@ -85,6 +152,7 @@ class TradingRuntime:
         self.news = NewsService(self.db, high_impact_currencies=["USD"], now=self.feed.end_time)
         self.market = MarketDataService(self.settings, self.registry, self.news)
         self.market.set_virtual_now(self.feed.end_time)
+        self.market.feed_mode = self.feed_mode
 
         # --- engines
         self.risk = RiskEngine(self.settings, self.db)
@@ -96,7 +164,8 @@ class TradingRuntime:
         self.manager = PositionManager(self.settings)
         self.gateway = ExecutionGateway(self.settings, self.db)
         self.notifier = Notifier(self.db, min_score=float(self.settings.strategy_cfg()
-                                                          .get("scoring", {}).get("thresholds", {}).get("weak", 50)))
+                                                          .get("scoring", {}).get("thresholds", {}).get("weak", 50)),
+                                 cfg=self.settings.alerts)
         self.trainer = ForecastTrainer(self.settings)
 
         # --- runtime state
@@ -113,11 +182,15 @@ class TradingRuntime:
         self.started_at = time.time()
         self.last_decision_at = 0.0
         self.last_tick_at = 0.0
+        self.last_tick_wall = time.time()
         self.last_reconcile: dict[str, Any] = {}
         self.errors: deque[dict[str, Any]] = deque(maxlen=25)
         self.mode = self.risk.record_mode()
         self.model_approved = bool(self.predictor.approved)
         self.training: dict[str, Any] = {"state": "idle", "message": "", "pct": 0.0, "version": None}
+        self._owner = lease_owner()
+        self.lease: dict[str, Any] = {"state": "unclaimed", "owner": self._owner}
+        self._lease_last_beat = 0.0
         self._stop = threading.Event()
         self._thread: threading.Thread | None = None
         self._decision_interval = float(self.settings.app.get("app", {}).get("decision_interval_seconds", 4))
@@ -130,6 +203,8 @@ class TradingRuntime:
     def start(self) -> None:
         if self._thread and self._thread.is_alive():
             return
+        if not self._claim_lease():
+            return
         # Run one cycle inline: the dashboard's very first paint then has a
         # snapshot/forecast instead of an empty card that fills in seconds later.
         self.prime()
@@ -138,6 +213,37 @@ class TradingRuntime:
         self._thread.start()
         if self.settings.ai.get("training", {}).get("auto_train_on_boot", True):
             self.train_async(self.active_symbol)
+
+    def _claim_lease(self) -> bool:
+        """Take the single-writer lease, or refuse to trade from this process.
+
+        Refusing is deliberate: a second runtime on the same database would
+        duplicate ticks, signals and — with Full Auto on — real orders. The API
+        still boots so the dashboard and `/api/system/health` can explain why
+        nothing is moving.
+        """
+        force = _truthy(os.getenv("NO7_ALLOW_MULTI_RUNTIME", ""))
+        ok, record = claim_runtime_lease(self.db, self._owner, force=force)
+        self.lease = record
+        self._lease_last_beat = time.time()
+        if ok:
+            if record.get("state") == "shared":
+                self._log_error("runtime-lease", RuntimeError(
+                    "NO7_ALLOW_MULTI_RUNTIME is set: more than one runtime is driving this "
+                    "database. Signals and orders may be duplicated."))
+            return True
+        self._log_error("runtime-lease", RuntimeError(
+            f"another No7 runtime already owns this database ({record.get('owner')}, "
+            f"heartbeat {record.get('heartbeat_age_seconds')}s ago). Not starting the "
+            f"trading loop here — run one instance only."))
+        return False
+
+    def _maybe_heartbeat(self, now: float | None = None) -> None:
+        now = time.time() if now is None else now
+        if now - self._lease_last_beat < 5.0:
+            return
+        self._lease_last_beat = now
+        self.lease = heartbeat_lease(self.db, self._owner, now)
 
     def prime(self) -> None:
         """Compute the first snapshot/forecast synchronously (never fatal)."""
@@ -151,6 +257,11 @@ class TradingRuntime:
         self._stop.set()
         if self._thread:
             self._thread.join(timeout=3)
+        try:
+            released, record = release_runtime_lease(self.db, self._owner)
+            self.lease = {**record, "state": "released" if released else self.lease.get("state")}
+        except Exception:  # noqa: BLE001 - shutdown must not raise
+            pass
 
     def _run(self) -> None:
         next_decision = 0.0
@@ -168,6 +279,7 @@ class TradingRuntime:
                     next_reconcile = now + float(self.settings.execution.get("reconcile_interval_seconds", 10))
                     self._reconcile_cycle()
                 self._record_equity()
+                self._maybe_heartbeat(now)
             except Exception as exc:  # noqa: BLE001 - the loop must survive anything
                 self._log_error("runtime", exc)
             elapsed = time.time() - cycle_start
@@ -195,6 +307,10 @@ class TradingRuntime:
         with self.lock:
             self.ticks.update(ticks)
             self.last_tick_at = now
+            # The loop's heartbeat is measured on the wall clock: a replayed series
+            # lives in the past, so comparing virtual time to time.time() called a
+            # healthy feed stale.
+            self.last_tick_wall = time.time()
         for adapter in self.registry.all():
             try:
                 closed = adapter.on_tick(ticks)
@@ -472,6 +588,15 @@ class TradingRuntime:
             return {"ok": False, "error": "signal expired — wait for a fresh one"}
         if signal.action not in (SignalAction.buy, SignalAction.sell):
             return {"ok": False, "error": "signal is not actionable"}
+        # A hand-approval must not lower the bar the signal was generated against:
+        # anything under the execution threshold is weak by the strategy's own rule,
+        # and the risk gate only enforces the score floor in full-auto mode.
+        min_score = float(getattr(self.strategy, "scoring", {}).get("min_score_to_execute", 70))
+        if signal.score < min_score:
+            return {"ok": False,
+                    "error": (f"signal score {signal.score:.0f} is below the {min_score:.0f} "
+                              "execution threshold — it cannot be approved by hand"),
+                    "blockers": [f"score {signal.score:.0f} < {min_score:.0f}"]}
 
         try:
             risk_state = self.risk.state(self.adapter, now=now)
@@ -706,14 +831,22 @@ class TradingRuntime:
             "model": {
                 "version": self.predictor.version,
                 "approved": self.predictor.approved,
+                # `metrics` stays the per-horizon map the dashboard iterates; the
+                # approval rule that judged it travels beside it so the UI can say
+                # *why* a horizon failed instead of only that it did.
                 "metrics": self.predictor.metrics.get("horizons", {}),
+                "validation": self.predictor.metrics.get("validation"),
+                "approval_rule": self.predictor.metrics.get("approval_rule"),
+                "min_validation_folds": self.predictor.metrics.get("min_validation_folds"),
+                "min_fold_pass_rate": self.predictor.metrics.get("min_fold_pass_rate"),
                 "trained_at": self.predictor.trained_at,
                 "notes": self.predictor.notes,
             },
             "training": training,
             "reconcile": self.last_reconcile,
             "errors": errors,
-            "feed": "simulated" if self.adapter.adapter_type == "simulated_mt5" else "mt5",
+            "feed": getattr(self, "feed_mode", None)
+            or ("simulated" if self.adapter.adapter_type == "simulated_mt5" else "mt5"),
             "alerts": self.notifier.recent(8),
         }
         if not light:
@@ -722,13 +855,20 @@ class TradingRuntime:
         return payload
 
     def health(self) -> dict[str, Any]:
+        exhausted = bool(getattr(self.feed, "exhausted", False))
         services = {
             "db": "ok",
-            "feed": "ok" if (time.time() - self.last_tick_at) < 10 else "stale",
+            "feed": "exhausted" if exhausted else (
+                "ok" if (time.time() - self.last_tick_wall) < 10 else "stale"),
             "runtime": "running" if self._thread and self._thread.is_alive() else "stopped",
             "model": "approved" if self.predictor.approved else "baseline",
             "training": self.training.get("state", "idle"),
+            "notify": self.notifier.status()["state"],
         }
+        lease_state = self.lease.get("state", "unclaimed")
+        if lease_state in ("blocked", "lost"):
+            services["runtime"] = f"blocked ({lease_state})"
+            services["lease"] = lease_state
         return {
             "status": "ok" if services["runtime"] == "running" else "degraded",
             "version": self.settings.app.get("app", {}).get("version", "V1"),
@@ -736,11 +876,27 @@ class TradingRuntime:
             "server_time": time.time(),
             "virtual_time": self.market.now(),
             "uptime_seconds": round(time.time() - self.started_at, 1),
-            "feed_mode": self.settings.market_data.get("feed_mode", "simulate"),
+            "feed_mode": getattr(self, "feed_mode", None)
+            or self.settings.market_data.get("feed_mode", "simulate"),
+            "feed_note": getattr(self, "feed_note", None),
+            "feed": self._feed_status(),
             "broker_health": self.registry.health_map(),
             "model": self.predictor.status().model_dump() if self.predictor.status() else None,
             "services": services,
+            "notify": self.notifier.status(),
+            "runtime_lease": {**self.lease,
+                              "heartbeat_age_seconds": round(time.time() - float(self.lease.get("heartbeat") or 0), 1)
+                              if self.lease.get("heartbeat") else None},
         }
+
+    def _feed_status(self) -> dict[str, Any]:
+        describe = getattr(self.feed, "describe", None)
+        if callable(describe):
+            try:
+                return describe()
+            except Exception as exc:  # noqa: BLE001 - health must never raise
+                return {"mode": getattr(self, "feed_mode", "?"), "error": str(exc)}
+        return {"mode": getattr(self, "feed_mode", "simulate")}
 
     # ------------------------------------------------------------------ misc
     def snapshot(self, symbol: str) -> AnalysisSnapshot | None:
