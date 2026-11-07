@@ -35,7 +35,7 @@
 | Tick storage รายวัน (parquet, lazy) + intra-bar ordering | ✅ |
 | Mobile PWA (ติดตั้งได้, แถบอัปเดต/ออฟไลน์ที่บอกความจริง) | ✅ |
 | TLS (uvicorn หรือ reverse proxy) + security headers/CORS allowlist | ✅ |
-| Telegram / LINE แจ้งเตือน | ⏳ (มีช่องทาง + ปุ่มทดสอบแล้ว) |
+| Telegram / LINE แจ้งเตือน | ✅ ส่งจริงผ่าน HTTP (retry/pacing/redact) — ยังไม่ทดสอบกับปลายทางจริง |
 
 ## Quickstart (Linux/macOS/Windows, ไม่ต้องมี MT5)
 

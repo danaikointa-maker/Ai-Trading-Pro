@@ -128,12 +128,24 @@ alerts:
   min_score: 70
   dedupe_seconds: 60                       # identical title+symbol inside this window is skipped
   timeout_seconds: 5
+  # Retries cover the transient end of the network (timeout, 429, 5xx) and honour
+  # Retry-After. A 4xx that means "bad token / bad chat id" is never retried.
+  retry_attempts: 3
+  retry_backoff_seconds: 0.5
+  # Minimum gap between two messages on the same channel. A burst gets the bot
+  # rate-limited or muted by Telegram; skipped messages are counted as `dropped`.
+  min_interval_seconds: 1.0
   telegram_enabled: ${NO7_TELEGRAM_ENABLED:false}   # needs TELEGRAM_BOT_TOKEN + chat id
   telegram_chat_id: ${NO7_TELEGRAM_CHAT_ID:}
   line_enabled: ${NO7_LINE_ENABLED:false}          # needs LINE_CHANNEL_TOKEN + target id
   line_target_id: ${NO7_LINE_TARGET_ID:}
   webhook_enabled: ${NO7_WEBHOOK_ENABLED:false}    # needs NO7_WEBHOOK_URL
   webhook_url: ${NO7_WEBHOOK_URL:}
+  # API base override: point the transport at a local server that speaks the same
+  # protocol (how delivery is tested here). Plain HTTP is accepted only for a
+  # private host; anything else falls back to the public endpoint and says so.
+  telegram_api_base: ${NO7_TELEGRAM_API_BASE:}
+  line_api_base: ${NO7_LINE_API_BASE:}
 
 # More than one process. The runtime lease already guarantees only one process
 # trades; a shared backend lets the others serve its live frames instead of idling

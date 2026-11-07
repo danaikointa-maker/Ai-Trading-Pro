@@ -106,8 +106,8 @@ CORS เป็น **allowlist**: ค่าเริ่มต้นไม่ใ�
 | GET | `/api/users` · `POST /api/users` · `PATCH /api/users/{email}` · `DELETE /api/users/{email}` | จัดการผู้ใช้ (**admin เท่านั้น**) |
 | GET | `/api/users/me/permissions` | `{role, can_trade, can_manage_users, roles}` — UI ใช้ปิดปุ่ม |
 | GET | `/api/system/health` → `cluster` | `{role: leader\|replica\|blocked\|solo, backend, requested, reason, shared_health}` + `runtime_lease` |
-| GET | `/api/system/notify` | สถานะช่องทางแจ้งเตือน (`inapp`/`telegram`/`line`/`webhook`), error ล่าสุด, จำนวนครั้งที่พลาด (ไม่คืน token) |
-| POST | `/api/system/alerts/test` | ส่งข้อความทดสอบจริงผ่านทุกช่องทางที่เปิดใช้ → `{ok, deliveries:[{channel, ok, status, error}]}` · ถ้ายังไม่ตั้งค่า จะคืน `ok:false` + `reason` แทนการเงียบ |
+| GET | `/api/system/notify` | สถานะช่องทาง (`configured/ok/failures/skipped/base`), `state`, `retry_attempts`, `retries`, `dropped`, `min_interval_seconds`, `base_warnings` (ไม่คืน token — ถูกแทนด้วย `***`) |
+| POST | `/api/system/alerts/test` | ส่งข้อความทดสอบจริงผ่านทุกช่องทางที่เปิดใช้ → `{ok, deliveries:[{channel, ok, status, error, attempts}], paced:[…], note}` · `ok:null` = ถูกเลื่อนเพราะ pacing (ไม่ใช่ล้มเหลว) · ถ้ายังไม่ตั้งค่า จะคืน `ok:false` + `reason` แทนการเงียบ |
 | GET | `/api/system/health` → `ratelimit` | `{store: memory\|sqlite\|redis, requested, shared, reason, path?, warning?}` — `shared:false` = โควตาคูณตามจำนวน worker |
 | GET | `/api/system/health` → `security` | `{require_auth, jwt_secret_from_env, cors:{origins, wildcard, cross_origin_allowed}, trusted_proxies, csp_mode, hsts_when_https}` — perimeter ที่ใช้งานจริง (ไม่มีความลับ) |
 
