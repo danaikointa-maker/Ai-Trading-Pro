@@ -29,8 +29,13 @@ self.addEventListener('install', (event) => {
           fetch(url).then((res) => (res.ok ? cache.put(url, res) : null)).catch(() => null)))
       }
     } catch { /* offline during install: CORE alone still boots the offline page */ }
-    await self.skipWaiting()
+    // No unconditional skipWaiting(): swapping the shell mid-session can pair
+    // yesterday's JS with today's hashed assets. The page asks when it is safe.
   })())
+})
+
+self.addEventListener('message', (event) => {
+  if (event.data && event.data.type === 'SKIP_WAITING') self.skipWaiting()
 })
 
 self.addEventListener('activate', (event) => {

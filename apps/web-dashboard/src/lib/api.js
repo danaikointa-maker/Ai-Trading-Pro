@@ -8,15 +8,28 @@ export function setToken(token) {
   else localStorage.removeItem(TOKEN_KEY)
 }
 
+function announce(kind) {
+  // The shell can be served from cache while the API is unreachable; the UI needs to
+  // hear about that in order to stop showing old numbers as if they were live.
+  window.dispatchEvent(new CustomEvent(kind))
+}
+
 export async function request(path, { method = 'GET', body, silent = false } = {}) {
   const headers = { 'Content-Type': 'application/json' }
   const token = getToken()
   if (token) headers.Authorization = `Bearer ${token}`
-  const res = await fetch(path, {
-    method,
-    headers,
-    body: body === undefined ? undefined : JSON.stringify(body),
-  })
+  let res
+  try {
+    res = await fetch(path, {
+      method,
+      headers,
+      body: body === undefined ? undefined : JSON.stringify(body),
+    })
+  } catch (err) {
+    announce('no7:server-unreachable')
+    throw err
+  }
+  announce('no7:server-reachable')
   let data = null
   try {
     data = await res.json()

@@ -4,12 +4,19 @@
          is still on /login used to render the login form inside the app shell,
          which reads as "logged in but stuck on the login page". -->
     <!-- The shell can open offline, but data cannot: say so plainly instead of
-         letting stale numbers look live. -->
-    <div v-if="offline"
-         class="flex items-center justify-center gap-2 bg-amber-500/15 px-3 py-1.5 text-[11px] font-medium text-amber-300">
+         letting stale numbers look live. Two different failures, two different words:
+         no network at all, versus a network that cannot reach this server. -->
+    <div v-if="offline || state.serverUnreachable"
+         class="flex flex-wrap items-center justify-center gap-x-2 gap-y-1 bg-amber-500/15 px-3 py-1.5 text-[11px] font-medium text-amber-300">
       <span class="h-1.5 w-1.5 rounded-full bg-amber-400"></span>
-      ออฟไลน์ — แสดงข้อมูลจากครั้งล่าสุด ไม่มีการอัปเดตราคา/คำสั่งซื้อขาย
+      <span v-if="offline">ออฟไลน์ — แสดงข้อมูลจากครั้งล่าสุด ไม่มีการอัปเดตราคา/คำสั่งซื้อขาย</span>
+      <span v-else>เซิร์ฟเวอร์ไม่ตอบ — ตัวเลขที่เห็นคือข้อมูลเก่า ไม่ใช่ราคาปัจจุบัน</span>
+      <span v-if="lastLiveLabel" class="num text-[10.5px] text-amber-300/80">
+        ข้อมูลล่าสุด {{ lastLiveLabel }}
+      </span>
     </div>
+
+    <PwaBanners />
 
     <div v-if="showApp" class="flex min-h-screen">
       <SideNav class="hidden lg:flex" />
@@ -60,6 +67,7 @@ import { useRoute, useRouter } from 'vue-router'
 import SideNav from './components/SideNav.vue'
 import TopBar from './components/TopBar.vue'
 import Toasts from './components/Toasts.vue'
+import PwaBanners from './components/PwaBanners.vue'
 import { bootstrap, startLive, state, stopLive } from './lib/store'
 import { getToken } from './lib/api'
 
@@ -74,6 +82,12 @@ function syncOnline() {
   offline.value = navigator.onLine === false
 }
 const showApp = computed(() => isAuthed.value && route.name !== 'login')
+// "when was this true?" beats "it is probably fine": the banner shows the timestamp of
+// the newest data we actually received, in local time.
+const lastLiveLabel = computed(() => {
+  if (!state.lastLiveAt) return ''
+  return new Date(state.lastLiveAt).toLocaleTimeString('th-TH', { hour: '2-digit', minute: '2-digit' })
+})
 
 // If a token exists but the router is still sitting on the login page (slow
 // navigation, a failed async chunk, a back button, a stale token in another tab)
