@@ -142,6 +142,10 @@ class Settings:
     def execution(self) -> dict[str, Any]:
         return self.app.get("execution", {})
 
+    @property
+    def alerts(self) -> dict[str, Any]:
+        return self.app.get("alerts", {})
+
     # ------------------------------------------------------------- brokers
     def broker(self, broker_id: str) -> dict[str, Any]:
         for profile in self.brokers.get("brokers", []):

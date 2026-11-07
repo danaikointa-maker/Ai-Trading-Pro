@@ -63,7 +63,7 @@ services/
   risk_engine/             limits, kill switch, gate, trade planner
   execution_gateway/       idempotent order sending, verification, reconciliation
   backtest_engine/         replay + cost model + walk-forward + verdict
-  notification/            in-app alerts (Telegram/LINE = TODO)
+  notification/            in-app alerts + opt-in Telegram/LINE/webhook (delivery ผลถูกบันทึก)
 packages/
   shared_schemas/          pydantic models + settings loader
   indicators/              EMA/RSI/ATR/ADX/MACD/VWAP/volume profile

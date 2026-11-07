@@ -1,6 +1,8 @@
 """HTTP contract tests: everything the dashboard relies on must answer 200."""
 from __future__ import annotations
 
+import json
+
 
 
 def test_login_returns_token_and_hides_secret(client):
@@ -132,3 +134,31 @@ def test_backtest_job_list_is_pruned(client, token):
     assert len(bt.JOBS) <= bt.MAX_JOBS
     with bt._LOCK:
         bt.JOBS.clear()
+
+
+def test_health_reports_notification_channels(client):
+    health = client.get("/api/system/health").json()
+    assert "notify" in health
+    assert health["notify"]["channels"]["inapp"]["configured"] is True
+    # external channels are off unless the operator configures them
+    assert health["services"]["notify"] in ("inapp-only", "external", "failing")
+
+
+def test_notify_status_endpoint_lists_channels_without_secrets(client, token):
+    res = client.get("/api/system/notify", headers={"Authorization": f"Bearer {token}"})
+    assert res.status_code == 200
+    body = res.json()
+    assert res.request.url.path == "/api/system/notify"
+    assert set(body["channels"]) == {"inapp", "telegram", "line", "webhook"}
+    assert "Bearer" not in json.dumps(body)
+    for channel in body["channels"].values():
+        assert "token" not in channel
+
+
+def test_alert_test_endpoint_says_why_it_cannot_send(client, token):
+    res = client.post("/api/system/alerts/test", headers={"Authorization": f"Bearer {token}"})
+    assert res.status_code == 200
+    body = res.json()
+    assert body["ok"] is False
+    assert body["deliveries"] == []
+    assert body["reason"]

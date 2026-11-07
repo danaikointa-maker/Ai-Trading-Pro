@@ -81,10 +81,19 @@ execution:
   verify_after_send: true
 
 alerts:
-  channels: [inapp]
-  telegram_enabled: false
-  line_enabled: false
+  # In-app alerts are always on. External channels are opt-in: an outbound
+  # message leaves this machine, so it needs a token *and* an explicit enable.
+  # Tokens are read from env only and never written to config or API responses.
+  channels: [inapp]                        # add telegram / line / webhook to enable
   min_score: 70
+  dedupe_seconds: 60                       # identical title+symbol inside this window is skipped
+  timeout_seconds: 5
+  telegram_enabled: ${NO7_TELEGRAM_ENABLED:false}   # needs TELEGRAM_BOT_TOKEN + chat id
+  telegram_chat_id: ${NO7_TELEGRAM_CHAT_ID:}
+  line_enabled: ${NO7_LINE_ENABLED:false}          # needs LINE_CHANNEL_TOKEN + target id
+  line_target_id: ${NO7_LINE_TARGET_ID:}
+  webhook_enabled: ${NO7_WEBHOOK_ENABLED:false}    # needs NO7_WEBHOOK_URL
+  webhook_url: ${NO7_WEBHOOK_URL:}
 
 # WebSocket: a light frame every second, a full payload (with analysis/forecast)
 # at least this often so those panels never freeze.

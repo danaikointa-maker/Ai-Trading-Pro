@@ -164,7 +164,8 @@ class TradingRuntime:
         self.manager = PositionManager(self.settings)
         self.gateway = ExecutionGateway(self.settings, self.db)
         self.notifier = Notifier(self.db, min_score=float(self.settings.strategy_cfg()
-                                                          .get("scoring", {}).get("thresholds", {}).get("weak", 50)))
+                                                          .get("scoring", {}).get("thresholds", {}).get("weak", 50)),
+                                 cfg=self.settings.alerts)
         self.trainer = ForecastTrainer(self.settings)
 
         # --- runtime state
@@ -862,6 +863,7 @@ class TradingRuntime:
             "runtime": "running" if self._thread and self._thread.is_alive() else "stopped",
             "model": "approved" if self.predictor.approved else "baseline",
             "training": self.training.get("state", "idle"),
+            "notify": self.notifier.status()["state"],
         }
         lease_state = self.lease.get("state", "unclaimed")
         if lease_state in ("blocked", "lost"):
@@ -881,6 +883,7 @@ class TradingRuntime:
             "broker_health": self.registry.health_map(),
             "model": self.predictor.status().model_dump() if self.predictor.status() else None,
             "services": services,
+            "notify": self.notifier.status(),
             "runtime_lease": {**self.lease,
                               "heartbeat_age_seconds": round(time.time() - float(self.lease.get("heartbeat") or 0), 1)
                               if self.lease.get("heartbeat") else None},

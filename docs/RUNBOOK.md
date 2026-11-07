@@ -90,7 +90,32 @@ NO7_FEED_MODE=replay .venv/bin/python -m uvicorn services.api_gateway.app:app --
 | `/api/market/candles` ตอบ 422 | `limit < 20` (ข้อจำกัดของ endpoint) |
 | PyJWT เตือน key สั้น | ตั้ง `NO7_JWT_SECRET` ≥ 32 ตัวอักษร |
 
-## 6. รันได้ทีละโพรเซสเท่านั้น (single-writer)
+## 6. แจ้งเตือนออกนอกเครื่อง (Telegram / LINE / webhook)
+
+in-app เปิดเสมอ ไม่ต้องตั้งค่า · ช่องทางภายนอก **ปิดเป็นค่าเริ่มต้น** และต้องมีทั้ง token และการเปิดใช้:
+
+```bash
+# Telegram
+export TELEGRAM_BOT_TOKEN='123456:AA...'      # จาก @BotFather
+export NO7_TELEGRAM_CHAT_ID='-1001234567890'  # chat/group id
+export NO7_TELEGRAM_ENABLED=1
+# LINE (Messaging API)
+export LINE_CHANNEL_TOKEN='...'               # channel access token
+export NO7_LINE_TARGET_ID='U1234...'          # userId/groupId
+export NO7_LINE_ENABLED=1
+# webhook ทั่วไป (ได้ JSON {title, message, source})
+export NO7_WEBHOOK_URL='https://example.com/hook'
+export NO7_WEBHOOK_ENABLED=1
+```
+
+ตรวจว่าส่งได้จริงโดยไม่ต้องรอเหตุการณ์จริง: หน้า **/system → ช่องทางแจ้งเตือน → ส่งข้อความทดสอบ**
+หรือ `POST /api/system/alerts/test` (ต้อง login) · ผลลัพธ์บอกทีละช่องทาง
+ถ้าล้มเหลวจะเห็น `failing` + ข้อความ error บนหน้า /system และใน `/api/system/health` → `services.notify`
+
+> ถ้าตั้ง token แล้วแต่ยังไม่เปิดใช้ ระบบจะ **ไม่ส่ง** อะไรออกนอกเครื่อง (โดยเจตนา)
+> และจะบอกว่ายังไม่ได้ตั้งค่า ไม่ใช่เงียบ
+
+## 7. รันได้ทีละโพรเซสเท่านั้น (single-writer)
 
 runtime (tick, signal, order) ใช้ **lease** ในตาราง `kv` (`runtime_lease`) — โปรเซสเดียวเท่านั้นที่ขับเคลื่อนได้
 ถ้าเปิดโปรเซสที่สองบนฐานข้อมูลเดียวกัน:
@@ -105,7 +130,7 @@ runtime (tick, signal, order) ใช้ **lease** ในตาราง `kv` (`r
 
 heartbeat ทุก 5 วินาที, ถือว่า lease ตายเมื่อเงียบเกิน 30 วินาที → เปิดใหม่ได้ทันทีแม้โดน `kill -9`
 
-## 7. ความปลอดภัย
+## 8. ความปลอดภัย
 
 - อย่าเปิดพอร์ต 8000 สู่อินเทอร์เน็ตโดยไม่มี reverse proxy + TLS + auth
 - `NO7_JWT_SECRET` ต้องไม่ซ้ำกับระบบอื่น และไม่เข้า git

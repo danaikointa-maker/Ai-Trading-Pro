@@ -58,6 +58,24 @@ def alerts(limit: int = Query(50, ge=1, le=200), runtime: TradingRuntime = Depen
     return {"alerts": runtime.alerts(limit)}
 
 
+@router.post("/alerts/test")
+def test_alert_channel(runtime: TradingRuntime = Depends(get_runtime),
+                       user=Depends(current_user)):
+    """Send a real message through every configured external channel.
+
+    Without this the only way to learn that a Telegram token is wrong was to wait
+    for something worth alerting about and then notice nothing arrived.
+    """
+    result = runtime.notifier.send_test()
+    runtime.db.audit(user["email"], "alerts.test", {"ok": result["ok"]})
+    return result
+
+
+@router.get("/notify")
+def notify_status(runtime: TradingRuntime = Depends(get_runtime), user=Depends(current_user)):
+    return runtime.notifier.status()
+
+
 @router.get("/audit")
 def audit(limit: int = Query(100, ge=1, le=500), runtime: TradingRuntime = Depends(get_runtime),
           user=Depends(current_user)):

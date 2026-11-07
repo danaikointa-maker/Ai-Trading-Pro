@@ -98,6 +98,32 @@
         </section>
 
         <section class="panel">
+          <div class="panel-head">
+            <div class="panel-title">ช่องทางแจ้งเตือน</div>
+            <span class="chip" :class="notifyTone">{{ notifyLabel }}</span>
+          </div>
+          <dl class="px-4 py-3 text-[10.5px]">
+            <div v-for="(c, name) in notify?.channels || {}" :key="name" class="kv">
+              <dt>{{ name }}</dt>
+              <dd class="flex items-center gap-1.5">
+                <span class="chip" :class="c.configured ? (c.ok === false ? 'chip-down' : 'chip-up') : 'chip-warn'">
+                  {{ c.configured ? (c.ok === false ? 'failing' : 'ready') : 'off' }}
+                </span>
+                <span v-if="c.configured && c.failures" class="num text-[9.5px] text-down">{{ c.failures }} fails</span>
+                <span v-if="c.configured && c.error" class="max-w-[170px] truncate text-[9.5px] text-down" :title="c.error">{{ c.error }}</span>
+                <span v-if="c.last_attempt" class="num text-[9.5px] text-muted">{{ clock(c.last_attempt) }}</span>
+              </dd>
+            </div>
+            <p v-if="notify?.disabled_reason" class="mt-2 text-[9.5px] leading-relaxed text-amber-300/80">
+              {{ notify.disabled_reason }}
+            </p>
+            <button class="btn mt-2 w-full py-1 text-[10px]" :disabled="testing" @click="sendTest">
+              {{ testing ? 'กำลังส่ง…' : 'ส่งข้อความทดสอบ' }}
+            </button>
+          </dl>
+        </section>
+
+        <section class="panel">
           <div class="panel-head"><div class="panel-title">Paths & config</div></div>
           <dl class="px-4 py-3 text-[10.5px]">
             <div v-for="(p, k) in config?.public?.paths || {}" :key="k" class="kv">
@@ -184,6 +210,19 @@ const shortNote = computed(() => {
   return note.length > 60 ? `${note.slice(0, 60)}…` : note
 })
 const audit = ref([])
+const notify = computed(() => health.value?.notify || null)
+const testing = ref(false)
+const notifyLabel = computed(() => {
+  const state_ = notify.value?.state
+  if (state_ === 'failing') return `failing · ${(notify.value?.failing || []).join(', ')}`
+  if (state_ === 'external') return 'external on'
+  return 'in-app only'
+})
+const notifyTone = computed(() => {
+  const state_ = notify.value?.state
+  if (state_ === 'failing') return 'chip-down'
+  return state_ === 'external' ? 'chip-up' : 'chip-warn'
+})
 const errors = ref([])
 const models = ref([])
 const config = ref(null)
@@ -203,6 +242,27 @@ async function load() {
     toast(err.message, 'error')
   }
   errors.value = state.live?.errors || []
+}
+
+async function sendTest() {
+  if (testing.value) return
+  testing.value = true
+  try {
+    const res = await api.post('/api/system/alerts/test')
+    if (res.ok) {
+      toast('ส่งทดสอบสำเร็จ — ตรวจข้อความในแอปนั้น', 'success')
+    } else if (res.deliveries?.length) {
+      const failed = res.deliveries.filter((d) => !d.ok)
+      toast(`ส่งไม่สำเร็จ: ${failed.map((d) => `${d.channel} (${d.error})`).join(', ')}`, 'error')
+    } else {
+      toast(res.reason || 'ยังไม่ได้ตั้งค่าช่องทางภายนอก', 'error')
+    }
+    await load()
+  } catch (err) {
+    toast(err.message, 'error')
+  } finally {
+    testing.value = false
+  }
 }
 
 onMounted(load)
