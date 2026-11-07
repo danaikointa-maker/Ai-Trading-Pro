@@ -341,6 +341,61 @@ curl -s -X POST localhost:8000/api/brokers/mt5-bridge-demo/activate \
 - คำสั่งที่ EA ไม่ ack จะหมดอายุ (`command_ttl_seconds` 30s / `ack_grace_seconds` 20s) และ **ไม่ส่งซ้ำ**
 - ต้องเปิด Algo Trading ในเทอร์มินัล ไม่งั้น EA ไม่ execute (ฝั่งเซิร์ฟเวอร์จะเห็นแค่ `expired`)
 
+## 12.4 แจ้งเตือนออกนอกเครื่อง (Telegram / LINE / webhook)
+
+in-app ทำงานเสมอ; ช่องทางภายนอกเป็น **opt-in** (ต้องมี token *และ* เปิดใช้)
+
+### Telegram
+```bash
+# 1) สร้างบอทกับ @BotFather -> ได้ token
+# 2) หา chat id: ส่งข้อความหาบอทก่อน แล้วเปิด
+#    https://api.telegram.org/bot<TOKEN>/getUpdates  (อ่าน chat.id)
+export TELEGRAM_BOT_TOKEN="123456:ABC..."
+export NO7_TELEGRAM_CHAT_ID="-1001234567890"
+export NO7_TELEGRAM_ENABLED=true
+```
+
+### LINE (Messaging API)
+```bash
+# LINE Developers -> Messaging API channel: channel access token + ผู้รับ (userId/groupId)
+export LINE_CHANNEL_TOKEN="..."
+export NO7_LINE_TARGET_ID="U..."
+export NO7_LINE_ENABLED=true
+```
+
+### ทดสอบว่าส่งได้จริง
+```bash
+TOK=$(curl -s -X POST localhost:8000/api/auth/login -H 'Content-Type: application/json' \
+  -d '{"email":"demo@no7.ai","password":"no7demo1234"}' | jq -r .token)
+curl -s -X POST localhost:8000/api/system/alerts/test -H "Authorization: Bearer $TOK" | jq
+#  {"ok": true, "deliveries":[{"channel":"telegram","ok":true,"status":200,"attempts":1}, …],
+#   "paced": [], "note": ""}
+curl -s localhost:8000/api/system/notify -H "Authorization: Bearer $TOK" | jq '.state, .channels'
+```
+
+### พฤติกรรมเมื่อเครือข่ายมีปัญหา (ตั้งใจให้เป็นแบบนี้)
+| สถานการณ์ | สิ่งที่เกิดขึ้น |
+|---|---|
+| timeout / ต่อไม่ติด / **429** / 5xx | ลองใหม่ไม่เกิน `alerts.retry_attempts` (ค่าเริ่มต้น 3) โดยเคารพ `Retry-After` (สูงสุด 30s) และ backoff 0.5s, 1.0s |
+| 400/401/403/404 (token/chat id ผิด, บอทถูกบล็อก) | **ไม่ลองซ้ำ** — แก้ config แล้วกดทดสอบใหม่ |
+| ข้อความถี่เกิน `alerts.min_interval_seconds` (ค่าเริ่มต้น 1s/channel) | **ข้าม** ข้อความนั้น (in-app ยังบันทึกครบ) และนับใน `dropped` — กันบอทโดน mute |
+| ข้อความยาวเกิน | ตัดให้พอดีลิมิต (Telegram 4096 / LINE 5000) ไม่ให้ผู้ให้บริการตอบ 400 |
+| ส่งไม่สำเร็จ | บันทึกใน `alerts` + `notify_status` (`failures`), `state: "failing"` ใน health |
+
+**Token ไม่รั่ว**: token ของ Telegram อยู่ใน URL จึงอาจโผล่ในข้อความ error — ทุกสตริงที่ออกจาก
+notifier (status, alert payload, error) ถูกแทนด้วย `***` ก่อนเก็บ/ส่ง และ `status()` แสดงแค่
+`base` (host) ไม่ใช่ token
+
+### ชี้ transport ไปที่เซิร์ฟเวอร์จำลอง (ใช้ทดสอบ)
+```bash
+python3 scripts/fake_alert_provider.py 8099        # เทอร์มินัลหนึ่ง
+NO7_TELEGRAM_API_BASE=http://127.0.0.1:8099        # อีกเทอร์มินัล: รับเฉพาะ http ไปยัง private host
+NO7_LINE_API_BASE=http://127.0.0.1:8099
+#   fake provider ตอบ 429 ในครั้งแรกของ Telegram เพื่อให้เห็น retry ทำงานจริง
+```
+ถ้าตั้ง http ไปยัง host สาธารณะ ระบบจะ **ไม่ใช้** ค่านั้น (plaintext จะทำ token หลุด)
+ถอยไปใช้ endpoint จริงและรายงานใน `base_warnings`
+
 ## 12.5 Rate limit ที่ใช้ร่วมกันหลาย worker / หลายเครื่อง
 
 ค่าเริ่มต้น `ratelimit.store: memory` = bucket อยู่ในโปรเซสเดียวなので
