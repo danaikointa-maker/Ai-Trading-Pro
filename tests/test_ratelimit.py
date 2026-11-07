@@ -5,7 +5,6 @@ ASGI app, so no real order is ever sent to prove a limit works.
 """
 from __future__ import annotations
 
-import pytest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
