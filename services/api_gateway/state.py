@@ -1033,11 +1033,32 @@ class TradingRuntime:
             "model": self.predictor.status().model_dump() if self.predictor.status() else None,
             "services": services,
             "notify": self.notifier.status(),
+            "security": self._security_status(),
             "cluster": {**self.shared_status, "role": role,
                         "shared_health": self.shared.healthy()},
             "runtime_lease": {**self.lease,
                               "heartbeat_age_seconds": round(time.time() - float(self.lease.get("heartbeat") or 0), 1)
                               if self.lease.get("heartbeat") else None},
+        }
+
+    def _security_status(self) -> dict[str, Any]:
+        """How the perimeter is configured right now — visible, not implied.
+
+        Values are config, not secrets: an operator needs to see that TLS termination,
+        the proxy list and the CORS allowlist are what they think they are. HSTS is
+        reported as *possible* because it only applies to requests that arrive over
+        HTTPS (see SecurityHeadersMiddleware).
+        """
+        sh = self.settings.security_headers
+        origins = self.settings.cors_origins
+        return {
+            "require_auth": bool(self.settings.security.get("require_auth", True)),
+            "jwt_secret_from_env": bool(os.environ.get("NO7_JWT_SECRET")),
+            "cors": {"origins": origins, "wildcard": "*" in origins,
+                     "cross_origin_allowed": bool(origins)},
+            "trusted_proxies": self.settings.trusted_proxies,
+            "csp_mode": sh.get("csp_mode", "enforce"),
+            "hsts_when_https": bool(sh.get("hsts", True)),
         }
 
     def _feed_status(self) -> dict[str, Any]:

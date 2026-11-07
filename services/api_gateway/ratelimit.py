@@ -18,6 +18,8 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Callable
 
+from services.api_gateway.netutil import client_ip, parse_networks
+
 # rule -> {limit, window_seconds}; `default` covers everything not listed below.
 DEFAULT_RULES: dict[str, dict[str, float]] = {
     "order": {"limit": 10, "window_seconds": 60},
@@ -233,10 +235,14 @@ class RateLimitMiddleware:
     cheap on the hot path and works for every response type.
     """
 
-    def __init__(self, app: Any, limiter: RateLimiter, settings: Any | None = None) -> None:
+    def __init__(self, app: Any, limiter: RateLimiter, settings: Any | None = None,
+                 trusted_proxies: list[str] | None = None) -> None:
         self.app = app
         self.limiter = limiter
         self.settings = settings
+        # Only a trusted reverse proxy may tell us who the client is; otherwise one
+        # forged header would hand out a fresh budget per request.
+        self.trusted = parse_networks(trusted_proxies or [])
         cfg = (getattr(settings, "app", {}) or {}).get("ratelimit", {}) if settings else {}
         self.enabled = bool(cfg.get("enabled", True))
 
@@ -293,5 +299,4 @@ class RateLimitMiddleware:
                 payload = None
             if payload and payload.get("sub"):
                 return f"user:{payload['sub']}"
-        client = scope.get("client") or ("unknown", 0)
-        return f"ip:{client[0]}"
+        return f"ip:{client_ip(scope, self.trusted)}"

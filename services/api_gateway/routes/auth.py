@@ -4,6 +4,7 @@ from fastapi import APIRouter, Depends, HTTPException, Request
 from pydantic import BaseModel
 
 from packages.shared_schemas.settings import get_settings
+from services.api_gateway.netutil import client_ip, parse_networks
 from services.api_gateway.auth import LoginThrottle, authenticate, ensure_demo_user
 from services.api_gateway.deps import current_user, get_runtime
 from services.api_gateway.state import TradingRuntime
@@ -17,11 +18,14 @@ class LoginRequest(BaseModel):
 
 
 def _client_ip(request: Request) -> str:
-    """Behind a proxy the socket address is the proxy; prefer the first XFF hop."""
-    forwarded = request.headers.get("x-forwarded-for", "")
-    if forwarded:
-        return forwarded.split(",")[0].strip()
-    return request.client.host if request.client else "unknown"
+    """Behind a proxy the socket address is the proxy; the first XFF hop is the client.
+
+    Only a *trusted* peer may supply that hop. Trusting it unconditionally let anyone
+    reset the password-guessing throttle by rotating one header per attempt.
+    """
+    settings = get_settings()
+    trusted = parse_networks(settings.trusted_proxies)
+    return client_ip(request.scope, trusted)
 
 
 def _throttle(runtime: TradingRuntime) -> LoginThrottle:

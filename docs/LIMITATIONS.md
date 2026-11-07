@@ -129,8 +129,23 @@
 - **EA `.mq5` ยังไม่เคย compile หรือรันกับ MT5 จริง** ในเครื่องนี้ (ไม่มี Windows/terminal) —
   โปรโตคอลถูก pin ด้วย `tests/test_bridge.py` (26 tests) และ exercised ด้วย `scripts/run_bridge_sim.py`
   แต่การคอมไพล์/รันครั้งแรกต้องทำบนเครื่องคุณ
-- ไม่มี TLS/HTTPS ในตัว: token วิ่งแบบ plaintext ถ้าไม่ได้อยู่หลัง reverse proxy — ห้ามใช้ข้ามอินเทอร์เน็ต
-  โดยไม่ใส่ HTTPS (หรือ VPN)
+- **TLS (รอบ 18)**: uvicorn อ่าน cert ได้เองผ่าน `NO7_TLS_CERT/NO7_TLS_KEY` (มีใน `scripts/run.sh`)
+  หรือจะวาง nginx/caddy ข้างหน้าก็ได้ — แต่ระบบ **ไม่ได้** ออก/ต่ออายุ certificate ให้
+  (Let's Encrypt ต้องมีโดเมนจริง) ดังนั้นใน LAN ให้ใช้ self-signed หรือ VPN; ถ้าไม่ใส่ TLS เลย
+  token ยังวิ่ง plaintext ห้ามเปิดข้ามอินเทอร์เน็ต
+- **perimeter (รอบ 18)**: มี CSP (enforce), nosniff, frame DENY, referrer no-referrer,
+  Permissions-Policy, HSTS เฉพาะเมื่อมาทาง HTTPS, CORS เป็น allowlist (ค่าเริ่มต้น = same-origin)
+  และตัด IP ที่ปลอม `X-Forwarded-*` ได้ — แต่:
+  - CSP ของหน้าแอปไม่อนุญาต CDN เลย; `/api/docs` (Swagger) ได้ policy ผ่อนกว่าเฉพาะ path นั้น
+    เพราะโหลด bundle จาก jsDelivr
+  - CSP ถูกเขียนให้ตรงกับ bundle ที่ build แล้ว (script/style จาก origin เดียว, ws สำหรับ live feed);
+    **ยังไม่ได้ทดสอบในเบราว์เซอร์จริง** ในเครื่องนี้ ถ้า UI ส่วนไหนพังให้ตั้ง `NO7_CSP_MODE=report`
+  - ไม่มี WAF, bot/IP reputation, หรือ DDoS protection — rate limit เป็น token bucket ต่อผู้ใช้/IP
+  - `X-Forwarded-*` เชื่อเฉพาะ peer ใน `NO7_TRUSTED_PROXIES`; ถ้ารัน uvicorn เอง **ต้องใส่
+    `--no-proxy-headers`** ไม่งั้น uvicorn จะ rewrite client/scheme ด้วย allowlist ของตัวเอง
+    (ค่าเริ่มต้น loopback) ก่อนถึงแอป
+  - `jwt_secret_from_env: false` ใน health = ยังใช้ secret สำรองในโค้ด → ตั้ง `NO7_JWT_SECRET`
+    ก่อนเปิดให้ใครใช้ (token ปลอมได้ถ้ารู้ secret นี้)
 - state ของ bridge อยู่ในตาราง `bridge_*` ของฐานข้อมูล (แชร์ข้าม worker) แต่ **รีสตาร์ทเซิร์ฟเวอร์ = คิวที่ยังไม่ส่งหาย**
   (session ยังอยู่แต่ heartbeat เก่า → EA register ใหม่ใน 1 รอบ) — ตั้งใจไม่กู้คิวเก่า
 - หลาย worker บน SQLite ไฟล์เดียวใช้ได้จริง (claim เป็น conditional UPDATE + WAL) แต่ยังไม่ได้ทดสอบกับ

@@ -39,6 +39,14 @@ service worker **ไม่แคช** `/api/*` และ `/ws` (ราคา/ค
 
 ## Rate limits
 
+CORS เป็น **allowlist**: ค่าเริ่มต้นไม่ให้ origin อื่นเลย (dashboard เสิร์ฟจาก origin เดียวกัน
+และ Vite dev proxy `/api` ให้อยู่แล้ว) — เปิดเฉพาะที่ตั้งใจด้วย
+`NO7_CORS_ORIGINS=https://dash.example.com`; `*` ใช้ได้แต่ `/api/system/health` จะรายงาน
+`cors.wildcard: true` ให้เห็น
+
+ทุก response มี security headers (CSP, `X-Frame-Options: DENY`, `nosniff`, `no-referrer`,
+`Permissions-Policy`) และมี HSTS เฉพาะเมื่อคำขอมาทาง HTTPS จริง — ดู RUNBOOK §13
+
 ทุกคำขอ (ยกเว้น `/api/system/health`, static, `/api/docs`, `/ws`) ถูกนับแบบ token bucket
 ต่อ **ผู้ใช้** (ถ้ามี bearer token ที่ถูกต้อง) หรือต่อ **IP** ถ้าไม่มี:
 
@@ -96,6 +104,7 @@ service worker **ไม่แคช** `/api/*` และ `/ws` (ราคา/ค
 | GET | `/api/system/health` → `cluster` | `{role: leader\|replica\|blocked\|solo, backend, requested, reason, shared_health}` + `runtime_lease` |
 | GET | `/api/system/notify` | สถานะช่องทางแจ้งเตือน (`inapp`/`telegram`/`line`/`webhook`), error ล่าสุด, จำนวนครั้งที่พลาด (ไม่คืน token) |
 | POST | `/api/system/alerts/test` | ส่งข้อความทดสอบจริงผ่านทุกช่องทางที่เปิดใช้ → `{ok, deliveries:[{channel, ok, status, error}]}` · ถ้ายังไม่ตั้งค่า จะคืน `ok:false` + `reason` แทนการเงียบ |
+| GET | `/api/system/health` → `security` | `{require_auth, jwt_secret_from_env, cors:{origins, wildcard, cross_origin_allowed}, trusted_proxies, csp_mode, hsts_when_https}` — perimeter ที่ใช้งานจริง (ไม่มีความลับ) |
 
 ## Market & analysis
 
