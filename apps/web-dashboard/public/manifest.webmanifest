@@ -1,0 +1,24 @@
+{
+  "name": "No7 AI Trading Pro V1",
+  "short_name": "No7 Trade",
+  "description": "แดชบอร์ดวิเคราะห์และทดสอบกลยุทธ์ (เพื่อการศึกษา ไม่ใช่คำแนะนำการลงทุน)",
+  "lang": "th",
+  "dir": "ltr",
+  "start_url": "/",
+  "scope": "/",
+  "display": "standalone",
+  "orientation": "any",
+  "background_color": "#07090c",
+  "theme_color": "#07090c",
+  "categories": ["finance", "productivity"],
+  "icons": [
+    { "src": "/icon-192.png", "sizes": "192x192", "type": "image/png", "purpose": "any" },
+    { "src": "/icon-512.png", "sizes": "512x512", "type": "image/png", "purpose": "any" },
+    { "src": "/icon-maskable-512.png", "sizes": "512x512", "type": "image/png", "purpose": "maskable" }
+  ],
+  "shortcuts": [
+    { "name": "เทอร์มินัล", "url": "/", "icons": [{ "src": "/icon-192.png", "sizes": "192x192" }] },
+    { "name": "ระบบ", "url": "/system", "icons": [{ "src": "/icon-192.png", "sizes": "192x192" }] },
+    { "name": "เทรด", "url": "/trades", "icons": [{ "src": "/icon-192.png", "sizes": "192x192" }] }
+  ]
+}

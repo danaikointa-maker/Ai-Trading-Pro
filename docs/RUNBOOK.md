@@ -229,7 +229,25 @@ curl -s localhost:8000/api/backtests -H "Authorization: Bearer $TOKEN" -H 'Conte
 **ถ้าต้องการทดสอบเฉพาะไปป์ไลน์โดยยังไม่มีไฟล์จริง**: `scripts/reconstruct_ticks.py` สร้าง tick
 จากแท่ง M1 (ติดธง `reconstruction` ใน manifest) — ห้ามใช้ตัวเลขจากโหมดนี้ตัดสินใจเทรด
 
-## 11. ความปลอดภัย
+## 11. PWA / ติดตั้งเป็นแอป (มือถือ/เดสก์ท็อป)
+
+```bash
+cd apps/web-dashboard && npm run build      # ต้อง build ก่อน; public/ ถูกคัดลอกเข้า dist/
+.venv/bin/python scripts/make_pwa_icons.py  # สร้างไอคอนใหม่ (ไม่ต้องใช้ Photoshop/ Pillow)
+curl -s localhost:8000/manifest.webmanifest | jq '{name,start_url,display,icons:[.icons[].sizes]}'
+curl -sD - -o /dev/null localhost:8000/sw.js | grep -i 'cache-control\|service-worker-allowed'
+curl -s localhost:8000/sw.js | grep "const VERSION"   # ต้องเป็น hash 12 ตัว ไม่ใช่ __NO7_VERSION__
+```
+
+- เปิดจากมือถือแล้วเลือก **Add to Home Screen / ติดตั้งแอป** → เปิดแบบ standalone
+- ออฟไลน์: เปิดแอปได้ (shell ถูกแคช) แต่ขึ้นแถบ "ออฟไลน์" และไม่มีข้อมูลใหม่ — service worker
+  **ไม่แคช** `/api/*` หรือ `/ws` โดยตั้งใจ
+- deploy build ใหม่: ไม่ต้องแก้อะไร — `/sw.js` ที่เสิร์ฟมี cache name ตาม hash ของ `index.html`
+  เบราว์เซอร์จะได้ worker ใหม่ตอนเปิดครั้งถัดไป (cache เก่าถูกลบใน `activate`)
+- ถ้าอยากล้าง cache ทั้งหมดระหว่าง debug: DevTools → Application → Service Workers → Unregister + Clear storage
+- dev (vite 5173) **ไม่มี** service worker — การทดสอบ PWA ต้องใช้ build + uvicorn เท่านั้น
+
+## 12. ความปลอดภัย
 
 - อย่าเปิดพอร์ต 8000 สู่อินเทอร์เน็ตโดยไม่มี reverse proxy + TLS + auth
 - `NO7_JWT_SECRET` ต้องไม่ซ้ำกับระบบอื่น และไม่เข้า git

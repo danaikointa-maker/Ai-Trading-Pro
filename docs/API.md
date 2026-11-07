@@ -3,6 +3,17 @@
 Base: `http://127.0.0.1:8000` · interactive docs: `/api/docs` · OpenAPI: `/api/openapi.json`
 ทุก endpoint ใต้ `/api/` (ยกเว้น login/health) ต้องมี `Authorization: Bearer <jwt>`
 
+## PWA (manifest / service worker / offline)
+
+| path | หมายเหตุ |
+|------|----------|
+| `GET /manifest.webmanifest` | `application/manifest+json` — name/short_name/start_url/icons (192, 512, maskable) |
+| `GET /sw.js` | service worker; ฝั่งเซิร์ฟเวอร์แทน `__NO7_VERSION__` ด้วย sha256 ของ `dist/index.html` (12 ตัวแรก) และส่ง `Cache-Control: no-cache` + `Service-Worker-Allowed: /` |
+| `GET /offline.html` | หน้า fallback ตอนเนvigate ไม่ได้ |
+
+service worker **ไม่แคช** `/api/*` และ `/ws` (ราคา/คำสั่งต้องสดเสมอ) — แคชเฉพาะ shell: `/`, `/index.html`,
+`/assets/*` (hashed), ไอคอน, manifest, `/offline.html`
+
 ## Rate limits
 
 ทุกคำขอ (ยกเว้น `/api/system/health`, static, `/api/docs`, `/ws`) ถูกนับแบบ token bucket

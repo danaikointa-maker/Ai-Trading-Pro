@@ -116,6 +116,19 @@
 - `use_ticks: true` โดยไม่มีไฟล์ = ทำงานเหมือนเดิม (ไม่ error) แต่ `diagnostics.intra_bar.mode` = `conservative`
 - tick ไม่ได้ใช้กับ paper/live execution หรือ training เลย — ใช้เฉพาะใน backtest
 
+## PWA / ออฟไลน์ (รอบ 13)
+
+- ติดตั้งเป็นแอปได้ (manifest + ไอคอน 192/512/maskable + apple-touch-icon) และเปิดหน้าเดิมได้ตอนออฟไลน์
+  แต่ **ข้อมูลไม่ถูกแคชเลย**: `/api/*` และ `/ws` ถูกกันออกจาก service worker โดยเจตนา — ออฟไลน์ = ขึ้นแถบเตือน
+  ไม่ใช่โชว์ราคาเก่าเป็นราคาปัจจุบัน
+- ไม่มี background sync / push: คำสั่งซื้อที่กดตอนออฟไลน์จะ **ไม่** ถูกเก็บไปส่งทีหลัง (จะ error ตรง ๆ) —
+  ตั้งใจไม่ทำ เพราะคำสั่งเทรดที่ส่งย้อนหลังด้วยราคาเก่าอันตรายกว่าการที่ผู้ใช้ต้องกดใหม่
+- service worker ลงทะเบียนเฉพาะ production build (`import.meta.env.PROD`); dev server ไม่มี SW
+- cache name มาจาก hash ของ `dist/index.html` ที่เซิร์ฟเวอร์ inject ตอนส่ง `/sw.js` → build ใหม่ = cache ใหม่
+  และ cache เก่าถูกลบตอน activate; แต่ถ้าเบราว์เซอร์ยังไม่ reload หลัง deploy หน้าเก่าจะยังอยู่จนกว่าจะปิดแท็บ
+- ไม่มี offline fallback สำหรับหน้า `/api/docs` (Swagger) — เป็น HTML จาก CDN, ต้องต่อเน็ต
+- iOS ยังไม่รองรับ `beforeinstallprompt`, ไม่มีปุ่ม "ติดตั้งแอป" ในตัว — ต้องใช้ Add to Home Screen เอง
+
 ## การแจ้งเตือนภายนอก
 
 - Telegram/LINE/webhook ถูกทดสอบด้วย transport ปลอมในเทสต์ (ไม่มีการยิงเน็ตออกจริงระหว่างเทสต์)
