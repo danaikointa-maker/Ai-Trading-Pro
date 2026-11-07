@@ -81,9 +81,10 @@ def trained(settings):
 def test_training_reports_chronological_folds(trained):
     metrics = trained.metrics["horizons"]["5"]
     folds = metrics["validation_folds"]
-    assert len(folds) == 4
-    assert all({"n", "directional_accuracy", "brier_improvement", "pass"} <= set(f) for f in folds)
-    assert metrics["folds_used"] == 4
+    assert len(folds) >= 2
+    assert all({"n", "directional_accuracy", "brier_improvement", "retrained", "pass"} <= set(f)
+               for f in folds)
+    assert metrics["folds_used"] == len(folds) >= 2
     assert 0.0 <= metrics["fold_pass_rate"] <= 1.0
 
 
@@ -98,5 +99,50 @@ def test_approval_matches_the_fold_summary(trained):
 
 
 def test_overall_result_states_the_method_honestly(trained):
-    assert "NOT retrained per fold" in trained.metrics["validation"]
-    assert trained.metrics["validation_folds"] == 4
+    text = trained.metrics["validation"]
+    # Either the refitting walk-forward or the honest fallback label must appear.
+    assert "walk-forward (refit per fold)" in text or "block slices" in text
+    assert "never saw" in text
+    assert trained.metrics["walk_forward_folds"] >= 0
+
+
+# ------------------------------------------------------- walk-forward (refit)
+@pytest.fixture(scope="module")
+def walk_forward_run(settings):
+    from services.market_data.simulator import SyntheticFeed
+
+    feed = SyntheticFeed({"XAUUSD": {"digits": 2, "point": 0.01, "contract_size": 100}},
+                         history_bars=20000, seed=7)
+    trainer = ForecastTrainer(settings)
+    trainer.horizons = [5]
+    trainer.max_rows = 12000
+    trainer.walk_forward_folds = 2
+    return trainer.train(feed.warm_history("XAUUSD", 20000), "TEST-WF")
+
+
+def test_walk_forward_refits_and_expands(walk_forward_run):
+    metrics = walk_forward_run.metrics["horizons"]["5"]
+    assert metrics["validation_method"].startswith("walk-forward")
+    folds = metrics["validation_folds"]
+    assert len(folds) >= 2
+    assert all(f["retrained"] is True for f in folds)
+    train_sizes = [f["samples_train"] for f in folds]
+    assert train_sizes == sorted(train_sizes), "each fold must train on more history than the last"
+    assert train_sizes[0] < train_sizes[-1]
+
+
+def test_walk_forward_can_be_disabled(settings):
+    """With refitting off, the same data falls back to slices of one model."""
+    from services.market_data.simulator import SyntheticFeed
+
+    feed = SyntheticFeed({"XAUUSD": {"digits": 2, "point": 0.01, "contract_size": 100}},
+                         history_bars=20000, seed=7)
+    trainer = ForecastTrainer(settings)
+    trainer.horizons = [5]
+    trainer.max_rows = 12000
+    trainer.walk_forward_folds = 0
+    result = trainer.train(feed.warm_history("XAUUSD", 20000), "TEST-SLICES")
+
+    metrics = result.metrics["horizons"]["5"]
+    assert metrics["validation_method"].startswith("block slices")
+    assert all(f["retrained"] is False for f in metrics["validation_folds"])

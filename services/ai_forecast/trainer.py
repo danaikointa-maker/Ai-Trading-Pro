@@ -119,6 +119,10 @@ class TrainingResult:
 
 
 class ForecastTrainer:
+    # Class-level mirrors of the config gates, so `_fold_row` can stay static.
+    MIN_DIR = 0.52
+    MIN_BRIER = 0.02
+
     def __init__(self, settings: Settings) -> None:
         cfg = settings.ai.get("training", {})
         self.max_rows = int(cfg.get("max_rows", 26000))
@@ -126,10 +130,17 @@ class ForecastTrainer:
         self.calib_fraction = float(cfg.get("calibration_fraction", 0.15))
         self.min_dir_accuracy = float(cfg.get("min_directional_accuracy", 0.52))
         self.min_brier_improvement = float(cfg.get("min_brier_improvement", 0.02))
+        ForecastTrainer.MIN_DIR = self.min_dir_accuracy
+        ForecastTrainer.MIN_BRIER = self.min_brier_improvement
         self.quantiles = [float(q) for q in cfg.get("quantiles", [0.1, 0.5, 0.9])]
         self.horizons = [int(h) for h in settings.ai.get("horizons_minutes", [5, 15, 30, 60, 240])]
         self.validation_folds = int(cfg.get("validation_folds", 4))
         self.min_fold_pass_rate = float(cfg.get("min_fold_pass_rate", 0.75))
+        # Refit-per-fold walk-forward: the honest version of the fold check, at the
+        # cost of one extra classifier fit per fold. 0 disables it and falls back
+        # to scoring slices of the single fitted model.
+        self.walk_forward_folds = int(cfg.get("walk_forward_folds", 3))
+        self.walk_forward_min_train_rows = int(cfg.get("walk_forward_min_train_rows", 900))
         self.deadband = float(settings.ai.get("forecast", {}).get("deadband_atr", 0.25))
         self.bar_minutes = 5
 
@@ -142,6 +153,72 @@ class ForecastTrainer:
         m5 = enrich(m5)
         feats = build_features(m5)
         return m5, feats
+
+    def _new_classifier(self) -> Any:
+        """One definition of the classifier, so walk-forward folds cannot drift."""
+        return LGBMClassifier(
+            objective="multiclass", num_class=3, n_estimators=180, learning_rate=0.06,
+            num_leaves=31, min_child_samples=40, subsample=0.85, colsample_bytree=0.85,
+            reg_lambda=1.0, class_weight="balanced", random_state=7, n_jobs=2, verbose=-1,
+        )
+
+    def _walk_forward_scores(self, data: pd.DataFrame, folds: int) -> list[dict[str, Any]]:
+        """Refit on an expanding window, then score the block that follows it.
+
+        Unlike slicing the predictions of one model, every fold here is produced by
+        a model that never saw the rows it is scored on. Quantile regressors are
+        skipped: the approval gate reads classification metrics, so a fold costs a
+        single fit.
+        """
+        out: list[dict[str, Any]] = []
+        # folds+1 blocks: the first one is the opening training window, the rest are
+        # the folds that actually get scored.
+        for lo, hi in split_folds(len(data), folds + 1):
+            train_end = int(lo * (1.0 - self.calib_fraction))
+            if train_end < self.walk_forward_min_train_rows:
+                continue
+            block = data.iloc[lo:hi]
+            if len(block) < 50:
+                continue
+            hist = data.iloc[:train_end]
+            ytr = hist["y"].to_numpy(float)
+            yte = block["y"].to_numpy(float)
+            if len(np.unique(ytr)) < 2 or len(np.unique(yte)) < 1:
+                continue
+
+            clf = self._new_classifier()
+            clf.fit(hist[FEATURE_COLUMNS].to_numpy(float), ytr)
+            raw = clf.predict_proba(block[FEATURE_COLUMNS].to_numpy(float))
+            classes = list(clf.classes_)
+            probs = np.zeros((len(yte), len(CLASSES)))
+            for j, cls in enumerate(CLASSES):
+                if cls in classes:
+                    probs[:, j] = raw[:, classes.index(cls)]
+
+            truth_idx = np.array([int(np.where(CLASSES == v)[0][0]) for v in yte])
+            onehot = np.zeros_like(probs)
+            onehot[np.arange(len(truth_idx)), truth_idx] = 1.0
+            priors = np.array([(ytr == c).mean() for c in CLASSES], dtype=float)
+            priors = priors / max(priors.sum(), 1e-9)
+
+            pred = probs.argmax(axis=1)
+            nonzero = truth_idx != 1
+            dir_acc = float((pred[nonzero] == truth_idx[nonzero]).mean()) if nonzero.any() else 0.0
+            brier = float(((probs - onehot) ** 2).sum(axis=1).mean())
+            baseline = float(((np.tile(priors, (len(yte), 1)) - onehot) ** 2).sum(axis=1).mean())
+            out.append(self._fold_row(len(yte), train_end, dir_acc, baseline - brier))
+        return out
+
+    @staticmethod
+    def _fold_row(n: int, samples_train: int, dir_acc: float, improvement: float) -> dict[str, Any]:
+        return {
+            "n": int(n),
+            "samples_train": int(samples_train),
+            "directional_accuracy": round(float(dir_acc), 4),
+            "brier_improvement": round(float(improvement), 4),
+            "retrained": True,
+            "pass": bool(dir_acc >= ForecastTrainer.MIN_DIR and improvement >= ForecastTrainer.MIN_BRIER),
+        }
 
     def _fold_scores(self, probs: np.ndarray, truth_idx: np.ndarray, onehot: np.ndarray,
                      priors: np.ndarray) -> list[dict[str, Any]]:
@@ -161,6 +238,7 @@ class ForecastTrainer:
                 "n": int(len(t)),
                 "directional_accuracy": round(dir_acc, 4),
                 "brier_improvement": round(improvement, 4),
+                "retrained": False,
                 "pass": bool(dir_acc >= self.min_dir_accuracy
                             and improvement >= self.min_brier_improvement),
             })
@@ -270,7 +348,14 @@ class ForecastTrainer:
             # A single split can clear both gates by luck, which is why approval
             # kept flipping between runs. Score the same out-of-sample block in
             # chronological folds and demand the edge in most of them.
-            folds = self._fold_scores(probs, truth_idx, onehot, prior_model.priors)
+            # Prefer real walk-forward (refit per fold); fall back to scoring slices
+            # of the single fitted model when there is not enough history.
+            wf = self._walk_forward_scores(data, self.walk_forward_folds) if self.walk_forward_folds >= 2 else []
+            if len(wf) >= 2:
+                folds, validation_method = wf, "walk-forward (refit per fold)"
+            else:
+                folds = self._fold_scores(probs, truth_idx, onehot, prior_model.priors)
+                validation_method = "block slices of one fitted model (not refit)"
             fold_ok, fold_summary = decide_approval(
                 folds, self.min_dir_accuracy, self.min_brier_improvement, self.min_fold_pass_rate)
             approved = bool(fold_ok and directional >= self.min_dir_accuracy
@@ -289,6 +374,7 @@ class ForecastTrainer:
                 "samples_train": int(len(train)),
                 "samples_test": int(len(test)),
                 "validation_folds": folds,
+                "validation_method": validation_method,
                 "approved": approved,
                 **fold_summary,
             }
@@ -302,8 +388,13 @@ class ForecastTrainer:
         overall["train_seconds"] = round(time.time() - t0, 1)
         overall["deadband_atr"] = self.deadband
         overall["method"] = "LightGBM multiclass + isotonic calibration + quantile regression"
-        overall["validation"] = ("chronological folds inside the out-of-sample block; the model is NOT "
-                                  "retrained per fold, so this measures stability, not full walk-forward")
+        methods = sorted({h.get("validation_method", "") for h in overall["horizons"].values() if h})
+        overall["validation"] = (
+            "chronological folds; " + "; ".join(m for m in methods if m)
+            + " — each fold is scored on data the scoring model never saw"
+        )
+        overall["walk_forward_folds"] = self.walk_forward_folds
+        overall["walk_forward_min_train_rows"] = self.walk_forward_min_train_rows
         overall["validation_folds"] = self.validation_folds
         overall["min_fold_pass_rate"] = self.min_fold_pass_rate
         notes = (

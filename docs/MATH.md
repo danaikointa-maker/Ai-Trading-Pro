@@ -147,7 +147,7 @@ recovery_factor     = net / (max_dd × starting_balance)
 | ค่าธรรมเนียม | ใช้ `commission_per_lot_round_turn` จาก spec (ถ้าโบรกเกอร์ไม่ให้มา = 0) |
 | swap | คิดตามโหมดที่โบรกเกอร์ประกาศ (money / points / percent) |
 | สกุลเงินกำไร ≠ USD | แปลงด้วย `quote_to_account_rate` แล้ว ✅ (ถ้า resolve ไม่ได้ = บล็อกการคำนวณ lot) |
-| walk-forward | แบ่ง out-of-sample เป็น fold ตามเวลาและบังคับให้ผ่านเกณฑ์ใน ≥75% ของ fold แต่ **ไม่ฝึกใหม่ต่อ fold** — วัดความเสถียร ไม่ใช่ walk-forward เต็มรูปแบบ |
+| walk-forward | แบ่งข้อมูลเป็น fold ตามเวลาและ **ฝึกใหม่ทุก fold** (expanding window) ต้องผ่านเกณฑ์ใน ≥75% ของ fold; ยังประเมินบน feed จำลอง |
 | Sharpe | annualise จากแท่ง 5 นาที; ช่วงที่ไม่มีไม้จะได้ return = 0 ทำให้ค่าสูงเกินจริงได้ |
 
 ## 9b. เกณฑ์อนุมัติโมเดล (fold consistency)
@@ -160,10 +160,26 @@ approved_horizon = (fold_pass_rate >= 0.75)
                  ∧ (Brier improvement รวม >= 0.02)
 ```
 
-- fold = บล็อกต่อเนื่องตามเวลาภายใน out-of-sample set (`split_folds`, ไม่สุ่ม)
+- fold = บล็อกต่อเนื่องตามเวลาภายในข้อมูล (`split_folds`, ไม่สุ่ม)
 - เดิมตัดสินจาก slice เดียว → โมเดลที่ฟลุ๊กเดือนเดียวก็ผ่าน ทำให้ `approved` แกว่งระหว่างรอบ
 - ตอนนี้ **เข้มขึ้น** ไม่ใช่ผ่อน: ต้องผ่านทั้งค่ากลางและสัดส่วน fold
-- ข้อจำกัดที่ยังเหลือ: ไม่ได้ retrain ต่อ fold (ดู `metrics.validation` ในผลเทรน)
+
+### วิธีสร้าง fold (walk-forward)
+
+```
+blocks = split_folds(n_rows, folds + 1)      # บล็อกแรก = ช่วงฝึกเริ่มต้น
+for block_i in blocks[1:]:
+    train_end = block_i.start × (1 − calibration_fraction)
+    ถ้า train_end < walk_forward_min_train_rows → ข้าม fold (ประวัติไม่พอ)
+    fit classifier บน rows[:train_end]        ← ฝึกใหม่ทุก fold
+    score บน rows[block_i]                    ← ข้อมูลที่โมเดลนั้นไม่เคยเห็น
+```
+
+- ประเมินเฉพาะ **classification** (directional accuracy + Brier เทียบ prior ของ training window)
+  ส่วน quantile regressors ไม่ถูก refit ใน fold (ไม่ได้ใช้ตัดสิน gate) → fold ละ 1 fit
+- ถ้าข้อมูลไม่พอจนได้ fold < 2 จะถอยไปใช้วิธี "แบ่ง slice ของโมเดลที่ fit แล้ว"
+  และ `metrics.validation_method` จะบอกว่าใช้วิธีไหน
+- ยังประเมินบน **feed จำลอง** — ตัวเลขบอกได้ว่าไปป์ไลน์ถูก ไม่ได้บอกว่าโมเดลมี edge จริง
 
 ## 10. บั๊กสูตรที่แก้ในรอบนี้
 

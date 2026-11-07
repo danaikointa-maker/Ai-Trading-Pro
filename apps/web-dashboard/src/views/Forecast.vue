@@ -215,7 +215,7 @@ function foldsClass(m) {
 
 function foldsTitle(m) {
   if (m?.fold_directional_median === undefined) return 'ยังไม่มีข้อมูล fold'
-  return `median directional ${pct(m.fold_directional_median, 1)} · `
+  return `${m.validation_method || 'fold check'} · median directional ${pct(m.fold_directional_median, 1)} · `
     + `median Brier Δ ${signed(m.fold_brier_improvement_median, 4)} · `
     + `แย่สุด ${signed(m.fold_brier_improvement_min, 4)}`
 }
