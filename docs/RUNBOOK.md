@@ -207,7 +207,29 @@ curl -s -X PATCH -H "Authorization: Bearer $TOK" -H 'Content-Type: application/j
 > ถ้าติด lockout (ไม่มี admin ที่ใช้งานอยู่เลย) ให้แก้ที่ฐานข้อมูลโดยตรง:
 > `sqlite3 storage/db/no7.sqlite3 "UPDATE users SET role='admin', active=1 WHERE email='...';"`
 
-## 10. ความปลอดภัย
+## 10. ข้อมูล tick (ทำให้ backtest ไม่ต้องเดาลำดับในแท่ง)
+
+```bash
+# 1) import ไฟล์ tick ของโบรกเกอร์ (ต้องมีคอลัมน์ time, bid, ask)
+.venv/bin/python scripts/import_ticks.py --csv ~/Downloads/XAUUSD_ticks.csv --symbol XAUUSD
+#    ไฟล์ไม่มี timezone → บอกให้ชัด (ชื่อ tz ของ IANA)
+.venv/bin/python scripts/import_ticks.py --csv ticks.csv --symbol XAUUSD --tz Etc/GMT-3
+
+# 2) ดูว่ามี tick อะไรอยู่ ครอบคลุมแค่ไหน และเป็นของจริงหรือของจำลอง
+curl -s localhost:8000/api/datasets/ticks/status -H "Authorization: Bearer $TOKEN" | jq
+
+# 3) รัน backtest — ใช้ tick อัตโนมัติ; เทียบกับโหมดเดิมได้ด้วย use_ticks=false
+curl -s localhost:8000/api/backtests -H "Authorization: Bearer $TOKEN" -H 'Content-Type: application/json' \
+  -d '{"symbol":"XAUUSD","bars":6000,"use_ticks":true,"snapshot_id":"DS-XXXXXXXXXX"}'
+```
+
+อ่านผล: `diagnostics.intra_bar.bars_settled_by_ticks` = จำนวนแท่งที่ตัดสินด้วย tick จริง,
+`bars_without_ticks` = จำนวนแท่งที่ยังใช้สมมติฐาน SL-ก่อน, และ `dataset.ticks.rows` = จำนวน tick ที่โหลด
+
+**ถ้าต้องการทดสอบเฉพาะไปป์ไลน์โดยยังไม่มีไฟล์จริง**: `scripts/reconstruct_ticks.py` สร้าง tick
+จากแท่ง M1 (ติดธง `reconstruction` ใน manifest) — ห้ามใช้ตัวเลขจากโหมดนี้ตัดสินใจเทรด
+
+## 11. ความปลอดภัย
 
 - อย่าเปิดพอร์ต 8000 สู่อินเทอร์เน็ตโดยไม่มี reverse proxy + TLS + auth
 - `NO7_JWT_SECRET` ต้องไม่ซ้ำกับระบบอื่น และไม่เข้า git

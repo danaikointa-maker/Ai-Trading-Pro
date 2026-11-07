@@ -116,8 +116,9 @@ Base: `http://127.0.0.1:8000` · interactive docs: `/api/docs` · OpenAPI: `/api
 | POST | `/api/brokers/{id}/activate` | สลับโบรกเกอร์ |
 | GET | `/api/brokers/{id}/symbols` | spec จริงต่อบัญชี (`source: broker|declared`) |
 | GET | `/api/brokers/{id}/account` \| `/health` | account info / health probe |
-| POST | `/api/backtests` | `{symbol,bars,spread_points?,commission_per_lot?,slippage_points,starting_balance,validate_walk_forward,snapshot_id?}` → `{job_id}` · `bars` ต้อง ≥ 1700 (ไม่งั้น 400 พร้อมบอกขั้นต่ำ) · ใส่ `snapshot_id` เพื่อรันซ้ำบนแท่งเทียนชุดเดิม (ตรวจ sha256 ก่อน, ผิด→400) |
+| POST | `/api/backtests` | `{symbol,bars,spread_points?,commission_per_lot?,slippage_points,starting_balance,validate_walk_forward,snapshot_id?}` → `{job_id}` · `bars` ต้อง ≥ 1700 (ไม่งั้น 400 พร้อมบอกขั้นต่ำ) · ใส่ `snapshot_id` เพื่อรันซ้ำบนแท่งเทียนชุดเดิม (ตรวจ sha256 ก่อน, ผิด→400) · `use_ticks` (ค่าเริ่มต้น `true`) = ใช้ tick ที่ import ไว้ตัดสินลำดับเหตุการณ์ในแท่ง ที่ชนทั้ง SL และ TP; ถ้าไม่มี tick จะใช้สมมติฐานเดิม (SL ก่อน) และรายงานบอกว่าใช้อย่างไหนกี่แท่ง |
 | GET | `/api/datasets` \| `POST /api/datasets` \| `GET /api/datasets/{id}` | snapshot ของแท่งเทียน: list / freeze ข้อมูลปัจจุบัน / manifest + ตรวจ hash |
+| GET | `/api/datasets/ticks/status?symbol=` | ข้อมูล tick ที่ import ไว้: จำนวนแถว, ช่วงเวลา, แถวที่ถูกทิ้งเพราะอะไร, และ flag `reconstruction` ถ้าเป็นข้อมูลจำลอง |
 | GET | `/api/backtests/jobs/{job_id}` | `{state,pct,message,report_id,metrics}` |
 | GET | `/api/backtests` \| `/api/backtests/{id}` | รายงาน + metrics/verdict/walk_forward/assumptions |
 
@@ -208,6 +209,24 @@ training, reconcile, alerts, errors, ticker, mode, feed, virtual_time`
 
 `assumptions` มีบรรทัด `Bar data: …` ที่ตรงกับแหล่งข้อมูลจริง (simulated / replay / MT5)
 — ไม่ใช่ข้อความตายตัวว่า "simulated" อีกต่อไป
+
+## tick (ข้อมูลจริงราย tick)
+
+```bash
+.venv/bin/python scripts/import_ticks.py --csv ~/Downloads/XAUUSD_ticks.csv --symbol XAUUSD   # time,bid,ask
+.venv/bin/python scripts/import_ticks.py --csv ticks.csv --symbol XAUUSD --tz Etc/GMT-3       # ไฟล์ไม่มี tz
+```
+เก็บเป็น `storage/datasets/ticks/XAUUSD_ticks.csv.gz` + manifest `.json` (จำนวนแถวที่ใช้/ที่ทิ้ง,
+ช่วงเวลา, sha256, median spread) — backtest โหลดเองเมื่อ `use_ticks: true`
+
+ใน report:
+```json
+"diagnostics": {"intra_bar": {"rows": 24000, "bars_settled_by_ticks": 3, "bars_without_ticks": 1, ...}},
+"assumptions": ["Intra-bar order: 3 ambiguous bars were settled by walking 24000 real ticks in time order; 1 bars had no ticks ..."]
+```
+`_manage_bar` เดิมเดาว่า "แท่งที่ชนทั้ง SL และ TP → SL ก่อน" ซึ่งเปลี่ยนไม้ชนะเป็นไม้แพ้ได้;
+เมื่อมี tick ระบบเดินราคาตามเวลาจริงในแท่งนั้น (long ออกที่ bid, short ออกที่ ask) แล้วจึงตัดสิน —
+ถ้า tick ไม่ครอบคลุมแท่งนั้น จะกลับไปใช้สมมติฐานเดิม **และนับไว้** ไม่ใช่เงียบ ๆ
 
 ## `metrics` ของ backtest
 

@@ -8,6 +8,7 @@ from services.api_gateway.deps import current_user, get_runtime
 from services.api_gateway.state import TradingRuntime
 from services.market_data.snapshots import (SnapshotError, describe_source, list_snapshots,
                                            load_snapshot, save_snapshot)
+from services.market_data.ticks import TickBook, tick_summary
 
 router = APIRouter(prefix="/api/datasets", tags=["datasets"])
 
@@ -46,6 +47,33 @@ def pin(payload: SnapshotRequest, runtime: TradingRuntime = Depends(get_runtime)
     runtime.db.audit(user["email"], "datasets.pin",
                      {"id": snapshot.id, "rows": snapshot.rows, "symbol": snapshot.symbol})
     return snapshot.as_dict()
+
+
+@router.get("/ticks/status")
+def tick_status(symbol: str = Query("", description="empty = every symbol with ticks"),
+                runtime: TradingRuntime = Depends(get_runtime), user=Depends(current_user)):
+    """Is real tick data available, and how much of it?
+
+    Backtests use ticks to settle bars that touch both the stop and a target; this is
+    how you find out whether that is happening or whether the conservative
+    stop-first assumption is still in force.
+    """
+    datasets = runtime.settings.paths["datasets"]
+    tick_dir = datasets / "ticks"
+    symbols = ([symbol] if symbol else
+               sorted(p.name.split("_")[0] for p in tick_dir.glob("*_ticks.json"))
+               if tick_dir.exists() else [])
+    out = []
+    for name in symbols:
+        manifest = tick_summary(datasets, name)
+        if manifest is None:
+            out.append({"symbol": name.upper(), "available": False})
+            continue
+        book = TickBook.load(datasets, name)
+        out.append({"symbol": name.upper(), "available": book is not None,
+                    **{k: v for k, v in manifest.items() if k not in ("path", "sha256")},
+                    "rows_loaded": len(book) if book is not None else 0})
+    return {"ticks": out, "used_for_intra_bar_ordering": any(t["available"] for t in out)}
 
 
 @router.get("/{snapshot_id}")
