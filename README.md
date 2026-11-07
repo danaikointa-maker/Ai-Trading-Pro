@@ -20,6 +20,7 @@
 |---|---|
 | API Gateway (FastAPI) + JWT + WebSocket | ✅ ทำงาน |
 | Market data (simulated feed, seed 7) + MT5 adapter | ✅ / ⏳ ต้องเทอร์มินัล Windows |
+| นำเข้าข้อมูลจริง (CSV) + ประเมิน offline บนข้อมูลจริง | ✅ `scripts/import_candles.py` (ดู `docs/DATA.md`) |
 | Trend · Market structure (BOS/CHoCH) · S/R confluence | ✅ |
 | Forecast 5/15/30/60/240 นาที + isotonic calibration + P10–P90 | ✅ (บาง horizon ยังไม่ผ่านเกณฑ์ OOS) |
 | Signal scoring 0–100 + Risk Gate | ✅ |

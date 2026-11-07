@@ -389,10 +389,19 @@ class ForecastTrainer:
         overall["deadband_atr"] = self.deadband
         overall["method"] = "LightGBM multiclass + isotonic calibration + quantile regression"
         methods = sorted({h.get("validation_method", "") for h in overall["horizons"].values() if h})
-        overall["validation"] = (
-            "chronological folds; " + "; ".join(m for m in methods if m)
-            + " — each fold is scored on data the scoring model never saw"
-        )
+        methods = [m for m in methods if m]
+        if methods:
+            overall["validation"] = (
+                "chronological folds; " + "; ".join(methods)
+                + " — each fold is scored on data the scoring model never saw"
+            )
+        else:
+            # No horizon survived the data check. Saying "no folds" is the honest
+            # answer; an empty method list used to render as "chronological folds;  —".
+            overall["validation"] = (
+                "no horizon was trained — not enough history for the requested horizons; "
+                "nothing can be approved"
+            )
         overall["walk_forward_folds"] = self.walk_forward_folds
         overall["walk_forward_min_train_rows"] = self.walk_forward_min_train_rows
         overall["validation_folds"] = self.validation_folds
