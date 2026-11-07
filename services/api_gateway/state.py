@@ -39,6 +39,8 @@ from packages.shared_schemas.models import (
     TradeRecord,
 )
 from packages.shared_schemas.settings import Settings, get_settings
+from services.api_gateway.cluster import (LIVE_KEY, build_shared_state, decide_role,
+                                          replica_payload)
 from services.ai_forecast.predictor import ForecastPredictor
 from services.ai_forecast.registry import ModelRegistry
 from services.ai_forecast.trainer import ForecastTrainer
@@ -95,7 +97,35 @@ def claim_runtime_lease(db: Any, owner: str, now: float | None = None,
         "heartbeat": now,
         "started_at": started,
     }
-    db.kv_set(LEASE_KEY, record)
+
+    if force:
+        # An operator explicitly opted into sharing; the guard below would (correctly)
+        # refuse to overwrite a live owner, so this path is a plain write.
+        db.kv_set(LEASE_KEY, record)
+        return True, dict(record)
+
+    # Compare-and-set in one statement. A read-then-write let two processes that
+    # started in the same instant both see a stale lease and both become leader —
+    # which means two trading loops. The UPDATE only applies while the condition
+    # still holds, so exactly one caller can win.
+    written = db.execute(
+        "INSERT INTO kv(key, value, updated_at) VALUES(?,?,?) "
+        "ON CONFLICT(key) DO UPDATE SET value=excluded.value, updated_at=excluded.updated_at "
+        "WHERE json_extract(kv.value, '$.owner') = ? "
+        "   OR CAST(COALESCE(json_extract(kv.value, '$.heartbeat'), 0) AS REAL) <= ?",
+        (LEASE_KEY, json.dumps(record), now, owner, now - stale_seconds),
+    )
+    if not written:
+        fresh = db.kv_get(LEASE_KEY, {}) or {}
+        fresh_owner = fresh.get("owner", other)
+        fresh_age = now - float(fresh.get("heartbeat") or 0)
+        return False, {
+            "state": "blocked",
+            "owner": fresh_owner,
+            "heartbeat_age_seconds": round(max(0.0, fresh_age), 1),
+            "blocked_owner": owner,
+            "raced": True,
+        }
     return True, dict(record)
 
 
@@ -190,6 +220,11 @@ class TradingRuntime:
         self.training: dict[str, Any] = {"state": "idle", "message": "", "pct": 0.0, "version": None}
         self._owner = lease_owner()
         self.lease: dict[str, Any] = {"state": "unclaimed", "owner": self._owner}
+        self._standby: threading.Thread | None = None
+        self.shared, self.shared_status = build_shared_state(self.settings)
+        self.replica = False
+        self._replica_frame: dict[str, Any] | None = None
+        self._last_publish = 0.0
         self._lease_last_beat = 0.0
         self._stop = threading.Event()
         self._thread: threading.Thread | None = None
@@ -204,6 +239,7 @@ class TradingRuntime:
         if self._thread and self._thread.is_alive():
             return
         if not self._claim_lease():
+            self._start_standby()
             return
         # Run one cycle inline: the dashboard's very first paint then has a
         # snapshot/forecast instead of an empty card that fills in seconds later.
@@ -232,10 +268,15 @@ class TradingRuntime:
                     "NO7_ALLOW_MULTI_RUNTIME is set: more than one runtime is driving this "
                     "database. Signals and orders may be duplicated."))
             return True
+        frame = replica_payload(self.shared)
+        self.replica = bool(frame) and self.shared_status.get("backend") != "local"
         self._log_error("runtime-lease", RuntimeError(
             f"another No7 runtime already owns this database ({record.get('owner')}, "
-            f"heartbeat {record.get('heartbeat_age_seconds')}s ago). Not starting the "
-            f"trading loop here — run one instance only."))
+            f"heartbeat {record.get('heartbeat_age_seconds')}s ago). "
+            + ("Serving its live frames as a read-only replica — this process will not trade."
+               if self.replica else
+               "Not starting the trading loop here, and there is no shared backend to read "
+               "from — run one instance only.")))
         return False
 
     def _maybe_heartbeat(self, now: float | None = None) -> None:
@@ -244,6 +285,70 @@ class TradingRuntime:
             return
         self._lease_last_beat = now
         self.lease = heartbeat_lease(self.db, self._owner, now)
+
+    # ------------------------------------------------------------ hot standby
+    def try_promote(self) -> bool:
+        """Take over from a leader that stopped breathing (atomic lease claim).
+
+        A standby is a full runtime that simply never started its loop, so
+        promotion is "claim the lease and start ticking" — no re-initialisation and
+        no chance of two winners, because the claim is a compare-and-set.
+        """
+        if self._stop.is_set():
+            return False
+        if self.lease.get("state") in ("held", "shared") and not self.replica:
+            return False
+        ok, record = claim_runtime_lease(self.db, self._owner)
+        if not ok:
+            self.lease = record
+            return False
+        self.lease = record
+        self.replica = False
+        self._log_error("runtime-lease", RuntimeError(
+            f"promoted to leader ({record.get('state')}) — the previous runtime stopped "
+            f"sending heartbeats. This process now drives trading."))
+        self.start()
+        return True
+
+    def _start_standby(self) -> None:
+        """Poll for a dead leader while this process waits in the background."""
+        if not bool(self.settings.cluster.get("hot_standby", True)):
+            return
+        if self._standby and self._standby.is_alive():
+            return
+        interval = float(self.settings.cluster.get("standby_poll_seconds", 5) or 5)
+
+        def watch() -> None:
+            while not self._stop.wait(max(0.2, interval)):
+                try:
+                    if self.try_promote():
+                        return
+                except Exception as exc:  # noqa: BLE001 - a standby must not crash
+                    self._log_error("runtime-lease", exc)
+
+        self._standby = threading.Thread(target=watch, name="no7-standby", daemon=True)
+        self._standby.start()
+
+    def _maybe_publish(self, now: float | None = None) -> None:
+        """Publish this leader's live frame for any replicas (once a second)."""
+        now = time.time() if now is None else now
+        if now - self._last_publish < 1.0:
+            return
+        self._last_publish = now
+        try:
+            self.shared.publish(LIVE_KEY, {"owner": self._owner, "published_at": now,
+                                           "payload": self.live_payload()})
+        except Exception as exc:  # noqa: BLE001 - the shared backend must not stop trading
+            self._log_error("cluster", exc)
+
+    def role(self) -> str:
+        frame = self._replica_frame if self.replica else None
+        try:
+            has_frame = bool(frame) or bool(replica_payload(self.shared))
+        except Exception:  # noqa: BLE001 - a broken backend must not 500 the health page
+            has_frame = bool(frame)
+        return decide_role(self.lease.get("state", "unclaimed"),
+                           str(self.shared_status.get("backend", "local")), has_frame)
 
     def prime(self) -> None:
         """Compute the first snapshot/forecast synchronously (never fatal)."""
@@ -257,6 +362,12 @@ class TradingRuntime:
         self._stop.set()
         if self._thread:
             self._thread.join(timeout=3)
+        if self._standby:
+            self._standby.join(timeout=2)
+        try:
+            self.shared.close()
+        except Exception:  # noqa: BLE001 - shutdown must not raise
+            pass
         try:
             released, record = release_runtime_lease(self.db, self._owner)
             self.lease = {**record, "state": "released" if released else self.lease.get("state")}
@@ -280,6 +391,7 @@ class TradingRuntime:
                     self._reconcile_cycle()
                 self._record_equity()
                 self._maybe_heartbeat(now)
+                self._maybe_publish(now)
             except Exception as exc:  # noqa: BLE001 - the loop must survive anything
                 self._log_error("runtime", exc)
             elapsed = time.time() - cycle_start
@@ -803,6 +915,11 @@ class TradingRuntime:
             return default_risk_state(0.0)
 
     def live_payload(self, light: bool = False) -> dict[str, Any]:
+        if self.replica:
+            frame = replica_payload(self.shared)
+            if frame is not None:
+                self._replica_frame = frame
+                return frame
         symbol = self.active_symbol
         with self.lock:
             snapshot = self.contexts.get(symbol)
@@ -866,11 +983,14 @@ class TradingRuntime:
             "notify": self.notifier.status()["state"],
         }
         lease_state = self.lease.get("state", "unclaimed")
-        if lease_state in ("blocked", "lost"):
+        role = self.role()
+        if self.replica:
+            services["runtime"] = "replica (read-only, serving the leader's frames)"
+        elif lease_state in ("blocked", "lost"):
             services["runtime"] = f"blocked ({lease_state})"
             services["lease"] = lease_state
         return {
-            "status": "ok" if services["runtime"] == "running" else "degraded",
+            "status": "ok" if (services["runtime"] == "running" or self.replica) else "degraded",
             "version": self.settings.app.get("app", {}).get("version", "V1"),
             "env": self.settings.env,
             "server_time": time.time(),
@@ -884,6 +1004,8 @@ class TradingRuntime:
             "model": self.predictor.status().model_dump() if self.predictor.status() else None,
             "services": services,
             "notify": self.notifier.status(),
+            "cluster": {**self.shared_status, "role": role,
+                        "shared_health": self.shared.healthy()},
             "runtime_lease": {**self.lease,
                               "heartbeat_age_seconds": round(time.time() - float(self.lease.get("heartbeat") or 0), 1)
                               if self.lease.get("heartbeat") else None},

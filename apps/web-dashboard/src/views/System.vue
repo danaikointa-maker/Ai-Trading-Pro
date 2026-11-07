@@ -24,6 +24,14 @@
             <dd><span class="chip" :class="String(v).includes('ok') || String(v).includes('running') || String(v).includes('approved') ? 'chip-up' : 'chip-warn'">{{ v }}</span></dd>
           </div>
           <div class="kv">
+            <dt>cluster</dt>
+            <dd class="flex flex-wrap items-center gap-1.5">
+              <span class="chip" :class="clusterTone" :title="clusterTitle">{{ clusterRole }}</span>
+              <span class="num text-[9.5px] text-muted">{{ cluster?.backend }}</span>
+              <span v-if="cluster?.reason" class="chip chip-warn" :title="cluster.reason">fallback</span>
+            </dd>
+          </div>
+          <div class="kv">
             <dt>runtime lease</dt>
             <dd>
               <span class="chip" :class="leaseTone" :title="leaseTitle">{{ leaseLabel }}</span>
@@ -182,6 +190,30 @@ const feedSymbols = computed(() => health.value?.feed?.symbols || {})
 // One process may drive ticks and orders per database. When the lease is held
 // elsewhere this page still loads, but nothing moves — say so instead of
 // leaving a frozen screen with no explanation.
+const cluster = computed(() => health.value?.cluster || {})
+const clusterRole = computed(() => {
+  const role = cluster.value.role || 'unknown'
+  const shared = cluster.value.shared_health
+  return shared && shared.ok === false ? `${role} · backend down` : role
+})
+const clusterTone = computed(() => {
+  const role = cluster.value.role
+  const down = cluster.value.shared_health?.ok === false
+  if (down) return 'chip-down'
+  if (role === 'leader') return 'chip-up'
+  return role === 'replica' ? 'chip-up' : 'chip-warn'
+})
+const clusterTitle = computed(() => {
+  const c = cluster.value
+  if (!c.role) return ''
+  const parts = [`backend: ${c.backend || 'local'} (ขอ: ${c.requested || 'local'})`]
+  if (c.reason) parts.push(c.reason)
+  if (c.shared_health?.error) parts.push(`shared backend: ${c.shared_health.error}`)
+  if (c.role === 'replica') parts.push('โปรเซสนี้เสิร์ฟเฟรมของ leader แบบอ่านอย่างเดียว')
+  if (c.role === 'blocked') parts.push('ไม่ถือ lease และไม่มี shared backend ให้อ่าน')
+  return parts.join(' · ')
+})
+
 const lease = computed(() => health.value?.runtime_lease || {})
 const leaseLabel = computed(() => {
   const state = lease.value.state || 'unknown'

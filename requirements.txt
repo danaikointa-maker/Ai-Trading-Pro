@@ -14,5 +14,10 @@ PyYAML>=6.0.3
 pytest>=9.2.0
 httpx>=0.28.1
 
+# Optional: only needed when cluster.backend=redis (several workers/hosts sharing
+# one runtime). Without it the platform falls back to the in-process store and
+# says so in /api/system/health → cluster.reason.
+# redis>=5.0.8
+
 # Windows only (the simulated feed and backtests need none of it):
 # MetaTrader5>=5.0.45
