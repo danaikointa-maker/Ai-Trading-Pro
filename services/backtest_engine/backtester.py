@@ -144,6 +144,10 @@ class Backtester:
         m1e = enrich(m1)
         n = len(m5)
         warmup = WARMUP_M5_BARS
+        if ticks is not None:
+            # Say which window this run really tests before it starts, so the report can
+            # tell "no bar needed settling" apart from "no ticks cover these days".
+            ticks.cover_window(int(m5["t"].iloc[warmup]), int(m5["t"].iloc[-1]) + 300)
         horizon_bars = [1, 3, 6, 12, 48]
         train_cut = int(n * 0.6)
         table = None
@@ -435,14 +439,22 @@ class Backtester:
             return ("Intra-bar order: bars that covered both the stop and a target were "
                     "settled with the conservative stop-first assumption (no tick data).")
         stats = ticks.stats()
+        # Ticks can cover three days and the run still be elsewhere: say that out loud,
+        # otherwise "no ambiguity had to be settled" reads as if ticks had been consulted.
+        in_window = stats.get("ticks_in_window")
+        no_overlap = bool(stats.get("rows")) and in_window == 0
+        overlap_note = (f" Note: none of the imported ticks fall inside this run's window "
+                        f"({stats['rows']} ticks over {stats.get('days', '?')} days, 0 in range), "
+                        f"so no bar here could have been settled by ticks."
+                        if no_overlap else "")
         if not stats["bars_settled_by_ticks"] and not stats["bars_without_ticks"]:
-            return (f"Intra-bar order: {stats['rows']} ticks were loaded over the tested window and "
+            return (f"Intra-bar order: {stats['rows']} ticks are available to the engine and "
                     f"no bar covered both the stop and a target, so no ambiguity had to be "
-                    f"settled and the stop-first assumption was never needed.")
+                    f"settled and the stop-first assumption was never needed.{overlap_note}")
         if not stats["bars_settled_by_ticks"]:
             return (f"Intra-bar order: tick data is loaded ({stats['rows']} ticks) but covered "
                     f"none of the ambiguous bars, so the conservative stop-first assumption "
-                    f"was used on {stats['bars_without_ticks']} of them.")
+                    f"was used on {stats['bars_without_ticks']} of them.{overlap_note}")
         return (f"Intra-bar order: {stats['bars_settled_by_ticks']} ambiguous bars were settled "
                 f"by walking {stats['rows']} real ticks in time order; "
                 f"{stats['bars_without_ticks']} bars had no ticks and kept the conservative "

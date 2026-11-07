@@ -19,11 +19,18 @@ from __future__ import annotations
 import gzip
 import hashlib
 import json
-from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Iterable, Literal
+from typing import Any, Iterable, Iterator
 
+import numpy as np
 import pandas as pd
+
+from services.market_data.tick_store import (TickStore, Touch, available_days, day_key,
+                                             manifest_path, symbol_dir, write_days,
+                                             write_manifest)
+
+__all__ = ["TickBook", "TickDataError", "Touch", "import_ticks", "load_tick_csv",
+           "tick_layout", "tick_path", "tick_summary", "iter_tick_csv"]
 
 COLUMNS = ["t", "bid", "ask"]
 TICK_SUBDIR = "ticks"
@@ -33,24 +40,18 @@ class TickDataError(ValueError):
     """Tick data that cannot be used as-is; the message is shown to the operator."""
 
 
-@dataclass
-class Touch:
-    kind: Literal["stop", "tp"]
-    index: int          # 0-based index into the target list; 0 for a stop
-    price: float
-    t: int
-
-
 # --------------------------------------------------------------------- import
-def _read_csv(path: Path) -> pd.DataFrame:
-    try:
-        return pd.read_csv(path, sep=None, engine="python")
-    except Exception as exc:  # noqa: BLE001 - the message is the diagnosis
-        raise TickDataError(f"cannot read {path}: {exc}") from exc
+def _sniff_separator(path: Path) -> str:
+    head = path.read_text("utf-8", errors="replace")[:4096].splitlines()[:5]
+    counts = {sep: sum(line.count(sep) for line in head) for sep in (",", ";", "\t", "|")}
+    best = max(counts, key=counts.get)
+    return best if counts[best] else ","
 
 
-def _find_columns(frame: pd.DataFrame) -> tuple[str, str, str]:
-    lower = {str(c).strip().lower(): c for c in frame.columns}
+def _detect_columns(path: Path, sep: str) -> tuple[str, str, str]:
+    header = path.read_text("utf-8", errors="replace").splitlines()[0]
+    columns = [c.strip().strip('"') for c in header.split(sep)]
+    lower = {c.lower(): c for c in columns}
 
     def pick(*names: str) -> str | None:
         for name in names:
@@ -66,42 +67,34 @@ def _find_columns(frame: pd.DataFrame) -> tuple[str, str, str]:
     if missing:
         raise TickDataError(
             f"tick file is missing {missing}; expected columns time, bid, ask "
-            f"(found: {list(frame.columns)[:8]})")
+            f"(found: {columns[:8]})")
     return time_col, bid_col, ask_col  # type: ignore[return-value]
 
 
-def load_tick_csv(path: str | Path, tz: str = "UTC") -> tuple[pd.DataFrame, dict[str, Any]]:
-    """Read a tick export into `t, bid, ask` (UTC epoch seconds), reporting drops.
-
-    Nothing is silently discarded: every row that had to go is counted under a
-    reason, because a tick file that lost half its rows makes every later number
-    wrong in a way you cannot see.
-    """
-    src = Path(path).expanduser()
-    if not src.exists():
-        raise TickDataError(f"tick file not found: {src}")
-    raw = _read_csv(src)
-    time_col, bid_col, ask_col = _find_columns(raw)
-    total = len(raw)
+def _normalise(chunk: pd.DataFrame, time_col: str, bid_col: str, ask_col: str,
+               tz: str) -> tuple[pd.DataFrame, dict[str, int]]:
+    """Parse one chunk into `t, bid, ask`, counting every row that had to go."""
     drops: dict[str, int] = {}
-
     frame = pd.DataFrame({
-        "t": pd.to_datetime(raw[time_col], errors="coerce", utc=False),
-        "bid": pd.to_numeric(raw[bid_col], errors="coerce"),
-        "ask": pd.to_numeric(raw[ask_col], errors="coerce"),
+        "t": pd.to_datetime(chunk[time_col], errors="coerce", utc=False),
+        "bid": pd.to_numeric(chunk[bid_col], errors="coerce"),
+        "ask": pd.to_numeric(chunk[ask_col], errors="coerce"),
     })
     bad_time = frame["t"].isna()
-    drops["unparsed timestamp"] = int(bad_time.sum())
-    frame = frame[~bad_time]
-    bad_price = frame["bid"].isna() | frame["ask"].isna() | (frame["bid"] <= 0) | (frame["ask"] <= 0)
-    drops["missing/zero price"] = int(bad_price.sum())
-    frame = frame[~bad_price]
+    if bad_time.any():
+        drops["unparsed timestamp"] = int(bad_time.sum())
+        frame = frame[~bad_time]
+    bad_price = (frame["bid"].isna() | frame["ask"].isna()
+                 | (frame["bid"] <= 0) | (frame["ask"] <= 0))
+    if bad_price.any():
+        drops["missing/zero price"] = int(bad_price.sum())
+        frame = frame[~bad_price]
     inverted = frame["ask"] < frame["bid"]
-    drops["ask below bid"] = int(inverted.sum())
-    frame = frame[~inverted]
-
+    if inverted.any():
+        drops["ask below bid"] = int(inverted.sum())
+        frame = frame[~inverted]
     if frame.empty:
-        raise TickDataError(f"{src.name}: no usable ticks ({drops})")
+        return frame[COLUMNS], drops
 
     if getattr(frame["t"].dt, "tz", None) is None:
         localised = frame["t"].dt.tz_localize(tz, ambiguous="NaT", nonexistent="NaT")
@@ -115,91 +108,264 @@ def load_tick_csv(path: str | Path, tz: str = "UTC") -> tuple[pd.DataFrame, dict
     frame = frame.assign(
         t=((frame["t"].dt.tz_convert("UTC") - epoch) // pd.Timedelta(seconds=1)).astype("int64"))
     frame = frame.sort_values("t", kind="stable")
-
     duplicated = int(frame["t"].duplicated().sum())
     if duplicated:
         drops["duplicate timestamp"] = duplicated
         frame = frame.drop_duplicates(subset="t", keep="last")
+    return frame[COLUMNS].reset_index(drop=True), drops
 
-    frame = frame.reset_index(drop=True)
+
+def iter_tick_csv(path: str | Path, tz: str = "UTC", chunk_rows: int = 200_000) -> Iterator[tuple[pd.DataFrame, dict[str, int], int]]:
+    """Yield (normalised chunk, drops, rows_read) so a multi-GB export stays bounded."""
+    src = Path(path).expanduser()
+    if not src.exists():
+        raise TickDataError(f"tick file not found: {src}")
+    sep = _sniff_separator(src)
+    time_col, bid_col, ask_col = _detect_columns(src, sep)
+    try:
+        reader = pd.read_csv(src, sep=sep, chunksize=max(1, int(chunk_rows)),
+                             low_memory=False)
+    except Exception as exc:  # noqa: BLE001 - the message is the diagnosis
+        raise TickDataError(f"cannot read {src}: {exc}") from exc
+    for chunk in reader:
+        frame, drops = _normalise(chunk, time_col, bid_col, ask_col, tz)
+        yield frame, drops, len(chunk)
+
+
+def load_tick_csv(path: str | Path, tz: str = "UTC") -> tuple[pd.DataFrame, dict[str, Any]]:
+    """Read a whole tick export into `t, bid, ask` (UTC epoch seconds), reporting drops."""
+    src = Path(path).expanduser()
+    frames: list[pd.DataFrame] = []
+    drops: dict[str, int] = {}
+    total = 0
+    for frame, part, rows in iter_tick_csv(src, tz=tz, chunk_rows=5_000_000):
+        total += rows
+        for reason, count in part.items():
+            drops[reason] = drops.get(reason, 0) + count
+        if not frame.empty:
+            frames.append(frame)
+    if not frames:
+        raise TickDataError(f"{src.name}: no usable ticks ({drops})")
+    merged = pd.concat(frames).sort_values("t", kind="stable")
+    duplicated = int(merged["t"].duplicated().sum())
+    if duplicated:
+        drops["duplicate timestamp"] = drops.get("duplicate timestamp", 0) + duplicated
+        merged = merged.drop_duplicates(subset="t", keep="last")
+    merged = merged.reset_index(drop=True)
     summary = {
         "source": str(src),
         "rows_read": int(total),
-        "rows_used": int(len(frame)),
+        "rows_used": int(len(merged)),
         "dropped": {k: v for k, v in drops.items() if v},
-        "first_t": int(frame["t"].iloc[0]),
-        "last_t": int(frame["t"].iloc[-1]),
+        "first_t": int(merged["t"].iloc[0]),
+        "last_t": int(merged["t"].iloc[-1]),
         "tz": tz,
         "sha256": hashlib.sha256(
-            frame.to_csv(index=False, float_format="%.5f", lineterminator="\n").encode()
+            merged.to_csv(index=False, float_format="%.5f", lineterminator="\n").encode()
         ).hexdigest(),
     }
-    return frame[COLUMNS], summary
+    return merged[COLUMNS], summary
 
 
 def tick_path(out_dir: str | Path, symbol: str) -> Path:
+    """Legacy single-file layout (kept so an older import still loads)."""
     return Path(out_dir) / TICK_SUBDIR / f"{symbol.upper()}_ticks.csv.gz"
 
 
-def import_ticks(csv_path: str | Path, symbol: str, out_dir: str | Path,
-                 tz: str = "UTC") -> dict[str, Any]:
-    """Convert a broker tick export into the stored form and write a manifest."""
-    frame, summary = load_tick_csv(csv_path, tz=tz)
-    path = tick_path(out_dir, symbol)
-    path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_bytes(gzip.compress(
-        frame.to_csv(index=False, float_format="%.5f", lineterminator="\n").encode(), mtime=0))
-    manifest = {**summary, "symbol": symbol.upper(), "path": str(path), "stored_rows": len(frame),
-                "spread_points_median": round(float((frame["ask"] - frame["bid"]).median()), 5)}
-    (path.parent / f"{symbol.upper()}_ticks.json").write_text(json.dumps(manifest, indent=2), "utf-8")
+def import_ticks(csv_path: str | Path, symbol: str, out_dir: str | Path, tz: str = "UTC", *,
+                 layout: str = "daily", fmt: str | None = None,
+                 chunk_rows: int = 200_000) -> dict[str, Any]:
+    """Import a broker export into daily files (default) or one legacy file.
+
+    Chunked reading means a multi-GB export never sits in memory: each chunk is
+    normalised, buckets are merged per UTC day, and only one day is held at a time
+    before it is written out.
+    """
+    if layout not in ("daily", "file"):
+        raise TickDataError(f"unknown layout {layout!r}; use 'daily' or 'file'")
+    src = Path(csv_path).expanduser()
+    buckets: dict[str, list[pd.DataFrame]] = {}
+    drops: dict[str, int] = {}
+    total = 0
+    first_t: int | None = None
+    last_t: int | None = None
+    for frame, part, rows in iter_tick_csv(src, tz=tz, chunk_rows=chunk_rows):
+        total += rows
+        for reason, count in part.items():
+            drops[reason] = drops.get(reason, 0) + count
+        if frame.empty:
+            continue
+        first_t = int(frame["t"].iloc[0]) if first_t is None else min(first_t, int(frame["t"].iloc[0]))
+        last_t = int(frame["t"].iloc[-1]) if last_t is None else max(last_t, int(frame["t"].iloc[-1]))
+        for day, part_frame in frame.groupby(frame["t"].map(day_key), sort=True):
+            buckets.setdefault(str(day), []).append(part_frame)
+
+    if not buckets:
+        raise TickDataError(f"{src.name}: no usable ticks ({drops})")
+
+    days: list[dict[str, Any]] = []
+    rows_used = 0
+    spread_samples: list[float] = []
+    if layout == "file":
+        merged = pd.concat([f for parts in buckets.values() for f in parts])
+        merged = merged.sort_values("t", kind="stable")
+        duplicated = int(merged["t"].duplicated().sum())
+        if duplicated:
+            drops["duplicate timestamp"] = drops.get("duplicate timestamp", 0) + duplicated
+            merged = merged.drop_duplicates(subset="t", keep="last")
+        merged = merged.reset_index(drop=True)
+        path = tick_path(out_dir, symbol)
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_bytes(gzip.compress(
+            merged.to_csv(index=False, float_format="%.5f", lineterminator="\n").encode(),
+            mtime=0))
+        rows_used = len(merged)
+        spread_samples = (merged["ask"] - merged["bid"]).tolist()
+        manifest = {
+            **{k: v for k, v in {
+                "source": str(src), "rows_read": total, "rows_used": rows_used,
+                "dropped": {k: v for k, v in drops.items() if v},
+                "first_t": first_t, "last_t": last_t, "tz": tz,
+                "sha256": hashlib.sha256(
+                    merged.to_csv(index=False, float_format="%.5f", lineterminator="\n").encode()
+                ).hexdigest(),
+            }.items()},
+            "symbol": symbol.upper(), "layout": "file", "path": str(path),
+            "stored_rows": rows_used,
+            "spread_points_median": round(float(np.median(spread_samples)), 5),
+        }
+        (path.parent / f"{symbol.upper()}_ticks.json").write_text(
+            json.dumps(manifest, indent=2), "utf-8")
+        return manifest
+
+    for day in sorted(buckets):
+        merged = pd.concat(buckets[day]).sort_values("t", kind="stable")
+        duplicated = int(merged["t"].duplicated().sum())
+        if duplicated:
+            drops["duplicate timestamp"] = drops.get("duplicate timestamp", 0) + duplicated
+            merged = merged.drop_duplicates(subset="t", keep="last")
+        merged = merged.reset_index(drop=True)
+        spread_samples.extend((merged["ask"] - merged["bid"]).head(5000).tolist())
+        days.extend(write_days(out_dir, symbol, merged, fmt=fmt))
+        rows_used += len(merged)
+
+    source = {"file": str(src), "tz": tz, "rows_read": total,
+              "dropped": {k: v for k, v in drops.items() if v},
+              "sha256": hashlib.sha256(
+                  json.dumps([{"day": d["day"], "sha256": d["sha256"]} for d in days],
+                             sort_keys=True).encode()).hexdigest()}
+    manifest = write_manifest(
+        out_dir, symbol, source=source, days=days,
+        extras={"rows_used": rows_used, "stored_rows": rows_used, "rows_read": total,
+                "path": str(symbol_dir(out_dir, symbol)),
+                "dropped": {k: v for k, v in drops.items() if v},
+                "spread_points_median": round(float(np.median(spread_samples)), 5)
+                if spread_samples else None})
     return manifest
 
 
 def tick_summary(out_dir: str | Path, symbol: str) -> dict[str, Any] | None:
-    path = Path(out_dir) / TICK_SUBDIR / f"{symbol.upper()}_ticks.json"
-    if not path.exists():
+    """Manifest for either layout (daily first, then the legacy single-file one)."""
+    daily = manifest_path(out_dir, symbol)
+    if daily.exists():
+        try:
+            payload = json.loads(daily.read_text("utf-8"))
+            return {**payload, "path": str(symbol_dir(out_dir, symbol))}
+        except json.JSONDecodeError:
+            pass
+    legacy = Path(out_dir) / TICK_SUBDIR / f"{symbol.upper()}_ticks.json"
+    if not legacy.exists():
         return None
     try:
-        return json.loads(path.read_text("utf-8"))
+        return json.loads(legacy.read_text("utf-8"))
     except json.JSONDecodeError:
         return None
 
 
+def tick_layout(out_dir: str | Path, symbol: str) -> str | None:
+    if available_days(out_dir, symbol):
+        return "daily"
+    if tick_path(out_dir, symbol).exists():
+        return "file"
+    return None
+
+
 # ----------------------------------------------------------------- usage side
 class TickBook:
-    """Ticks for one symbol, sorted, with the one query the backtest needs."""
+    """Ticks for one symbol behind the one query the backtest needs.
 
-    def __init__(self, frame: pd.DataFrame, symbol: str = "") -> None:
+    Two backends, same API:
+    * daily files (the default) — read lazily, only the days a bar window touches;
+    * a single legacy file — loaded whole, for imports made by the first version.
+
+    `used`/`exhausted` count what the backtest did with it: bars settled by ticks, and
+    bars where ticks were expected but absent. Those counters live here because they
+    are about the *run*, not about the storage.
+    """
+
+    def __init__(self, frame: pd.DataFrame | None = None, symbol: str = "", *,
+                 store: "TickStore | None" = None) -> None:
+        self.symbol = symbol
+        self.used = 0
+        self.exhausted = 0
+        self.store = store
+        self.window: tuple[int, int] | None = None
+        self.times = np.empty(0, dtype="int64")
+        self.bid = np.empty(0)
+        self.ask = np.empty(0)
+        if store is not None:
+            self.layout = "daily"
+            return
+        if frame is None:
+            raise TickDataError("TickBook needs a frame or a store")
         missing = [c for c in COLUMNS if c not in frame.columns]
         if missing:
             raise TickDataError(f"tick frame is missing columns: {missing}")
         ordered = frame[COLUMNS].sort_values("t", kind="stable").reset_index(drop=True)
-        self.symbol = symbol
+        self.layout = "memory"
         self.frame = ordered
         self.times = ordered["t"].to_numpy(dtype="int64")
         self.bid = ordered["bid"].to_numpy(dtype=float)
         self.ask = ordered["ask"].to_numpy(dtype=float)
-        self.used = 0          # bars settled by ticks
-        self.exhausted = 0     # bars with no ticks at all
 
     @classmethod
-    def load(cls, out_dir: str | Path, symbol: str) -> "TickBook | None":
+    def load(cls, out_dir: str | Path, symbol: str, *, cache_days: int = 4) -> "TickBook | None":
+        """Daily layout first; falls back to a legacy single file if that is all there is."""
+        if available_days(out_dir, symbol):
+            return cls(store=TickStore(out_dir, symbol, cache_days=cache_days), symbol=symbol.upper())
         path = tick_path(out_dir, symbol)
         if not path.exists():
             return None
         frame = pd.read_csv(path)
         return cls(frame, symbol)
 
+    # ------------------------------------------------------------- geometry
     def __len__(self) -> int:
+        if self.store is not None:
+            return len(self.store)
         return len(self.frame)
 
     def slice(self, start: int, end: int) -> tuple[int, int]:
         """Half-open [start, end) index range, via binary search (no full scan)."""
-        import numpy as np
-
         lo = int(np.searchsorted(self.times, start, "left"))
         hi = int(np.searchsorted(self.times, end, "left"))
         return lo, hi
+
+    def cover_window(self, start: int, end: int) -> None:
+        """Declare the window this run actually tests, so the report can be precise."""
+        self.window = (int(start), int(end))
+
+    def ticks_in_window(self) -> int | None:
+        """Ticks available inside the declared window (manifest-only for daily files)."""
+        if self.window is None:
+            return None
+        if self.store is not None:
+            return self.store.ticks_in(*self.window)
+        lo, hi = self.slice(*self.window)
+        return hi - lo
+
+    def days_needed(self, start: int, end: int) -> list[str]:
+        return self.store.days_for(start, end) if self.store is not None else []
 
     def first_touch(self, start: int, end: int, direction: str, stop: float,
                     targets: Iterable[tuple[int, float]]) -> Touch | None:
@@ -208,6 +374,8 @@ class TickBook:
         Returns None when there are no ticks in the window — the caller then keeps
         its conservative assumption instead of inventing an answer.
         """
+        if self.store is not None:
+            return self.store.first_touch(start, end, direction, stop, targets)
         lo, hi = self.slice(start, end)
         if hi <= lo:
             return None
@@ -215,10 +383,7 @@ class TickBook:
         times = self.times[lo:hi]
 
         best: Touch | None = None
-        if direction == "up":
-            stop_hits = exit_prices <= stop
-        else:
-            stop_hits = exit_prices >= stop
+        stop_hits = exit_prices <= stop if direction == "up" else exit_prices >= stop
         if stop_hits.any():
             i = int(stop_hits.argmax())
             best = Touch("stop", 0, float(stop), int(times[i]))
@@ -234,11 +399,24 @@ class TickBook:
         return best
 
     def stats(self) -> dict[str, Any]:
-        return {
+        out: dict[str, Any] = {
             "symbol": self.symbol,
-            "rows": len(self.frame),
-            "first_t": int(self.times[0]) if len(self.times) else None,
-            "last_t": int(self.times[-1]) if len(self.times) else None,
+            "layout": self.layout,
             "bars_settled_by_ticks": self.used,
             "bars_without_ticks": self.exhausted,
         }
+        if self.store is not None:
+            out.update({"days": len(self.store.days), "days_loaded": self.store.reads,
+                        "days_in_window": (len(self.store.days_for(*self.window))
+                                           if self.window is not None else None),
+                        "ticks_in_window": self.ticks_in_window(),
+                        "rows": self.store.rows(),
+                        "rows_in_window": self.store.ticks_read,
+                        "days_used": sorted(self.store.days_read),
+                        "first_t": self.store.first_t, "last_t": self.store.last_t})
+        else:
+            out.update({"rows": len(self.frame), "days": None,
+                        "ticks_in_window": self.ticks_in_window(),
+                        "first_t": int(self.times[0]) if len(self.times) else None,
+                        "last_t": int(self.times[-1]) if len(self.times) else None})
+        return out

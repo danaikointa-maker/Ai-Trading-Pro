@@ -220,9 +220,21 @@ curl -s -X PATCH -H "Authorization: Bearer $TOK" -H 'Content-Type: application/j
 .venv/bin/python scripts/import_ticks.py --csv ~/Downloads/XAUUSD_ticks.csv --symbol XAUUSD
 #    ไฟล์ไม่มี timezone → บอกให้ชัด (ชื่อ tz ของ IANA)
 .venv/bin/python scripts/import_ticks.py --csv ticks.csv --symbol XAUUSD --tz Etc/GMT-3
+#    ไฟล์ยักษ์ (หลายล้านแถว) → ลด memory ต่อการอ่านหนึ่งครั้ง
+.venv/bin/python scripts/import_ticks.py --csv big.csv --symbol XAUUSD --chunk-rows 100000
+#    ต้องได้ layout เดิมแบบไฟล์เดียว (เพื่อ reproduce ของเก่า) เท่านั้น
+.venv/bin/python scripts/import_ticks.py --csv old.csv --symbol XAUUSD --single-file
 
 # 2) ดูว่ามี tick อะไรอยู่ ครอบคลุมแค่ไหน และเป็นของจริงหรือของจำลอง
 curl -s localhost:8000/api/datasets/ticks/status -H "Authorization: Bearer $TOKEN" | jq
+#    .ticks[].days = รายวัน (day, rows, first_t, last_t, format, bytes)
+#    .ticks[].gaps = วันที่หายไปตรงกลางช่วง เช่น ["2026-01-06"]
+#    .ticks[].rows_loaded = 0 เสมอ: ตอบจาก manifest ไม่ได้อ่านไฟล์แม้แต่ไฟล์เดียว
+
+# 3) เก็บกวาดวันเก่า (admin) — ค่าเริ่มต้นจะ *ปฏิเสธ* ถ้ามี backtest ที่เคยใช้วันนั้น
+curl -s -X POST "localhost:8000/api/datasets/ticks/prune?symbol=XAUUSD&keep_days=60" \
+  -H "Authorization: Bearer $TOKEN" | jq
+#    409 = มี report ที่อ้างวันนั้นอยู่ → รัน backtest ใหม่หรือส่ง force=true
 
 # 3) รัน backtest — ใช้ tick อัตโนมัติ; เทียบกับโหมดเดิมได้ด้วย use_ticks=false
 curl -s localhost:8000/api/backtests -H "Authorization: Bearer $TOKEN" -H 'Content-Type: application/json' \
@@ -230,7 +242,27 @@ curl -s localhost:8000/api/backtests -H "Authorization: Bearer $TOKEN" -H 'Conte
 ```
 
 อ่านผล: `diagnostics.intra_bar.bars_settled_by_ticks` = จำนวนแท่งที่ตัดสินด้วย tick จริง,
-`bars_without_ticks` = จำนวนแท่งที่ยังใช้สมมติฐาน SL-ก่อน, และ `dataset.ticks.rows` = จำนวน tick ที่โหลด
+`bars_without_ticks` = จำนวนแท่งที่ยังใช้สมมติฐาน SL-ก่อน, `dataset.ticks.rows` = จำนวน tick ที่มีอยู่,
+`ticks_in_window` = tick ที่มีในช่วงที่รัน (0 = ไม่มีข้อมูลครอบช่วงนี้จริง ไม่ใช่ "ไม่มีแท่งกำกวม"),
+`dataset.ticks.days_used` = วันไหนที่ backtest นั้นอ่านจริง (ใช้ตัดสินตอน prune)
+
+### การเก็บ tick: หนึ่งไฟล์ต่อวัน (parquet)
+
+```
+storage/datasets/ticks/XAUUSD/
+  2026-11-05.parquet      ← หนึ่งวัน UTC ต่อหนึ่งไฟล์
+  2026-11-06.parquet
+  manifest.json           ← rows/first_t/last_t/sha256 ต่อวัน + ที่มาของไฟล์
+```
+
+backtest อ่านเฉพาะวันทีหน้าต่างแท่งทับอยู่ (เก็บ cache 4 วันล่าสุดแบบ LRU) — หน้าต่าง 1 วัน
+บน store 12 วัน/1 ล้านแถว อ่านไฟล์เดียว ไม่ใช่ทั้งก้อน ตัวเลขนี้วัดได้จาก
+`report.dataset.ticks.days_loaded` และ `days_used`; ถ้าไม่มี pyarrow ระบบจะเขียน `.csv.gz`
+แทนให้อัตโนมัติ (ดู `layout`/`format` ใน `/api/datasets/ticks/status`)
+
+**การย้าย/สำรองข้อมูล**: copy ทั้งโฟลเดอร์ `ticks/<SYMBOL>/` ทั้งก้อน (manifest ไปด้วย) —
+ไฟล์เดียวไม่พอ, และถ้า manifest หาย ระบบจะเปิดอ่านทีละไฟล์เพื่อสร้างช่วงเวลาใหม่
+(ผลลัพธ์เท่าเดิม แค่ช้าครั้งแรก)
 
 **ถ้าต้องการทดสอบเฉพาะไปป์ไลน์โดยยังไม่มีไฟล์จริง**: `scripts/reconstruct_ticks.py` สร้าง tick
 จากแท่ง M1 (ติดธง `reconstruction` ใน manifest) — ห้ามใช้ตัวเลขจากโหมดนี้ตัดสินใจเทรด
