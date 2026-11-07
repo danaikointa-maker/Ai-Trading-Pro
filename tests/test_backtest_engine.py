@@ -113,3 +113,19 @@ def test_timeline_is_ordered(report):
     assert len(set(stamps)) == len(stamps), "duplicate timestamps would double-draw the curve"
     for t in report.trades:
         assert t.closed_at >= t.opened_at
+
+
+def test_diagnostics_explain_why_the_trade_count_is_what_it_is(engine, report):
+    """no_trade_rate must divide by the points that were actually analysed."""
+    d = report.diagnostics
+    assert d["decision_points"] == d["analysed"] + d["no_context"]
+    assert d["analysed"] >= d["actionable"] >= d["trades_opened"]
+    assert d["trades_opened"] == report.metrics.trades
+    if d["analysed"]:
+        expected = round(max(0.0, 1 - d["trades_opened"] / d["analysed"]) * 100, 2)
+        assert report.metrics.no_trade_rate == pytest.approx(expected, abs=0.01)
+    assert d["no_trade_rate_basis"].startswith("trades / analysed")
+
+    text = " ".join(report.assumptions)
+    assert "analysis ran on" in text
+    assert f"{d['no_context']} skipped" in text

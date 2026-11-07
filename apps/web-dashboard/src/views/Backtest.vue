@@ -75,6 +75,27 @@
             />
           </div>
 
+          <section v-if="report.diagnostics?.decision_points" class="panel">
+            <div class="panel-head">
+              <div class="panel-title">ทำไมได้ไม้เท่านี้</div>
+              <span class="chip">{{ report.diagnostics.no_trade_rate_basis }}</span>
+            </div>
+            <div class="flex flex-wrap gap-2 px-4 py-2.5 text-[10.5px] text-muted">
+              <span class="chip">วิเคราะห์ {{ fmt(report.diagnostics.analysed, 0) }}/{{ fmt(report.diagnostics.decision_points, 0) }} จุด</span>
+              <span class="chip chip-warn" :title="'ข้ามเพราะ higher-timeframe history ยังไม่พอ'">
+                ข้าม {{ fmt(report.diagnostics.no_context, 0) }} (history ไม่พอ)
+              </span>
+              <span class="chip">actionable {{ fmt(report.diagnostics.actionable, 0) }}</span>
+              <span class="chip">gate บล็อก {{ fmt(report.diagnostics.gate_blocked, 0) }}</span>
+              <span class="chip">fill drift {{ fmt(report.diagnostics.fill_skipped, 0) }}</span>
+              <span class="chip chip-up">เปิดไม้ {{ fmt(report.diagnostics.trades_opened, 0) }}</span>
+            </div>
+            <p class="px-4 pb-2.5 text-[9.5px] leading-relaxed text-muted">
+              จุดตัดสินใจที่ถูกข้ามเพราะข้อมูลยังไม่พอ <b>ไม่</b> ถูกนับเป็น “ไม่เทรด”
+              — no-trade rate คิดจากจุดที่วิเคราะห์จริงเท่านั้น รายงานเก่าก่อนมีช่องนี้ใช้ตัวหารแบบเดิม
+            </p>
+          </section>
+
           <section v-if="report.dataset?.id" class="panel">
             <div class="panel-head">
               <div class="panel-title">ข้อมูลที่ใช้ตัดสิน</div>

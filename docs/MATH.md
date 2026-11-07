@@ -141,7 +141,8 @@ expectancy_r        = mean(pnl / risk_at_fill)     # risk ที่วัดต�
 directional_accuracy= สัดส่วนไม้ที่ราคาไปถูกทาง (points > 0) ไม่นับต้นทุน ✅
 tp_before_sl_rate   = สัดส่วนไม้ที่แตะ target อย่างน้อย TP1 ก่อนค่อยโดน stop ✅
 max_drawdown_pct    = max |equity − peak| / peak
-no_trade_rate       = 1 − trades / decisions
+no_trade_rate       = 1 − trades / decision points ที่ **วิเคราะห์แล้ว**
+                      (จุดที่ข้ามเพราะ history ยังไม่พอ *ไม่* ถูกนับในตัวหาร — รายงานแยกใน `diagnostics.no_context`)
 sharpe              = mean(bar returns)/std × sqrt(252×288)   (แท่ง 5 นาที)
 recovery_factor     = net / (max_dd × starting_balance)
 ```

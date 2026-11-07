@@ -704,6 +704,8 @@ class BacktestReport(BaseModel):
     verdict: dict[str, Any] = Field(default_factory=dict)
     # Provenance: which bars produced these numbers, and can they be replayed.
     dataset: dict[str, Any] = Field(default_factory=dict)
+    # Why the trade count is what it is: analysed vs skipped decision points.
+    diagnostics: dict[str, Any] = Field(default_factory=dict)
 
 
 # --------------------------------------------------------------------------- misc

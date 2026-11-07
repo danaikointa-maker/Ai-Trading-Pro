@@ -161,7 +161,15 @@ class Backtester:
             "kill": False, "kill_reason": "", "day_pnl": 0.0,
         }
         pos: SimPosition | None = None
+        # `decisions` is the denominator of no_trade_rate, so it may only count the
+        # points where analysis actually ran. Points skipped for lack of
+        # higher-timeframe history are a data limitation, not a trading decision,
+        # and are reported separately instead of quietly diluting the rate.
         decisions = 0
+        decision_points = 0
+        no_context = 0
+        actionable = 0
+        gate_blocked = 0
         skipped = 0
         last_ctx = None
         fold_marks: list[dict[str, Any]] = []
@@ -219,10 +227,12 @@ class Backtester:
             # ---------------- decision
             if i % self.decision_stride != 0 or pos is not None:
                 continue
-            decisions += 1
+            decision_points += 1
             ctx = self._context(m5, m15, h1, h4, m1e, i, spec, spread_points, broker_id)
             if ctx is None:
+                no_context += 1
                 continue
+            decisions += 1
             last_ctx = ctx
             price = float(bar["c"])
             horizon_choice = 30
@@ -234,6 +244,7 @@ class Backtester:
                                        Health.connected, forecast, equity, now=bar_time)
             if signal.action not in (SignalAction.buy, SignalAction.sell) or signal.plan is None:
                 continue
+            actionable += 1
             risk_state = RiskState(
                 balance=balance, equity=equity, peak_equity=sim["peak"],
                 daily_pnl=round(equity - sim["day_start_equity"], 2),
@@ -251,6 +262,7 @@ class Backtester:
                 Health.connected, False,
                 ctx.snapshot.indicators.atr14 / price * 100 if price else 0.0)
             if not gate.allow:
+                gate_blocked += 1
                 continue
 
             # ---------------- open on the next bar's open
@@ -364,13 +376,26 @@ class Backtester:
                 "forecast component is a deterministic rule proxy and is discounted as unvalidated.",
                 "TP-before-SL probability table is fitted on the first 60% of the sample and reused "
                 "out-of-sample, so it is mildly in-sample for early folds.",
-                f"Decisions every {self.decision_stride * 5} minutes of market time; "
-                f"{len(trades)} trades from {decisions} decision points.",
+                f"Decisions every {self.decision_stride * 5} minutes of market time: "
+                f"analysis ran on {decisions} of {decision_points} decision points "
+                f"({no_context} skipped — not enough higher-timeframe history yet); "
+                f"{actionable} were actionable, the risk gate blocked {gate_blocked}, "
+                f"{skipped} were skipped on fill drift, and {len(trades)} trades opened.",
                 data_note or "Bar data: source not recorded — treat these numbers as unverified.",
                 *gap_notes,
             ],
             verdict=verdict(metrics),
             dataset=dataset or {},
+            diagnostics={
+                "decision_points": decision_points,
+                "analysed": decisions,
+                "no_context": no_context,
+                "actionable": actionable,
+                "gate_blocked": gate_blocked,
+                "fill_skipped": skipped,
+                "trades_opened": len(trades),
+                "no_trade_rate_basis": "trades / analysed decision points",
+            },
         )
         del started
         return report
