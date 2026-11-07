@@ -472,6 +472,15 @@ class TradingRuntime:
             return {"ok": False, "error": "signal expired — wait for a fresh one"}
         if signal.action not in (SignalAction.buy, SignalAction.sell):
             return {"ok": False, "error": "signal is not actionable"}
+        # A hand-approval must not lower the bar the signal was generated against:
+        # anything under the execution threshold is weak by the strategy's own rule,
+        # and the risk gate only enforces the score floor in full-auto mode.
+        min_score = float(getattr(self.strategy, "scoring", {}).get("min_score_to_execute", 70))
+        if signal.score < min_score:
+            return {"ok": False,
+                    "error": (f"signal score {signal.score:.0f} is below the {min_score:.0f} "
+                              "execution threshold — it cannot be approved by hand"),
+                    "blockers": [f"score {signal.score:.0f} < {min_score:.0f}"]}
 
         try:
             risk_state = self.risk.state(self.adapter, now=now)

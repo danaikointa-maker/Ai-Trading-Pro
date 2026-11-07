@@ -59,7 +59,7 @@ Base: `http://127.0.0.1:8000` · interactive docs: `/api/docs` · OpenAPI: `/api
 |---|---|---|
 | GET | `/api/signals/latest?symbol=` | signal + gate + forecast บางส่วน |
 | GET | `/api/signals/history?limit=` | ประวัติสัญญาณ |
-| POST | `/api/signals/{id}/approve` \| `/reject` | semi-auto flow |
+| POST | `/api/signals/{id}/approve` \| `/reject` | semi-auto flow; approve รัน gate ใหม่ทุกครั้ง และปฏิเสธถ้า score ต่ำกว่า `scoring.min_score_to_execute` (ปกติ 70) — ปุ่มนี้ไม่ใช่ override |
 | GET | `/api/trading/live` | **payload เดียวกับ WebSocket** (polling fallback) |
 | GET | `/api/trading/state` | account/positions/risk/mode/reconcile/broker |
 | POST | `/api/trading/order` | `{symbol,direction}` manual; ผ่าน gate เท่านั้น |
