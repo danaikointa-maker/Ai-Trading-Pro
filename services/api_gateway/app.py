@@ -25,6 +25,7 @@ from services.api_gateway.routes import (
     analysis,
     auth,
     backtest,
+    bridge,
     brokers,
     datasets,
     explain,
@@ -88,7 +89,7 @@ def create_app(runtime: TradingRuntime | None = None) -> FastAPI:
         allow_headers=["*"],
     )
     for module in (auth, system, market, analysis, signals, trading, risk, brokers, backtest,
-               datasets, users, explain, ws):
+               datasets, users, bridge, explain, ws):
         app.include_router(module.router)
 
     @app.get("/api", include_in_schema=False)

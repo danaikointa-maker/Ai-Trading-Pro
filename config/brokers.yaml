@@ -173,3 +173,42 @@ brokers:
         margin_currency: USD
         profit_currency: USD
         trading_allowed: true
+
+  # -------------------------------------------------------------------------
+  # EA bridge profile: executed by an MQL5 Expert Advisor polling the API
+  # (see bridge/No7BridgeEA.mq5). Enabled only when config bridge.enabled is
+  # true AND a token is configured for the bridge account; otherwise the
+  # adapter reports disconnected and refuses every order.
+  # `bridge_account` must match the account_id the EA registers with.
+  # -------------------------------------------------------------------------
+  - id: mt5-bridge-demo
+    label: Connext (MT5 via EA bridge, demo)
+    adapter: bridge                   # needs bridge/No7BridgeEA.mq5 running in the terminal
+    bridge_account: mt5-bridge-demo
+    server: Connext-Demo
+    account_type: demo
+    live_allowed: false
+    regulated_note: >
+      Bridge demo only. The EA runs inside the analyst's own terminal; the server
+      never holds MT5 credentials and cannot see the account without the EA polling.
+    leverage: 500
+    symbols:
+      XAUUSD:
+        description: Gold vs US Dollar
+        digits: 2
+        point: 0.01
+        tick_size: 0.01
+        contract_size: 100
+        min_lot: 0.01
+        max_lot: 50.0
+        lot_step: 0.01
+        stops_level_points: 0
+        freeze_level_points: 0
+        spread_typical_points: 25
+        commission_per_lot_round_turn: 0.0
+        swap_mode: money
+        swap_long_per_lot: -21.4
+        swap_short_per_lot: 9.1
+        margin_currency: USD
+        profit_currency: USD
+        trading_allowed: true

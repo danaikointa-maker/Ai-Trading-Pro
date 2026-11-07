@@ -131,6 +131,40 @@
           </dl>
         </section>
 
+        <section v-if="bridge" class="panel">
+          <div class="panel-head">
+            <div class="panel-title">EA bridge (MT5)</div>
+            <span class="chip" :class="bridge.enabled ? (anyFresh ? 'chip-up' : 'chip-warn') : 'chip-down'">
+              {{ bridge.enabled ? (anyFresh ? 'EA connected' : 'no EA') : 'disabled' }}
+            </span>
+          </div>
+          <dl class="grid gap-1 px-3 py-2 text-[11px]">
+            <div v-for="b in bridge.bridges" :key="b.account" class="grid grid-cols-[1fr_auto] items-center gap-2">
+              <div class="min-w-0">
+                <div class="truncate text-[10.5px] font-semibold">{{ b.broker_id }}</div>
+                <div class="num truncate text-[9.5px] text-muted">
+                  {{ b.session_id || 'no session' }}
+                  <span v-if="b.snapshot_age_seconds != null"> · snapshot {{ b.snapshot_age_seconds.toFixed(1) }}s</span>
+                  <span v-else> · ยังไม่มีข้อมูลจาก terminal</span>
+                </div>
+              </div>
+              <span class="chip" :class="b.health === 'connected' ? 'chip-up' : (b.health === 'stale' ? 'chip-warn' : 'chip-down')">
+                {{ b.health }}
+              </span>
+            </div>
+            <div v-if="!bridge.bridges?.length" class="text-[10px] text-muted">ยังไม่มี broker profile แบบ bridge</div>
+            <p class="mt-1 text-[9px] leading-relaxed text-muted">
+              ข้อมูลราคาและพอร์ตมาจาก snapshot ของ EA ทั้งหมด — เก่ากว่า
+              {{ bridge.stale_seconds }}s ระบบจะไม่ยอมใช้ (ไม่มีการเดาราคาเก่า)
+              และคำสั่งที่ EA ไม่รับภายในเวลาที่กำหนดจะหมดอายุ ไม่ส่งซ้ำ
+            </p>
+            <p v-if="bridge.enabled && !anyFresh" class="text-[9.5px] leading-relaxed text-amber-300/80">
+              ยังไม่มี EA ต่อเข้ามา — เปิด MT5 แล้วรัน bridge/No7BridgeEA.mq5
+              (หรือทดสอบด้วย scripts/run_bridge_sim.py) ก่อนสั่งเทรดผ่าน broker นี้
+            </p>
+          </dl>
+        </section>
+
         <section v-if="perms.canManageUsers" class="panel">
           <div class="panel-head">
             <div class="panel-title">ผู้ใช้และสิทธิ์</div>
@@ -288,6 +322,9 @@ const shortNote = computed(() => {
   return note.length > 60 ? `${note.slice(0, 60)}…` : note
 })
 const audit = ref([])
+const bridge = ref(null)
+const anyFresh = computed(() =>
+  (bridge.value?.bridges || []).some((b) => b.health === 'connected'))
 const users = ref([])
 const roles = ref([])
 const busy = ref(false)
@@ -374,6 +411,11 @@ async function load() {
     toast(err.message, 'error')
   }
   errors.value = state.live?.errors || []
+  try {
+    bridge.value = await api.get('/api/bridge/session')
+  } catch {
+    bridge.value = null   // older server without the bridge: the card simply hides
+  }
   await loadUsers()
 }
 
