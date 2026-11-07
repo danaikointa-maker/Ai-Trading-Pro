@@ -340,9 +340,85 @@ curl -s -X POST localhost:8000/api/brokers/mt5-bridge-demo/activate \
 - คำสั่งที่ EA ไม่ ack จะหมดอายุ (`command_ttl_seconds` 30s / `ack_grace_seconds` 20s) และ **ไม่ส่งซ้ำ**
 - ต้องเปิด Algo Trading ในเทอร์มินัล ไม่งั้น EA ไม่ execute (ฝั่งเซิร์ฟเวอร์จะเห็นแค่ `expired`)
 
-## 13. ความปลอดภัย
+## 13. ความปลอดภัย — TLS, reverse proxy และ perimeter
+
+### 13.1 เปิด HTTPS (เลือกอย่างใดอย่างหนึ่ง)
+
+```bash
+# (ก) ให้ uvicorn ถือ cert เอง — ง่ายสุดสำหรับ LAN
+openssl req -x509 -newkey rsa:2048 -nodes -days 365 -subj "/CN=localhost" \
+  -addext "subjectAltName=DNS:localhost,IP:127.0.0.1" \
+  -keyout certs/dev.key -out certs/dev.crt
+NO7_TLS_CERT=certs/dev.crt NO7_TLS_KEY=certs/dev.key scripts/run.sh   # -> https://…:8000
+
+# (ข) วาง reverse proxy ข้างหน้า (แนะนำสำหรับอินเทอร์เน็ต) แล้วบอกว่าใครคือ proxy
+export NO7_TRUSTED_PROXIES="127.0.0.1/32,::1/128"
+scripts/run.sh
+```
+
+nginx (สรุป):
+```nginx
+server {
+  listen 443 ssl http2;
+  server_name no7.example.com;
+  ssl_certificate     /etc/letsencrypt/live/no7.example.com/fullchain.pem;
+  ssl_certificate_key /etc/letsencrypt/live/no7.example.com/privkey.pem;
+  location / {
+    proxy_pass http://127.0.0.1:8000;
+    proxy_set_header Host $host;
+    proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;   # ต่อท้าย ไม่ใช่เขียนทับ
+    proxy_set_header X-Forwarded-Proto $scheme;
+    proxy_http_version 1.1;
+    proxy_set_header Upgrade $http_upgrade;                        # /ws ต้องมี
+    proxy_set_header Connection "upgrade";
+  }
+}
+```
+
+> **สำคัญ**: `scripts/run.sh` ส่ง `--no-proxy-headers` ให้ uvicorn เสมอ เพราะการตัดสินใจว่า
+> "ใครคือ client / คำขอนี้เป็น HTTPS จริงไหม" เป็นของแอป (`services/api_gateway/netutil.py`)
+> ที่ใช้ `NO7_TRUSTED_PROXIES` — ถ้ารัน `uvicorn` เองโดยไม่ใส่ `--no-proxy-headers`
+> uvicorn จะ rewrite ค่าพวกนี้ด้วย allowlist ของตัวเอง (ค่าเริ่มต้น loopback) ก่อนถึงแอป
+> ทำให้ config ที่ตั้งใจไว้ถูกข้าม
+
+### 13.2 ตรวจว่าป้องกันจริง (คัดลอกไปรันได้)
+
+```bash
+curl -skD - -o /dev/null https://localhost:8443/ | grep -i 'content-security-policy\|strict-transport'
+#  ต้องเห็น CSP (default-src 'self' … frame-ancestors 'none') และ HSTS เมื่อเป็น HTTPS จริง
+
+curl -s http://localhost:8022/api/system/health | jq .security
+#  cors / trusted_proxies / csp_mode / hsts_when_https / jwt_secret_from_env
+
+# ปลอม IP ต้องไม่ผ่าน — peer ที่ไม่อยู่ใน trusted list ส่ง X-Forwarded-For มาไม่นับ
+for i in 1 2 3; do
+  curl -s -o /dev/null -X POST http://localhost:8022/api/auth/login \
+    -H 'Content-Type: application/json' -H "X-Forwarded-For: 198.51.100.$i" \
+    -d '{"email":"spoof@no7.ai","password":"wrong"}'
+done
+sqlite3 storage/db/no7.sqlite3 \
+  "SELECT key, failures FROM login_throttle WHERE key LIKE 'spoof@no7.ai|%';"
+#  ต้องได้ "แถวเดียว" ที่ key ลงท้ายด้วย IP จริงของผู้เรียก ไม่ใช่ 3 แถวตาม header ที่ปลอม
+```
+
+### 13.3 สิ่งที่ระบบใส่ให้ทุก response
+
+| header | ค่า | กันอะไร |
+|---|---|---|
+| `Content-Security-Policy` | `default-src 'self'; script-src 'self'; … frame-ancestors 'none'` | XSS ที่ขโมย token ใน `localStorage` |
+| `X-Frame-Options` | `DENY` | clickjacking หน้าเทรด |
+| `X-Content-Type-Options` | `nosniff` | MIME sniffing |
+| `Referrer-Policy` | `no-referrer` | รั่ว path/โทเคนผ่าน referrer |
+| `Permissions-Policy` | `camera=(), microphone=(), geolocation=(), payment=()` | ฟีเจอร์ที่ไม่ใช้ |
+| `Strict-Transport-Security` | `max-age=15552000; includeSubDomains` | downgrade หลังเคยเข้า HTTPS (เฉพาะเมื่อคำขอมาแบบ HTTPS) |
+
+ตั้ง `NO7_CSP_MODE=report` ถ้า UI บางส่วนพังหลัง deploy (header จะกลายเป็น Report-Only
+ไม่บล็อกอะไร แต่ยังรายงานใน console) หรือ `off` เมื่อจำเป็นจริง ๆ
+
+### 13.4 พื้นฐานอื่น
 
 - อย่าเปิดพอร์ต 8000 สู่อินเทอร์เน็ตโดยไม่มี reverse proxy + TLS + auth
-- `NO7_JWT_SECRET` ต้องไม่ซ้ำกับระบบอื่น และไม่เข้า git
+- `NO7_JWT_SECRET` ต้องไม่ซ้ำกับระบบอื่น และไม่เข้า git — `/api/system/health` บอก
+  `jwt_secret_from_env: false` ถ้ายังใช้ secret สำรองในโค้ด (เท่ากับใครรู้โค้ดก็ปลอม token ได้)
 - MT5 password อยู่ใน `.env` เท่านั้น (ห้าม hardcode ใน MQL5 หรือ Python)
 - ทุกคำสั่งถูก audit (`actor`, `action`, `detail`) — ตรวจได้ที่หน้า System

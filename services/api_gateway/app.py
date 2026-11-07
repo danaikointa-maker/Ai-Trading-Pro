@@ -21,6 +21,9 @@ from packages.shared_schemas.settings import get_settings
 from services.api_gateway.auth import ensure_demo_user
 from services.api_gateway.ratelimit import (RateLimiter, RateLimitMiddleware,
                                             make_store)
+from services.api_gateway.netutil import parse_networks
+from services.api_gateway.security import (SecurityHeadersMiddleware,
+                                           parse_origins)
 from services.api_gateway.routes import (
     analysis,
     auth,
@@ -80,14 +83,25 @@ def create_app(runtime: TradingRuntime | None = None) -> FastAPI:
                           store=make_store(rl_cfg.get("store"), store_path) if rl_cfg.get("store")
                           else None)
     app.state.ratelimit = limiter
-    app.add_middleware(RateLimitMiddleware, limiter=limiter, settings=settings)
-    app.add_middleware(
-        CORSMiddleware,
-        allow_origins=["*"],
-        allow_credentials=False,
-        allow_methods=["*"],
-        allow_headers=["*"],
-    )
+    trusted = parse_networks(settings.trusted_proxies)
+    app.add_middleware(RateLimitMiddleware, limiter=limiter, settings=settings,
+                       trusted_proxies=settings.trusted_proxies)
+    # An explicit allowlist: the dashboard is same-origin, so nothing needs a wildcard.
+    # `*` still works if someone really has a separate front-end host, and health says so.
+    cors_origins = parse_origins(settings.cors_origins)
+    if cors_origins:
+        app.add_middleware(
+            CORSMiddleware,
+            allow_origins=cors_origins,
+            allow_credentials=False,
+            allow_methods=["*"],
+            allow_headers=["*"],
+        )
+    # Outermost of the three: security headers must also land on 429s and error bodies.
+    sh = settings.security_headers
+    app.add_middleware(SecurityHeadersMiddleware, trusted_proxies=trusted,
+                       csp_mode=str(sh.get("csp_mode", "enforce")),
+                       hsts=bool(sh.get("hsts", True)))
     for module in (auth, system, market, analysis, signals, trading, risk, brokers, backtest,
                datasets, users, bridge, explain, ws):
         app.include_router(module.router)

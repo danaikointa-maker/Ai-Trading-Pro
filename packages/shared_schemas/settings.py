@@ -131,6 +131,39 @@ class Settings:
         return sec
 
     @property
+    def cors_origins(self) -> list[str]:
+        """Cross-origin callers we answer with CORS headers.
+
+        Default is empty: the dashboard is served from this same origin, and the Vite
+        dev server proxies `/api` too, so nothing legitimate needs a wildcard. Set
+        `NO7_CORS_ORIGINS=https://dash.example.com,http://localhost:5173` to open a
+        specific list, or `*` to open everything (the health endpoint then says so).
+        """
+        raw = os.environ.get("NO7_CORS_ORIGINS")
+        if raw is None:
+            raw = (self.app.get("cors") or {}).get("allow_origins", [])
+        if isinstance(raw, str):
+            raw = [part.strip() for part in raw.split(",")]
+        return [str(item).strip().rstrip("/") for item in raw if str(item).strip()]
+
+    @property
+    def trusted_proxies(self) -> list[str]:
+        """Peers whose X-Forwarded-* headers are believed (CIDRs)."""
+        raw = os.environ.get("NO7_TRUSTED_PROXIES")
+        if raw is None:
+            raw = self.app.get("trusted_proxies", ["127.0.0.1/32", "::1/128"])
+        if isinstance(raw, str):
+            raw = [part.strip() for part in raw.split(",")]
+        return [str(item).strip() for item in raw if str(item).strip()]
+
+    @property
+    def security_headers(self) -> dict[str, Any]:
+        cfg = dict(self.app.get("security_headers") or {})
+        cfg["csp_mode"] = os.environ.get("NO7_CSP_MODE", cfg.get("csp_mode", "enforce"))
+        cfg["hsts"] = _as_bool(os.environ.get("NO7_HSTS", cfg.get("hsts", True)))
+        return cfg
+
+    @property
     def market_data(self) -> dict[str, Any]:
         return self.app.get("market_data", {})
 

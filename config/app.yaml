@@ -62,6 +62,19 @@ ai:
     deadband_atr: 0.25                      # |ret| < x*ATR => sideways class
     fan_points: 24
 
+# Perimeter. The dashboard is served from this same origin and the Vite dev server
+# proxies /api, so no cross-origin caller is allowed by default (an empty list).
+# Put a reverse proxy in front for HTTPS; list it in trusted_proxies so that the
+# client IP and the original scheme come from the proxy instead of being guessed.
+cors:
+  allow_origins: ${NO7_CORS_ORIGINS:}          # comma separated; "*" is allowed but reported
+
+trusted_proxies: ${NO7_TRUSTED_PROXIES:127.0.0.1/32,::1/128}   # whose X-Forwarded-* we believe
+
+security_headers:
+  csp_mode: ${NO7_CSP_MODE:enforce}            # enforce | report (Report-Only) | off
+  hsts: ${NO7_HSTS:true}                       # only ever sent over HTTPS
+
 security:
   jwt_ttl_minutes: ${NO7_JWT_TTL_MINUTES:720}
   jwt_secret_env: NO7_JWT_SECRET

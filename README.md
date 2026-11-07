@@ -34,7 +34,8 @@
 | MQL5 EA + bridge (คำสั่งไปถึงเทอร์มินัลครั้งเดียว, shared store หลาย worker) | ✅ (ยังไม่ compile กับ MT5 จริง) |
 | Tick storage รายวัน (parquet, lazy) + intra-bar ordering | ✅ |
 | Mobile PWA (ติดตั้งได้, แถบอัปเดต/ออฟไลน์ที่บอกความจริง) | ✅ |
-| Telegram / LINE แจ้งเตือน | ⏳ |
+| TLS (uvicorn หรือ reverse proxy) + security headers/CORS allowlist | ✅ |
+| Telegram / LINE แจ้งเตือน | ⏳ (มีช่องทาง + ปุ่มทดสอบแล้ว) |
 
 ## Quickstart (Linux/macOS/Windows, ไม่ต้องมี MT5)
 
