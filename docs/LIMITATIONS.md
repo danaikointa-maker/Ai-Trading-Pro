@@ -48,8 +48,13 @@
 - Telegram/LINE/Web Push ยังไม่ต่อ (มี in-app alert แล้ว)
 - Mobile PWA ยังว่าง
 - มี rate limiting ในตัวแล้ว (token bucket ต่อผู้ใช้/IP: order 10/นาที, explain 20/นาที,
-  backtest 6/นาที, train 2/ชั่วโมง, อื่น ๆ 300/นาที) แต่เป็น **in-process**
-  ถ้ารันหลาย worker/หลายเครื่อง ต้องย้ายไป Redis หรือ reverse proxy
+  backtest 6/นาที, train 2/ชั่วโมง, อื่น ๆ 300/นาที) ค่าเริ่มต้นเก็บในโปรเซสเดียว
+  (`ratelimit.store: memory`) → หลาย worker แต่ละตัวจะได้โควตาเต็มของตัวเอง
+  ตั้ง `store: sqlite` เพื่อให้ worker บนเครื่องเดียวกันใช้ร่วมกันได้ (write ต่อคำขอที่ถูกจำกัด)
+  แต่ **หลายเครื่องยังต้องใช้ Redis หรือ reverse proxy** ซึ่งยังไม่ได้ทำ
+- ตัว runtime เอง (simulator, scheduler, websocket hub) ออกแบบสำหรับ **โปรเซสเดียว**
+  ดังนั้น `--workers N` ยังไม่ใช่โหมดที่รองรับ: store แบบ sqlite เป็นการวางพื้นฐานให้โควตาร่วม
+  ไม่ใช่การประกาศว่า multi-worker พร้อมใช้
 
 ## 6. กฎหมาย / ความเสี่ยง
 

@@ -84,6 +84,11 @@ ws:
 # about capacity, not credentials. `default` covers GETs and everything unlisted.
 ratelimit:
   enabled: true
+  # memory = buckets live in this process (default, one uvicorn worker).
+  # sqlite = buckets live in a small SQLite file, so several workers on this host
+  #          share one budget. Costs a write per limited request; the file defaults
+  #          to storage/db/ratelimit.sqlite3 (override with store_path).
+  store: memory
   rules:
     order: {limit: 10, window_seconds: 60}
     explain: {limit: 20, window_seconds: 60}

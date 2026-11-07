@@ -20,6 +20,12 @@ Base: `http://127.0.0.1:8000` · interactive docs: `/api/docs` · OpenAPI: `/api
   `{"detail": "...", "rule": "order", "retry_after": 2.4}`
 - ทุกคำขอที่ผ่านจะได้ header `X-RateLimit-Remaining`
 - ค่าปรับได้ที่ `config/app.yaml` → `ratelimit.rules` (ปิดทั้งบล็อกได้ด้วย `enabled: false`)
+- **ที่เก็บ bucket** เลือกได้ที่ `ratelimit.store`:
+  - `memory` (ค่าเริ่มต้น) — bucket อยู่ในโปรเซสเดียว เหมาะกับ uvicorn worker เดียว
+  - `sqlite` — bucket อยู่ในไฟล์ SQLite (`store_path` หรือ `storage/db/ratelimit.sqlite3`)
+    ทำให้ **หลาย worker บนเครื่องเดียวกันใช้โควตาร่วมกัน** แลกกับ write ต่อคำขอที่ถูกจำกัด
+    (แต่ละครั้งเป็น `BEGIN IMMEDIATE` จึงไม่มีการใช้โทเคนซ้ำข้าม worker)
+  - ค่าอื่น → app ไม่ start (ผิดชัดเจน ดีกว่าเงียบ ๆ ใช้ memory)
 
 ## Auth & system
 
