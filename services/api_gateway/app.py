@@ -7,13 +7,14 @@ API surface (routes / payloads) stays exactly what a Laravel proxy would serve.
 """
 from __future__ import annotations
 
+import hashlib
 import time
 from contextlib import asynccontextmanager
 from pathlib import Path
 
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import FileResponse, HTMLResponse, JSONResponse
+from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, Response
 from fastapi.staticfiles import StaticFiles
 
 from packages.shared_schemas.settings import get_settings
@@ -32,6 +33,7 @@ from services.api_gateway.routes import (
     signals,
     system,
     trading,
+    users,
     ws,
 )
 from services.api_gateway.state import TradingRuntime
@@ -86,7 +88,7 @@ def create_app(runtime: TradingRuntime | None = None) -> FastAPI:
         allow_headers=["*"],
     )
     for module in (auth, system, market, analysis, signals, trading, risk, brokers, backtest,
-               datasets, explain, ws):
+               datasets, users, explain, ws):
         app.include_router(module.router)
 
     @app.get("/api", include_in_schema=False)
@@ -107,6 +109,22 @@ def create_app(runtime: TradingRuntime | None = None) -> FastAPI:
         # to index.html so the SPA router also works on a hard refresh / deep link.
         if (DASHBOARD_DIST / "assets").is_dir():
             app.mount("/assets", StaticFiles(directory=str(DASHBOARD_DIST / "assets")), name="assets")
+
+        @app.get("/sw.js", include_in_schema=False)
+        def service_worker():
+            """Serve the worker with a cache name derived from the current build.
+
+            A stale worker pinning an old bundle is the classic PWA failure, so the
+            version comes from a hash of the built index.html: every new build gets a
+            new cache and the old one is deleted on activate.
+            """
+            sw = (DASHBOARD_DIST / "sw.js").read_text("utf-8")
+            index = (DASHBOARD_DIST / "index.html").read_bytes()
+            version = hashlib.sha256(index).hexdigest()[:12]
+            body = sw.replace("__NO7_VERSION__", version)
+            return Response(body, media_type="application/javascript",
+                            headers={"Cache-Control": "no-cache, must-revalidate",
+                                     "Service-Worker-Allowed": "/"})
 
         @app.get("/{full_path:path}", include_in_schema=False)
         def spa_fallback(full_path: str):

@@ -42,6 +42,7 @@ from packages.shared_schemas.models import (
 from packages.shared_schemas.settings import Settings
 from services.ai_forecast.pathprob import PathProbabilityTable
 from services.backtest_engine.metrics import compute_metrics, verdict
+from services.market_data.ticks import TickBook
 
 # A decision needs warmed-up indicators on M5 *and* enough history to score folds:
 # below this the engine cannot produce an honest number, only a traceback.
@@ -120,7 +121,8 @@ class Backtester:
     def run(self, m1: pd.DataFrame, spec: SymbolSpec, request: BacktestRequest,
             broker_id: str = "connext-demo",
             data_note: str = "",
-            dataset: dict[str, Any] | None = None) -> BacktestReport:
+            dataset: dict[str, Any] | None = None,
+            ticks: "TickBook | None" = None) -> BacktestReport:
         started = time.time()
         spread_points = float(request.spread_points if request.spread_points is not None
                               else spec.spread_typical_points)
@@ -197,7 +199,7 @@ class Backtester:
 
             # ---------------- manage open position on this bar
             if pos is not None:
-                pos, closed = self._manage_bar(pos, bar, spec, spread_price, commission)
+                pos, closed = self._manage_bar(pos, bar, spec, spread_price, commission, ticks)
                 if closed is not None:
                     trades.append(closed)
                     holds.append((closed.closed_at - closed.opened_at) / 60.0)
@@ -376,6 +378,7 @@ class Backtester:
                 "forecast component is a deterministic rule proxy and is discounted as unvalidated.",
                 "TP-before-SL probability table is fitted on the first 60% of the sample and reused "
                 "out-of-sample, so it is mildly in-sample for early folds.",
+                self._intra_bar_note(ticks),
                 f"Decisions every {self.decision_stride * 5} minutes of market time: "
                 f"analysis ran on {decisions} of {decision_points} decision points "
                 f"({no_context} skipped — not enough higher-timeframe history yet); "
@@ -385,8 +388,11 @@ class Backtester:
                 *gap_notes,
             ],
             verdict=verdict(metrics),
-            dataset=dataset or {},
+            dataset={**(dataset or {}),
+                     **({"ticks": ticks.stats()} if ticks is not None else {})},
             diagnostics={
+                "intra_bar": (ticks.stats() if ticks is not None else
+                              {"mode": "conservative", "reason": "no tick data imported"}),
                 "decision_points": decision_points,
                 "analysed": decisions,
                 "no_context": no_context,
@@ -421,6 +427,26 @@ class Backtester:
         daily_bars = resample(daily.assign(t=daily["t"]), "D1") if len(daily) > 100 else None
         return self.analysis.assemble(spec.symbol, spec, frames, price, quality, {"active": False},
                                       broker_id, daily_bars)
+
+    @staticmethod
+    def _intra_bar_note(ticks: "TickBook | None") -> str:
+        """Say how ambiguous bars were settled, and how many were still guessed."""
+        if ticks is None:
+            return ("Intra-bar order: bars that covered both the stop and a target were "
+                    "settled with the conservative stop-first assumption (no tick data).")
+        stats = ticks.stats()
+        if not stats["bars_settled_by_ticks"] and not stats["bars_without_ticks"]:
+            return (f"Intra-bar order: {stats['rows']} ticks were loaded over the tested window and "
+                    f"no bar covered both the stop and a target, so no ambiguity had to be "
+                    f"settled and the stop-first assumption was never needed.")
+        if not stats["bars_settled_by_ticks"]:
+            return (f"Intra-bar order: tick data is loaded ({stats['rows']} ticks) but covered "
+                    f"none of the ambiguous bars, so the conservative stop-first assumption "
+                    f"was used on {stats['bars_without_ticks']} of them.")
+        return (f"Intra-bar order: {stats['bars_settled_by_ticks']} ambiguous bars were settled "
+                f"by walking {stats['rows']} real ticks in time order; "
+                f"{stats['bars_without_ticks']} bars had no ticks and kept the conservative "
+                f"stop-first assumption.")
 
     @staticmethod
     def _regime_key(ctx: Any) -> str:
@@ -474,7 +500,8 @@ class Backtester:
         return spec.pnl_in_account_currency((price - pos.entry) * sign, pos.remaining)
 
     def _manage_bar(self, pos: SimPosition, bar: pd.Series, spec: SymbolSpec, spread_price: float,
-                    commission: float) -> tuple[SimPosition | None, TradeRecord | None]:
+                    commission: float, ticks: "TickBook | None" = None
+                    ) -> tuple[SimPosition | None, TradeRecord | None]:
         high, low, close = float(bar["h"]), float(bar["l"]), float(bar["c"])
         bar_time = int(bar["t"])
         sign = 1 if pos.direction == Direction.up else -1
@@ -508,9 +535,47 @@ class Backtester:
             pos.remaining = round(pos.remaining - volume, 4)
             pos.exit_reason = reason
 
-        # --- stop first (conservative intrabar assumption)
+        # --- which came first inside the bar?
         stop_hit = (pos.direction == Direction.up and low <= pos.sl) or \
                    (pos.direction == Direction.down and high >= pos.sl)
+        hit_targets = [idx for idx in range(pos.partials_done, 3)
+                       if ((pos.direction == Direction.up and high >= pos.tps[idx])
+                           or (pos.direction == Direction.down and low <= pos.tps[idx]))]
+
+        # If the bar covered both the stop and a target, the bar alone cannot say
+        # which happened first — that is exactly what ticks are for. Without them we
+        # keep the conservative "stop first" assumption and count the bar as assumed.
+        if stop_hit and hit_targets and ticks is not None:
+            touch = ticks.first_touch(bar_time, bar_time + 300,
+                                      "up" if pos.direction == Direction.up else "down",
+                                      pos.sl, [(idx, pos.tps[idx]) for idx in hit_targets])
+            if touch is None:
+                ticks.exhausted += 1
+            else:
+                ticks.used += 1
+                if touch.kind == "tp":
+                    # Book the targets the ticks say were reached, in order.
+                    for idx in [i for i in hit_targets if i <= touch.index]:
+                        volume = min(pos.volumes[idx], pos.remaining)
+                        if volume <= 0:
+                            pos.partials_done = idx + 1
+                            continue
+                        if pos.remaining - volume < spec.min_lot:
+                            volume = pos.remaining
+                        book(volume, pos.tps[idx],
+                             "take profit" if idx == 2 or pos.remaining - volume < 1e-9
+                             else f"partial_tp{idx + 1}")
+                        pos.partials_done = idx + 1
+                        if pos.remaining <= 1e-9:
+                            return None, self._finalize(pos, bar_time, spec)
+                    # A target came first, but the stop is still inside this bar:
+                    # book the rest at the stop rather than pretend it survived.
+                    if stop_hit and pos.remaining > 1e-9:
+                        book(pos.remaining, pos.sl, "stop loss")
+                        return None, self._finalize(pos, bar_time, spec)
+                    hit_targets = [i for i in hit_targets if i > touch.index]
+
+        # Conservative fallback (no ticks, no ticks in this bar, or the stop first).
         if stop_hit:
             book(pos.remaining, pos.sl, "stop loss")
             return None, self._finalize(pos, bar_time, spec)

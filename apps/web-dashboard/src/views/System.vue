@@ -131,6 +131,52 @@
           </dl>
         </section>
 
+        <section v-if="perms.canManageUsers" class="panel">
+          <div class="panel-head">
+            <div class="panel-title">ผู้ใช้และสิทธิ์</div>
+            <span class="chip">{{ users.length }} accounts</span>
+          </div>
+          <div class="max-h-[220px] overflow-auto">
+            <table class="table-base">
+              <thead><tr><th>Email</th><th>Role</th><th>สถานะ</th><th></th></tr></thead>
+              <tbody>
+                <tr v-for="u in users" :key="u.email">
+                  <td class="text-[10.5px]">{{ u.email }}</td>
+                  <td>
+                    <select class="input py-0.5 text-[10px]" :value="u.role"
+                            @change="setRole(u, $event.target.value)">
+                      <option v-for="r in roles" :key="r.role" :value="r.role" :title="r.description">{{ r.role }}</option>
+                    </select>
+                  </td>
+                  <td>
+                    <span class="chip" :class="u.active ? 'chip-up' : 'chip-down'">{{ u.active ? 'active' : 'disabled' }}</span>
+                  </td>
+                  <td class="text-right">
+                    <button class="btn px-1.5 py-0.5 text-[9.5px]" :disabled="u.email === me"
+                            :title="u.email === me ? 'ลบบัญชีที่ใช้อยู่ไม่ได้' : 'ลบผู้ใช้'"
+                            @click="removeUser(u)">ลบ</button>
+                  </td>
+                </tr>
+                <tr v-if="!users.length"><td colspan="4" class="py-3 text-center text-[11px] text-muted">ยังไม่มีผู้ใช้</td></tr>
+              </tbody>
+            </table>
+          </div>
+          <div class="grid gap-1.5 border-t border-ink-700/60 px-3 py-2">
+            <div class="grid grid-cols-[1fr_1fr_auto_auto] items-end gap-1.5">
+              <label class="text-[9.5px] text-muted">อีเมล<input v-model="newUser.email" class="input mt-0.5 py-1 text-[10px]" placeholder="user@example.com" /></label>
+              <label class="text-[9.5px] text-muted">รหัสผ่าน (≥8)<input v-model="newUser.password" type="password" class="input mt-0.5 py-1 text-[10px]" /></label>
+              <select v-model="newUser.role" class="input py-1 text-[10px]">
+                <option v-for="r in roles" :key="r.role" :value="r.role">{{ r.role }}</option>
+              </select>
+              <button class="btn py-1 text-[10px]" :disabled="busy" @click="addUser">เพิ่ม</button>
+            </div>
+            <p class="text-[9px] leading-relaxed text-muted">
+              admin &gt; trader &gt; viewer · การเปลี่ยน role/ปิดบัญชีมีผลกับ token ที่ใช้งานอยู่ทันที
+              · ระบบไม่ยอมให้ปิด admin ที่ยังใช้งานคนสุดท้าย
+            </p>
+          </div>
+        </section>
+
         <section class="panel">
           <div class="panel-head"><div class="panel-title">Paths & config</div></div>
           <dl class="px-4 py-3 text-[10.5px]">
@@ -163,7 +209,7 @@ import { computed, onMounted, ref } from 'vue'
 import Stat from '../components/Stat.vue'
 import { api } from '../lib/api'
 import { clock, datetime, fmt } from '../lib/format'
-import { state, toast } from '../lib/store'
+import { permissions, state, toast } from '../lib/store'
 
 const health = ref(null)
 // Say what the feed *is*, not what it usually is: simulated, imported replay or live MT5.
@@ -242,6 +288,12 @@ const shortNote = computed(() => {
   return note.length > 60 ? `${note.slice(0, 60)}…` : note
 })
 const audit = ref([])
+const users = ref([])
+const roles = ref([])
+const busy = ref(false)
+const newUser = ref({ email: '', password: '', role: 'viewer' })
+const perms = computed(() => permissions.value)
+const me = computed(() => state.user?.email || '')
 const notify = computed(() => health.value?.notify || null)
 const testing = ref(false)
 const notifyLabel = computed(() => {
@@ -259,6 +311,54 @@ const errors = ref([])
 const models = ref([])
 const config = ref(null)
 
+async function loadUsers() {
+  if (!perms.value.canManageUsers) return
+  try {
+    const res = await api.get('/api/users')
+    users.value = res.users || []
+    roles.value = res.roles || []
+  } catch (err) {
+    toast(err.message, 'error')
+  }
+}
+
+async function addUser() {
+  if (busy.value) return
+  busy.value = true
+  try {
+    await api.post('/api/users', { ...newUser.value })
+    toast('เพิ่มผู้ใช้แล้ว', 'success')
+    newUser.value = { email: '', password: '', role: 'viewer' }
+    await loadUsers()
+  } catch (err) {
+    toast(err.message, 'error')
+  } finally {
+    busy.value = false
+  }
+}
+
+async function setRole(user, role) {
+  try {
+    await api.patch(`/api/users/${encodeURIComponent(user.email)}`, { role })
+    toast(`เปลี่ยน role ของ ${user.email} เป็น ${role}`, 'success')
+    await loadUsers()
+  } catch (err) {
+    toast(err.message, 'error')
+    await loadUsers()
+  }
+}
+
+async function removeUser(user) {
+  if (!window.confirm(`ลบผู้ใช้ ${user.email}?`)) return
+  try {
+    await api.del(`/api/users/${encodeURIComponent(user.email)}`)
+    toast('ลบผู้ใช้แล้ว', 'success')
+    await loadUsers()
+  } catch (err) {
+    toast(err.message, 'error')
+  }
+}
+
 async function load() {
   try {
     const [h, a, m] = await Promise.all([
@@ -274,6 +374,7 @@ async function load() {
     toast(err.message, 'error')
   }
   errors.value = state.live?.errors || []
+  await loadUsers()
 }
 
 async function sendTest() {

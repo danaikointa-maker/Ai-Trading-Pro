@@ -647,6 +647,8 @@ class BacktestRequest(BaseModel):
     # Re-run on the exact bars of an earlier run instead of whatever the feed
     # produces now; the snapshot's hash is verified before anything is computed.
     snapshot_id: str | None = None
+    # Use imported tick data to settle bars that cover both stop and target.
+    use_ticks: bool = True
 
 
 class BacktestMetrics(BaseModel):

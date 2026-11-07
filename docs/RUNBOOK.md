@@ -178,7 +178,76 @@ runtime (tick, signal, order) ใช้ **lease** ในตาราง `kv` (`r
 
 heartbeat ทุก 5 วินาที, ถือว่า lease ตายเมื่อเงียบเกิน 30 วินาที → เปิดใหม่ได้ทันทีแม้โดน `kill -9`
 
-## 9. ความปลอดภัย
+## 9. ผู้ใช้และสิทธิ์
+
+บัญชี demo เป็น `admin` โดยอัตโนมัติ (`NO7_DEMO_ROLE` เปลี่ยนได้, ค่าเริ่มต้น `admin`)
+
+```bash
+TOK=$(curl -s -X POST -H 'Content-Type: application/json' \
+  -d '{"email":"demo@no7.ai","password":"no7demo1234"}' \
+  http://127.0.0.1:8000/api/auth/login | python3 -c 'import sys,json;print(json.load(sys.stdin)["token"])')
+
+# ดูผู้ใช้ทั้งหมด
+curl -s -H "Authorization: Bearer $TOK" http://127.0.0.1:8000/api/users | python3 -m json.tool
+
+# เพิ่ม viewer
+curl -s -X POST -H "Authorization: Bearer $TOK" -H 'Content-Type: application/json' \
+  -d '{"email":"somchai@example.com","password":"อย่างน้อย8ตัว","role":"viewer"}' \
+  http://127.0.0.1:8000/api/users
+
+# เปลี่ยน role / ปิดบัญชี (มีผลกับ token ที่ใช้งานอยู่ทันที)
+curl -s -X PATCH -H "Authorization: Bearer $TOK" -H 'Content-Type: application/json' \
+  -d '{"role":"trader"}' http://127.0.0.1:8000/api/users/somchai@example.com
+curl -s -X PATCH -H "Authorization: Bearer $TOK" -H 'Content-Type: application/json' \
+  -d '{"active":false}' http://127.0.0.1:8000/api/users/somchai@example.com
+```
+
+หรือทำผ่านหน้า **/system → ผู้ใช้และสิทธิ์** (เห็นเฉพาะ admin)
+
+> ถ้าติด lockout (ไม่มี admin ที่ใช้งานอยู่เลย) ให้แก้ที่ฐานข้อมูลโดยตรง:
+> `sqlite3 storage/db/no7.sqlite3 "UPDATE users SET role='admin', active=1 WHERE email='...';"`
+
+## 10. ข้อมูล tick (ทำให้ backtest ไม่ต้องเดาลำดับในแท่ง)
+
+```bash
+# 1) import ไฟล์ tick ของโบรกเกอร์ (ต้องมีคอลัมน์ time, bid, ask)
+.venv/bin/python scripts/import_ticks.py --csv ~/Downloads/XAUUSD_ticks.csv --symbol XAUUSD
+#    ไฟล์ไม่มี timezone → บอกให้ชัด (ชื่อ tz ของ IANA)
+.venv/bin/python scripts/import_ticks.py --csv ticks.csv --symbol XAUUSD --tz Etc/GMT-3
+
+# 2) ดูว่ามี tick อะไรอยู่ ครอบคลุมแค่ไหน และเป็นของจริงหรือของจำลอง
+curl -s localhost:8000/api/datasets/ticks/status -H "Authorization: Bearer $TOKEN" | jq
+
+# 3) รัน backtest — ใช้ tick อัตโนมัติ; เทียบกับโหมดเดิมได้ด้วย use_ticks=false
+curl -s localhost:8000/api/backtests -H "Authorization: Bearer $TOKEN" -H 'Content-Type: application/json' \
+  -d '{"symbol":"XAUUSD","bars":6000,"use_ticks":true,"snapshot_id":"DS-XXXXXXXXXX"}'
+```
+
+อ่านผล: `diagnostics.intra_bar.bars_settled_by_ticks` = จำนวนแท่งที่ตัดสินด้วย tick จริง,
+`bars_without_ticks` = จำนวนแท่งที่ยังใช้สมมติฐาน SL-ก่อน, และ `dataset.ticks.rows` = จำนวน tick ที่โหลด
+
+**ถ้าต้องการทดสอบเฉพาะไปป์ไลน์โดยยังไม่มีไฟล์จริง**: `scripts/reconstruct_ticks.py` สร้าง tick
+จากแท่ง M1 (ติดธง `reconstruction` ใน manifest) — ห้ามใช้ตัวเลขจากโหมดนี้ตัดสินใจเทรด
+
+## 11. PWA / ติดตั้งเป็นแอป (มือถือ/เดสก์ท็อป)
+
+```bash
+cd apps/web-dashboard && npm run build      # ต้อง build ก่อน; public/ ถูกคัดลอกเข้า dist/
+.venv/bin/python scripts/make_pwa_icons.py  # สร้างไอคอนใหม่ (ไม่ต้องใช้ Photoshop/ Pillow)
+curl -s localhost:8000/manifest.webmanifest | jq '{name,start_url,display,icons:[.icons[].sizes]}'
+curl -sD - -o /dev/null localhost:8000/sw.js | grep -i 'cache-control\|service-worker-allowed'
+curl -s localhost:8000/sw.js | grep "const VERSION"   # ต้องเป็น hash 12 ตัว ไม่ใช่ __NO7_VERSION__
+```
+
+- เปิดจากมือถือแล้วเลือก **Add to Home Screen / ติดตั้งแอป** → เปิดแบบ standalone
+- ออฟไลน์: เปิดแอปได้ (shell ถูกแคช) แต่ขึ้นแถบ "ออฟไลน์" และไม่มีข้อมูลใหม่ — service worker
+  **ไม่แคช** `/api/*` หรือ `/ws` โดยตั้งใจ
+- deploy build ใหม่: ไม่ต้องแก้อะไร — `/sw.js` ที่เสิร์ฟมี cache name ตาม hash ของ `index.html`
+  เบราว์เซอร์จะได้ worker ใหม่ตอนเปิดครั้งถัดไป (cache เก่าถูกลบใน `activate`)
+- ถ้าอยากล้าง cache ทั้งหมดระหว่าง debug: DevTools → Application → Service Workers → Unregister + Clear storage
+- dev (vite 5173) **ไม่มี** service worker — การทดสอบ PWA ต้องใช้ build + uvicorn เท่านั้น
+
+## 12. ความปลอดภัย
 
 - อย่าเปิดพอร์ต 8000 สู่อินเทอร์เน็ตโดยไม่มี reverse proxy + TLS + auth
 - `NO7_JWT_SECRET` ต้องไม่ซ้ำกับระบบอื่น และไม่เข้า git

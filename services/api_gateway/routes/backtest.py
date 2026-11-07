@@ -11,6 +11,7 @@ from packages.shared_schemas.models import BacktestRequest
 from services.backtest_engine.backtester import MIN_M1_BARS
 from services.market_data.snapshots import (SnapshotError, bar_data_note, describe_source,
                                            load_snapshot, save_snapshot)
+from services.market_data.ticks import TickBook
 from services.api_gateway.deps import current_user, get_runtime
 from services.api_gateway.state import TradingRuntime
 
@@ -65,7 +66,15 @@ def _run_job(job_id: str, runtime: TradingRuntime, request: BacktestRequest, act
         with _LOCK:
             JOBS[job_id].update(pct=35, message="replaying bars through the decision engine")
         engine = Backtester(runtime.settings, runtime.risk, runtime.planner)
+        tick_book = None
+        if request.use_ticks:
+            try:
+                tick_book = TickBook.load(datasets_dir, symbol)
+            except Exception as exc:  # noqa: BLE001 - bad ticks must not kill a backtest
+                with _LOCK:
+                    JOBS[job_id].update(message=f"tick data ignored: {exc}")
         report = engine.run(m1, spec, request, broker_id,
+                            ticks=tick_book,
                             data_note=bar_data_note(source),
                             dataset={**snapshot.as_dict(),
                                      "feed_mode": feed_mode,

@@ -3,6 +3,17 @@
 Base: `http://127.0.0.1:8000` · interactive docs: `/api/docs` · OpenAPI: `/api/openapi.json`
 ทุก endpoint ใต้ `/api/` (ยกเว้น login/health) ต้องมี `Authorization: Bearer <jwt>`
 
+## PWA (manifest / service worker / offline)
+
+| path | หมายเหตุ |
+|------|----------|
+| `GET /manifest.webmanifest` | `application/manifest+json` — name/short_name/start_url/icons (192, 512, maskable) |
+| `GET /sw.js` | service worker; ฝั่งเซิร์ฟเวอร์แทน `__NO7_VERSION__` ด้วย sha256 ของ `dist/index.html` (12 ตัวแรก) และส่ง `Cache-Control: no-cache` + `Service-Worker-Allowed: /` |
+| `GET /offline.html` | หน้า fallback ตอนเนvigate ไม่ได้ |
+
+service worker **ไม่แคช** `/api/*` และ `/ws` (ราคา/คำสั่งต้องสดเสมอ) — แคชเฉพาะ shell: `/`, `/index.html`,
+`/assets/*` (hashed), ไอคอน, manifest, `/offline.html`
+
 ## Rate limits
 
 ทุกคำขอ (ยกเว้น `/api/system/health`, static, `/api/docs`, `/ws`) ถูกนับแบบ token bucket
@@ -27,6 +38,24 @@ Base: `http://127.0.0.1:8000` · interactive docs: `/api/docs` · OpenAPI: `/api
     (แต่ละครั้งเป็น `BEGIN IMMEDIATE` จึงไม่มีการใช้โทเคนซ้ำข้าม worker)
   - ค่าอื่น → app ไม่ start (ผิดชัดเจน ดีกว่าเงียบ ๆ ใช้ memory)
 
+## สิทธิ์ (roles)
+
+สามระดับ เรียงตามลำดับ: **admin > trader > viewer**
+
+| role | ทำอะไรได้ |
+|---|---|
+| `viewer` | ทุก GET — POST/PUT/PATCH/DELETE ทุกเส้นทาง (ยกเว้น `/api/auth/login`) ได้ **403** |
+| `trader` | ทุกอย่างของผู้ใช้จริง: ออเดอร์, ปิดไม้, kill switch, เทรน, backtest, dataset, สลับ symbol |
+| `admin` | เพิ่มจาก trader: จัดการผู้ใช้ (`/api/users`) และเปลี่ยน security posture |
+
+กติกาที่บังคับในโค้ด:
+
+- **สิทธิ์มาจากฐานข้อมูล ไม่ใช่ token** — token บอกว่าเป็นใคร; `users.role` บอกว่าทำอะไรได้
+  → ปิดบัญชีหรือลด role มีผลกับ request ถัดไปทันที (ไม่ต้องรอ token หมดอายุ)
+- role ที่ไม่รู้จัก/ว่างเปล่า → **viewer** (fail closed) · `owner` (ของเดิม) → `admin`
+- ปิด/ลด role/ลบ **admin ที่ยังใช้งานคนสุดท้าย** ไม่ได้ (กัน lockout)
+- ทุกการเปลี่ยนผู้ใช้ถูกบันทึกใน audit (`users.create`, `users.update`, `users.delete`)
+
 ## Auth & system
 
 | Method | Path | Notes |
@@ -39,6 +68,8 @@ Base: `http://127.0.0.1:8000` · interactive docs: `/api/docs` · OpenAPI: `/api
 | GET | `/api/system/audit?limit=` | audit trail (ใครทำอะไร) |
 | GET | `/api/system/alerts?limit=` | alert ล่าสุด |
 | GET | `/api/system/errors` | error buffer ของ runtime |
+| GET | `/api/users` · `POST /api/users` · `PATCH /api/users/{email}` · `DELETE /api/users/{email}` | จัดการผู้ใช้ (**admin เท่านั้น**) |
+| GET | `/api/users/me/permissions` | `{role, can_trade, can_manage_users, roles}` — UI ใช้ปิดปุ่ม |
 | GET | `/api/system/health` → `cluster` | `{role: leader\|replica\|blocked\|solo, backend, requested, reason, shared_health}` + `runtime_lease` |
 | GET | `/api/system/notify` | สถานะช่องทางแจ้งเตือน (`inapp`/`telegram`/`line`/`webhook`), error ล่าสุด, จำนวนครั้งที่พลาด (ไม่คืน token) |
 | POST | `/api/system/alerts/test` | ส่งข้อความทดสอบจริงผ่านทุกช่องทางที่เปิดใช้ → `{ok, deliveries:[{channel, ok, status, error}]}` · ถ้ายังไม่ตั้งค่า จะคืน `ok:false` + `reason` แทนการเงียบ |
@@ -96,8 +127,9 @@ Base: `http://127.0.0.1:8000` · interactive docs: `/api/docs` · OpenAPI: `/api
 | POST | `/api/brokers/{id}/activate` | สลับโบรกเกอร์ |
 | GET | `/api/brokers/{id}/symbols` | spec จริงต่อบัญชี (`source: broker|declared`) |
 | GET | `/api/brokers/{id}/account` \| `/health` | account info / health probe |
-| POST | `/api/backtests` | `{symbol,bars,spread_points?,commission_per_lot?,slippage_points,starting_balance,validate_walk_forward,snapshot_id?}` → `{job_id}` · `bars` ต้อง ≥ 1700 (ไม่งั้น 400 พร้อมบอกขั้นต่ำ) · ใส่ `snapshot_id` เพื่อรันซ้ำบนแท่งเทียนชุดเดิม (ตรวจ sha256 ก่อน, ผิด→400) |
+| POST | `/api/backtests` | `{symbol,bars,spread_points?,commission_per_lot?,slippage_points,starting_balance,validate_walk_forward,snapshot_id?}` → `{job_id}` · `bars` ต้อง ≥ 1700 (ไม่งั้น 400 พร้อมบอกขั้นต่ำ) · ใส่ `snapshot_id` เพื่อรันซ้ำบนแท่งเทียนชุดเดิม (ตรวจ sha256 ก่อน, ผิด→400) · `use_ticks` (ค่าเริ่มต้น `true`) = ใช้ tick ที่ import ไว้ตัดสินลำดับเหตุการณ์ในแท่ง ที่ชนทั้ง SL และ TP; ถ้าไม่มี tick จะใช้สมมติฐานเดิม (SL ก่อน) และรายงานบอกว่าใช้อย่างไหนกี่แท่ง |
 | GET | `/api/datasets` \| `POST /api/datasets` \| `GET /api/datasets/{id}` | snapshot ของแท่งเทียน: list / freeze ข้อมูลปัจจุบัน / manifest + ตรวจ hash |
+| GET | `/api/datasets/ticks/status?symbol=` | ข้อมูล tick ที่ import ไว้: จำนวนแถว, ช่วงเวลา, แถวที่ถูกทิ้งเพราะอะไร, และ flag `reconstruction` ถ้าเป็นข้อมูลจำลอง |
 | GET | `/api/backtests/jobs/{job_id}` | `{state,pct,message,report_id,metrics}` |
 | GET | `/api/backtests` \| `/api/backtests/{id}` | รายงาน + metrics/verdict/walk_forward/assumptions |
 
@@ -188,6 +220,24 @@ training, reconcile, alerts, errors, ticker, mode, feed, virtual_time`
 
 `assumptions` มีบรรทัด `Bar data: …` ที่ตรงกับแหล่งข้อมูลจริง (simulated / replay / MT5)
 — ไม่ใช่ข้อความตายตัวว่า "simulated" อีกต่อไป
+
+## tick (ข้อมูลจริงราย tick)
+
+```bash
+.venv/bin/python scripts/import_ticks.py --csv ~/Downloads/XAUUSD_ticks.csv --symbol XAUUSD   # time,bid,ask
+.venv/bin/python scripts/import_ticks.py --csv ticks.csv --symbol XAUUSD --tz Etc/GMT-3       # ไฟล์ไม่มี tz
+```
+เก็บเป็น `storage/datasets/ticks/XAUUSD_ticks.csv.gz` + manifest `.json` (จำนวนแถวที่ใช้/ที่ทิ้ง,
+ช่วงเวลา, sha256, median spread) — backtest โหลดเองเมื่อ `use_ticks: true`
+
+ใน report:
+```json
+"diagnostics": {"intra_bar": {"rows": 24000, "bars_settled_by_ticks": 3, "bars_without_ticks": 1, ...}},
+"assumptions": ["Intra-bar order: 3 ambiguous bars were settled by walking 24000 real ticks in time order; 1 bars had no ticks ..."]
+```
+`_manage_bar` เดิมเดาว่า "แท่งที่ชนทั้ง SL และ TP → SL ก่อน" ซึ่งเปลี่ยนไม้ชนะเป็นไม้แพ้ได้;
+เมื่อมี tick ระบบเดินราคาตามเวลาจริงในแท่งนั้น (long ออกที่ bid, short ออกที่ ask) แล้วจึงตัดสิน —
+ถ้า tick ไม่ครอบคลุมแท่งนั้น จะกลับไปใช้สมมติฐานเดิม **และนับไว้** ไม่ใช่เงียบ ๆ
 
 ## `metrics` ของ backtest
 

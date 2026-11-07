@@ -3,6 +3,14 @@
     <!-- `showApp` also requires a non-login route: a valid token while the router
          is still on /login used to render the login form inside the app shell,
          which reads as "logged in but stuck on the login page". -->
+    <!-- The shell can open offline, but data cannot: say so plainly instead of
+         letting stale numbers look live. -->
+    <div v-if="offline"
+         class="flex items-center justify-center gap-2 bg-amber-500/15 px-3 py-1.5 text-[11px] font-medium text-amber-300">
+      <span class="h-1.5 w-1.5 rounded-full bg-amber-400"></span>
+      ออฟไลน์ — แสดงข้อมูลจากครั้งล่าสุด ไม่มีการอัปเดตราคา/คำสั่งซื้อขาย
+    </div>
+
     <div v-if="showApp" class="flex min-h-screen">
       <SideNav class="hidden lg:flex" />
       <div class="flex min-w-0 flex-1 flex-col">
@@ -47,7 +55,7 @@
 </template>
 
 <script setup>
-import { computed, onMounted, onUnmounted, watch } from 'vue'
+import { computed, onMounted, onUnmounted, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import SideNav from './components/SideNav.vue'
 import TopBar from './components/TopBar.vue'
@@ -59,6 +67,12 @@ const route = useRoute()
 const router = useRouter()
 
 const isAuthed = computed(() => Boolean(state.token || getToken()))
+// navigator.onLine is optimistic (a dead server still "has a network"), but it is the
+// right signal for the common case: the phone lost its connection entirely.
+const offline = ref(typeof navigator !== 'undefined' && navigator.onLine === false)
+function syncOnline() {
+  offline.value = navigator.onLine === false
+}
 const showApp = computed(() => isAuthed.value && route.name !== 'login')
 
 // If a token exists but the router is still sitting on the login page (slow
@@ -84,11 +98,18 @@ function goHome() {
 
 let booted = false
 onMounted(async () => {
+  window.addEventListener('online', syncOnline)
+  window.addEventListener('offline', syncOnline)
+  syncOnline()
   if (!isAuthed.value) return
   booted = true
   if (route.name === 'login') return // the watcher above is already navigating
   await bootstrap().catch(() => {})
   startLive()
 })
-onUnmounted(() => stopLive())
+onUnmounted(() => {
+  window.removeEventListener('online', syncOnline)
+  window.removeEventListener('offline', syncOnline)
+  stopLive()
+})
 </script>

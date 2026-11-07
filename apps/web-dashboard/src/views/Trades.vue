@@ -7,7 +7,7 @@
       </div>
       <div class="ml-auto flex gap-1.5">
         <button class="btn py-1.5" @click="load">Refresh</button>
-        <button class="btn btn-danger py-1.5" @click="closeAll">Close all</button>
+        <button class="btn btn-danger py-1.5" :disabled="!perms.canTrade" :title="perms.reason" @click="closeAll">Close all</button>
       </div>
     </header>
 
@@ -94,7 +94,10 @@ import PositionsTable from '../components/PositionsTable.vue'
 import Stat from '../components/Stat.vue'
 import { api } from '../lib/api'
 import { datetime, fmt, fmtFactor, money, pct } from '../lib/format'
-import { state, toast } from '../lib/store'
+import { permissions, state, toast } from '../lib/store'
+
+// Read-only accounts see the buttons disabled — the server refuses them anyway.
+const perms = computed(() => permissions.value)
 
 const payload = ref(null)
 const trades = ref([])

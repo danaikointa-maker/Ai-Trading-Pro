@@ -13,6 +13,7 @@ import jwt
 
 from packages.persistence.db import Database
 from packages.shared_schemas.settings import Settings
+from services.api_gateway.roles import ADMIN, normalize_role
 
 ITERATIONS = 210_000
 
@@ -41,13 +42,19 @@ def verify_password(password: str, stored: str) -> bool:
 
 
 def ensure_demo_user(db: Database, settings: Settings) -> str:
+    """Create the demo account (admin by default) and heal roles from older builds."""
     sec = settings.security
-    email = sec.get("demo_user", "demo@no7.ai")
+    email = str(sec.get("demo_user", "demo@no7.ai")).lower().strip()
     password = sec.get("demo_password", "no7demo1234")
-    row = db.query_one("SELECT email FROM users WHERE email = ?", (email,))
+    role = normalize_role(sec.get("demo_role", ADMIN))
+    row = db.query_one("SELECT email, role FROM users WHERE email = ?", (email,))
     if row is None:
-        db.execute("INSERT INTO users(email, password_hash, role, created_at) VALUES(?,?,?,?)",
-                   (email, hash_password(password), "owner", time.time()))
+        db.execute("INSERT INTO users(email, password_hash, role, created_at, active) "
+                   "VALUES(?,?,?,?,1)",
+                   (email, hash_password(password), role, time.time()))
+    elif normalize_role(row["role"]) != str(row["role"]).lower():
+        # e.g. the old "owner" role: keep the data, make it canonical
+        db.execute("UPDATE users SET role = ? WHERE email = ?", (normalize_role(row["role"]), email))
     return email
 
 
@@ -68,14 +75,22 @@ def decode_token(settings: Settings, token: str) -> dict[str, Any] | None:
 
 
 def authenticate(db: Database, settings: Settings, email: str, password: str) -> dict[str, Any] | None:
-    row = db.query_one("SELECT email, password_hash, role FROM users WHERE email = ?", (email.lower().strip(),))
+    row = db.query_one(
+        "SELECT email, password_hash, role, active FROM users WHERE email = ?",
+        (email.lower().strip(),))
     if row is None:
         return None
     if not verify_password(password, row["password_hash"]):
         return None
-    token, ttl = create_token(settings, row["email"], row["role"])
-    db.audit(row["email"], "auth.login", {"role": row["role"]})
-    return {"token": token, "expires_in": ttl, "user": {"email": row["email"], "role": row["role"]},
+    # A disabled account must not be able to log in, even with the right password.
+    if not bool(row["active"] if row["active"] is not None else 1):
+        db.audit(row["email"], "auth.disabled_login", {})
+        return None
+    role = normalize_role(row["role"])
+    db.execute("UPDATE users SET last_login_at = ? WHERE email = ?", (time.time(), row["email"]))
+    token, ttl = create_token(settings, row["email"], role)
+    db.audit(row["email"], "auth.login", {"role": role})
+    return {"token": token, "expires_in": ttl, "user": {"email": row["email"], "role": role},
             "jwt_secret_is_default": settings.security["jwt_secret"] == "no7-dev-only-secret"
             or os.environ.get("NO7_JWT_SECRET", "") in ("", "change-me-to-a-long-random-string")
             or len(settings.security["jwt_secret"]) < 32}
