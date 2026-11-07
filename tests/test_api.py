@@ -118,3 +118,17 @@ def test_spa_deep_links_are_served(client):
         res = client.get(path)
         assert res.status_code == 200
         assert "text/html" in res.headers["content-type"]
+
+
+def test_backtest_job_list_is_pruned(client, token):
+    """Finished jobs must not accumulate forever in a module-level dict."""
+    from services.api_gateway.routes import backtest as bt
+
+    with bt._LOCK:
+        bt.JOBS.clear()
+        for i in range(bt.MAX_JOBS + 10):
+            bt.JOBS[f"JOB-OLD{i}"] = {"state": "done", "started_at": float(i)}
+    bt._prune_jobs()
+    assert len(bt.JOBS) <= bt.MAX_JOBS
+    with bt._LOCK:
+        bt.JOBS.clear()

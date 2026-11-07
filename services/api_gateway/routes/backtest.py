@@ -14,13 +14,26 @@ from services.api_gateway.state import TradingRuntime
 router = APIRouter(prefix="/api/backtests", tags=["backtest"])
 JOBS: dict[str, dict] = {}
 _LOCK = threading.Lock()
+MAX_JOBS = 40  # finished jobs are kept only long enough for a client to poll them
+
+
+def _prune_jobs() -> None:
+    """Drop the oldest finished jobs so a long-running server cannot leak them."""
+    if len(JOBS) <= MAX_JOBS:
+        return
+    finished = [(k, v) for k, v in JOBS.items() if v.get("state") in ("done", "error")]
+    finished.sort(key=lambda kv: float(kv[1].get("started_at") or 0))
+    for key, _ in finished[: len(JOBS) - MAX_JOBS]:
+        JOBS.pop(key, None)
 
 
 def _run_job(job_id: str, runtime: TradingRuntime, request: BacktestRequest, actor: str) -> None:
     from services.backtest_engine.backtester import Backtester
 
     with _LOCK:
-        JOBS[job_id] = {"state": "running", "pct": 10, "message": "loading history", "started_at": time.time()}
+        _prune_jobs()
+        JOBS[job_id] = {"state": "running", "pct": 10, "message": "loading history",
+                        "started_at": time.time()}
     try:
         broker_id = request.broker_id or runtime.adapter.id
         adapter = runtime.registry.get(broker_id)
@@ -39,6 +52,7 @@ def _run_job(job_id: str, runtime: TradingRuntime, request: BacktestRequest, act
                                                 "trades": report.metrics.trades})
         with _LOCK:
             JOBS[job_id] = {"state": "done", "pct": 100, "message": "finished",
+                            "started_at": JOBS.get(job_id, {}).get("started_at", time.time()),
                             "report_id": report.id, "metrics": report.metrics.model_dump(),
                             "verdict": report.verdict}
     except Exception as exc:  # noqa: BLE001

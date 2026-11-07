@@ -50,7 +50,11 @@ class ForecastPredictor:
 
     # ------------------------------------------------------------------ load
     def load_latest(self) -> bool:
-        version = self.registry.latest_approved()
+        # Newest run, not newest approval: an unapproved model is never used for
+        # gating (see `approved` checks below), but its metrics are the truth about
+        # the current training state and the dashboard should show that, not the
+        # metrics of some earlier model that happened to be approved once.
+        version = self.registry.latest()
         if not version:
             return False
         loaded = self.registry.load(version)

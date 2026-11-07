@@ -146,15 +146,20 @@
                   <td class="num" :class="m.brier_improvement > 0 ? 'text-up' : 'text-down'">{{ signed(m.brier_improvement, 4) }}</td>
                   <td class="num">{{ pct(m.coverage_p10_p90, 0) }}</td>
                   <td class="num" :title="foldsTitle(m)" :class="foldsClass(m)">{{ foldsText(m) }}</td>
-                  <td><span class="chip" :class="m.approved ? 'chip-up' : 'chip-warn'">{{ m.approved ? 'pass' : 'fail' }}</span></td>
+                  <td><span class="chip" :class="m.approved ? 'chip-up' : 'chip-warn'" :title="gateTitle(m)">{{ m.approved ? 'pass' : 'fail' }}</span></td>
                 </tr>
                 <tr v-if="!Object.keys(metrics).length"><td colspan="8" class="py-4 text-center text-[11px] text-muted">ยังไม่มีโมเดลที่ฝึกเสร็จ</td></tr>
               </tbody>
             </table>
           </div>
           <p class="border-t border-ink-700/60 px-4 py-2 text-[10px] leading-relaxed text-muted">
-            เกณฑ์ผ่าน: directional accuracy ≥ {{ pct(thresholds.dir, 0) }} และ Brier ดีกว่าค่าฐาน ≥ {{ fmt(thresholds.brier, 2) }}.
+            เกณฑ์ผ่าน: directional accuracy ≥ {{ pct(thresholds.dir, 0) }} และ Brier ดีกว่าค่าฐาน ≥ {{ fmt(thresholds.brier, 2) }}
+            ผ่าน ≥ {{ passRatePct }} ของ fold และต้องมี <b>อย่างน้อย {{ minFolds }} fold</b> ที่ถูกวัดจริง
+            (fold เดียว = หลักฐานไม่พอ ไม่ใช่การผ่าน).
             ช่วงที่โมเดลไม่ผ่านเกณฑ์ ระบบจะใช้ค่าฐานสถิติและระบุว่า “ยังไม่ผ่านการสอบเทียบ”.
+          </p>
+          <p v-if="validationText" class="border-t border-ink-700/60 px-4 py-2 text-[10px] leading-relaxed text-muted">
+            {{ validationText }}
           </p>
         </section>
 
@@ -213,6 +218,14 @@ function foldsClass(m) {
   return f.passed / f.used >= 0.75 ? 'text-up' : 'text-down'
 }
 
+// The gate is a conjunction of four conditions; when it fails the row says which
+// one, instead of leaving the reader to guess whether it was accuracy or evidence.
+function gateTitle(m) {
+  if (m?.approved) return 'ผ่านเกณฑ์ทุกข้อ'
+  if (m?.approval_note) return m.approval_note
+  return foldsTitle(m)
+}
+
 function foldsTitle(m) {
   if (m?.fold_directional_median === undefined) return 'ยังไม่มีข้อมูล fold'
   return `${m.validation_method || 'fold check'} · median directional ${pct(m.fold_directional_median, 1)} · `
@@ -220,10 +233,14 @@ function foldsTitle(m) {
     + `แย่สุด ${signed(m.fold_brier_improvement_min, 4)}`
 }
 
+const minFolds = computed(() => Number(state.live?.model?.min_validation_folds || 3))
+const passRatePct = computed(() => pct(Number(state.live?.model?.min_fold_pass_rate ?? 0.75), 0))
+const validationText = computed(() => state.live?.model?.validation || '')
+
 const foldsLabel = computed(() => {
   const first = Object.values(metrics.value)[0]
   const f = foldPassed(first)
-  return f ? `${f.used} folds · ต้องผ่าน ≥75%` : 'fold check'
+  return f ? `${f.used}/${minFolds.value} folds · ต้องผ่าน ≥${passRatePct.value}` : 'fold check'
 })
 const selected = ref(60)
 

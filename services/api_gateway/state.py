@@ -718,7 +718,14 @@ class TradingRuntime:
             "model": {
                 "version": self.predictor.version,
                 "approved": self.predictor.approved,
+                # `metrics` stays the per-horizon map the dashboard iterates; the
+                # approval rule that judged it travels beside it so the UI can say
+                # *why* a horizon failed instead of only that it did.
                 "metrics": self.predictor.metrics.get("horizons", {}),
+                "validation": self.predictor.metrics.get("validation"),
+                "approval_rule": self.predictor.metrics.get("approval_rule"),
+                "min_validation_folds": self.predictor.metrics.get("min_validation_folds"),
+                "min_fold_pass_rate": self.predictor.metrics.get("min_fold_pass_rate"),
                 "trained_at": self.predictor.trained_at,
                 "notes": self.predictor.notes,
             },

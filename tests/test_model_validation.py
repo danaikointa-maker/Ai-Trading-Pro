@@ -193,3 +193,31 @@ def test_stored_approval_from_an_older_rule_is_demoted(runtime):
                "metrics": {"horizons": {}, "approval_rule": APPROVAL_RULE_VERSION}}
     predictor.install_payload(current, {})
     assert predictor.approved is True
+
+
+def test_predictor_loads_the_newest_run_not_the_newest_approval(runtime):
+    """A fresher rejected run must replace the metrics of an older approved model."""
+    from services.ai_forecast.predictor import ForecastPredictor
+
+    registry = runtime.model_registry
+    for version, created, approved in (("m-old-approved", 100, 1),
+                                       ("m-new-rejected", 200, 0)):
+        registry.db.execute(
+            "INSERT OR REPLACE INTO models(version, created_at, method, approved, samples,"
+            " metrics, notes, path) VALUES(?,?,?,?,?,?,?,?)",
+            (version, created, "test", approved, 10, '{"horizons": {}, "approval_rule": 2}',
+             "", str(registry.model_dir / version)))
+    assert registry.latest() == "m-new-rejected"
+
+    import joblib
+
+    target = registry.model_dir / "m-new-rejected"
+    target.mkdir(parents=True, exist_ok=True)
+    joblib.dump({"version": "m-new-rejected", "approved": False, "models": {},
+                 "metrics": {"horizons": {}, "approval_rule": 2}, "symbol": "XAUUSD",
+                 "trained_at": 200, "notes": "rejected on evidence"}, target / "models.joblib")
+
+    predictor = ForecastPredictor(runtime.settings, registry)
+    predictor.load_latest()
+    assert predictor.version == "m-new-rejected"
+    assert predictor.approved is False

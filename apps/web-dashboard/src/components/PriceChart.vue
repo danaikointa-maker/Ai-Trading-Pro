@@ -3,7 +3,7 @@
     <div ref="container" class="h-[380px] w-full sm:h-[440px]"></div>
     <div class="pointer-events-none absolute left-3 top-3 flex flex-wrap items-center gap-1.5">
       <span class="chip chip-gold">{{ state.symbol }} · {{ state.timeframe }}</span>
-      <span class="chip">{{ state.live?.feed === 'simulated' ? 'SIMULATED FEED' : 'MT5 LIVE' }}</span>
+      <span class="chip" :class="feedWarn ? 'chip-warn' : ''" :title="feedTitle">{{ feedLabel }}</span>
       <span v-if="state.live?.analysis?.regime" class="chip">{{ state.live.analysis.regime.regime.replace('_',' ') }}</span>
     </div>
     <div v-if="loading" class="absolute inset-0 grid place-items-center bg-ink-900/40 text-[12px] text-muted">loading chart…</div>
@@ -262,5 +262,22 @@ onBeforeUnmount(() => {
   resizeObs?.disconnect()
   chart?.remove()
   chart = null
+})
+
+// The chip used to be a two-way choice (simulated / MT5 LIVE), so a replayed feed
+// — imported candles walking through the live pipeline — was labelled "MT5 LIVE".
+const FEED_LABELS = {
+  simulated: 'SIMULATED FEED',
+  replay: 'REPLAY FEED',
+  mt5: 'MT5 LIVE',
+  'mt5-live': 'MT5 LIVE',
+}
+const feedLabel = computed(() => FEED_LABELS[state.live?.feed] || (state.live?.feed ? String(state.live.feed).toUpperCase() : 'FEED —'))
+const feedWarn = computed(() => state.live?.feed !== 'mt5' && state.live?.feed !== 'mt5-live')
+const feedTitle = computed(() => {
+  const f = state.live?.feed
+  if (f === 'replay') return 'ราคามาจากไฟล์ที่นำเข้า (replay) — ไม่ใช่ tick data จริง และไม่ใช่ราคาสดจากโบรกเกอร์'
+  if (f === 'simulated') return 'ราคาจากตัวจำลอง — ห้ามใช้ตัดสินใจกับเงินจริง'
+  return 'ราคาจากเทอร์มินัล MT5'
 })
 </script>

@@ -43,7 +43,7 @@
             {{ running ? `${job?.message || 'running'} ${job?.pct || 0}%` : 'Run backtest' }}
           </button>
           <p class="text-[9.5px] leading-relaxed text-muted">
-            ใช้ข้อมูลที่ระบบมี (simulated feed หรือ MT5 history) · แนะนำให้เปลี่ยนเป็น tick data จริงก่อนตัดสินใจ
+            ใช้ข้อมูลที่ระบบมี (simulated / replay จากไฟล์ที่นำเข้า / MT5 history) · แนะนำให้ใช้ข้อมูลจริงและ tick data ก่อนตัดสินใจ
           </p>
         </div>
       </section>

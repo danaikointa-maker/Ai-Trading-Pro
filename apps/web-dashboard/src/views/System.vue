@@ -11,7 +11,7 @@
     <div class="grid grid-cols-2 gap-2 md:grid-cols-4">
       <Stat label="Status" :value="health?.status || '—'" :tone="health?.status === 'ok' ? 'text-up' : 'text-amber-300'" />
       <Stat label="Uptime" :value="`${fmt(health?.uptime_seconds, 0)}s`" :hint="health?.env" />
-      <Stat label="Feed mode" :value="health?.feed_mode || '—'" :hint="`virtual ${clock(health?.virtual_time)}`" />
+      <Stat label="Feed mode" :value="health?.feed_mode || '—'" :hint="feedHint" :tone="feedTone" />
       <Stat label="Model" :value="model?.version || 'baseline'" :hint="model?.approved ? 'approved' : 'unapproved'" />
     </div>
 
@@ -22,6 +22,18 @@
           <div v-for="(v, k) in health?.services || {}" :key="k" class="kv">
             <dt>{{ k }}</dt>
             <dd><span class="chip" :class="String(v).includes('ok') || String(v).includes('running') || String(v).includes('approved') ? 'chip-up' : 'chip-warn'">{{ v }}</span></dd>
+          </div>
+          <div v-if="health?.feed_note" class="kv">
+            <dt>feed note</dt>
+            <dd><span class="chip chip-warn" :title="health.feed_note">{{ shortNote }}</span></dd>
+          </div>
+          <div v-for="(v, k) in feedSymbols" :key="`f-${k}`" class="kv">
+            <dt>feed · {{ k }}</dt>
+            <dd class="num text-[10px]">
+              {{ v.bars_replayed }}/{{ v.bars_total - v.warmup_bars }} bars
+              <span class="text-muted">({{ Math.round((v.progress || 0) * 100) }}%)</span>
+              <span v-if="v.exhausted" class="chip chip-warn ml-1">exhausted</span>
+            </dd>
           </div>
           <div v-for="(v, k) in health?.broker_health || {}" :key="`b-${k}`" class="kv">
             <dt>broker · {{ k }}</dt>
@@ -98,7 +110,7 @@
         <li>• ไม่มี AI ใดพยากรณ์กราฟได้แม่นยำ 100% — ระบบนี้วัดความแม่นยำและยอมรับว่า “ไม่ควรเทรด” ได้</li>
         <li>• Signal Score ไม่เท่ากับความน่าจะเป็นชนะ ต้องดู probability ที่สอบเทียบแยก</li>
         <li>• Full Auto ถูกล็อกไว้ ต้องเปิด ENV + risk toggle + โมเดลที่ผ่าน OOS และบัญชี Demo</li>
-        <li>• ข้อมูล feed ในเครื่องนี้เป็น simulated — ผลทดสอบไม่ควรใช้ตัดสินใจกับเงินจริง</li>
+        <li>• {{ feedLimitation }}</li>
         <li>• Connext/FSA และ ธปท.: ตรวจสอบสถานะทางกฎหมายก่อนฝากเงินจริง เริ่มจาก Demo เท่านั้น</li>
         <li>• ควรทำ Walk-forward / Out-of-sample / Paper trading อย่างน้อยหลายสัปดาห์ก่อนเพิ่มทุน</li>
       </ul>
@@ -107,13 +119,37 @@
 </template>
 
 <script setup>
-import { onMounted, ref } from 'vue'
+import { computed, onMounted, ref } from 'vue'
 import Stat from '../components/Stat.vue'
 import { api } from '../lib/api'
 import { clock, datetime, fmt } from '../lib/format'
 import { state, toast } from '../lib/store'
 
 const health = ref(null)
+// Say what the feed *is*, not what it usually is: simulated, imported replay or live MT5.
+const FEED_TEXT = {
+  simulated: 'ข้อมูล feed ในเครื่องนี้เป็นข้อมูลจำลอง — ผลทดสอบไม่ควรใช้ตัดสินใจกับเงินจริง',
+  replay: 'ข้อมูล feed ในเครื่องนี้เป็น replay จากไฟล์ที่นำเข้า (ไม่ใช่ tick data และไม่ใช่ราคาสด)',
+  mt5: 'ข้อมูล feed มาจากเทอร์มินัล MT5 จริง — ยังต้องยืนยันกับตลาดจริงก่อนใช้',
+}
+const feedLimitation = computed(() => FEED_TEXT[health.value?.feed_mode] || FEED_TEXT.simulated)
+const feedTone = computed(() => (health.value?.feed_mode === 'mt5' ? 'text-up' : 'text-amber-300'))
+const feedHint = computed(() => {
+  const h = health.value
+  if (!h) return ''
+  if (h.feed_note) return 'fell back — see note'
+  const progress = Object.values(h.feed?.symbols || {})
+  if (progress.length) {
+    const avg = progress.reduce((a, v) => a + (v.progress || 0), 0) / progress.length
+    return `replay ${Math.round(avg * 100)}%${h.feed?.exhausted ? ' · exhausted' : ''}`
+  }
+  return `virtual ${clock(h.virtual_time)}`
+})
+const feedSymbols = computed(() => health.value?.feed?.symbols || {})
+const shortNote = computed(() => {
+  const note = String(health.value?.feed_note || '')
+  return note.length > 60 ? `${note.slice(0, 60)}…` : note
+})
 const audit = ref([])
 const errors = ref([])
 const models = ref([])
