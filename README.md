@@ -31,8 +31,10 @@
 | Backtest engine + walk-forward + cost model | ✅ |
 | AI Journal / Explainer (deterministic, LLM เป็นตัวเลือก) | ✅ |
 | Dashboard (Vue 3 + Tailwind + ECharts + Lightweight Charts) | ✅ 10 หน้า |
-| MQL5 EA (supervise SL/TP ในเทอร์มินัล) | ⏳ ยังไม่เขียน |
-| Mobile PWA / Telegram / LINE | ⏳ |
+| MQL5 EA + bridge (คำสั่งไปถึงเทอร์มินัลครั้งเดียว, shared store หลาย worker) | ✅ (ยังไม่ compile กับ MT5 จริง) |
+| Tick storage รายวัน (parquet, lazy) + intra-bar ordering | ✅ |
+| Mobile PWA (ติดตั้งได้, แถบอัปเดต/ออฟไลน์ที่บอกความจริง) | ✅ |
+| Telegram / LINE แจ้งเตือน | ⏳ |
 
 ## Quickstart (Linux/macOS/Windows, ไม่ต้องมี MT5)
 

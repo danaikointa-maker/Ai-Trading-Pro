@@ -13,7 +13,14 @@ from pathlib import Path
 
 import pytest
 
+SRC = Path(__file__).resolve().parents[1] / "apps" / "web-dashboard" / "src"
 DIST = Path(__file__).resolve().parents[1] / "apps" / "web-dashboard" / "dist"
+
+
+def _bundle_text() -> str:
+    """Everything the browser downloads as JS — the only thing that actually ships."""
+    return "\n".join(p.read_text("utf-8", errors="replace")
+                     for p in sorted((DIST / "assets").glob("*.js")))
 
 pytestmark = pytest.mark.skipif(not (DIST / "index.html").exists(),
                                 reason="dashboard not built (npm run build)")
@@ -98,3 +105,80 @@ def test_spa_fallback_still_guards_api_and_ws_paths(client):
     assert client.get("/ws").status_code == 404
     deep = client.get("/system")
     assert deep.status_code == 200 and '<div id="app">' in deep.text
+
+
+# ------------------------------------------------------- install / update polish
+def test_manifest_carries_the_install_metadata_browsers_look_for(client):
+    manifest = json.loads(client.get("/manifest.webmanifest").content)
+    assert manifest["id"] == "/", "a stable id keeps the install identity across URL changes"
+    assert manifest["display_override"][0] == "standalone"
+    assert manifest["prefer_related_applications"] is False
+    assert manifest["launch_handler"]["client_mode"] == "navigate-existing"
+    # short cuts must stay inside the scope, or the installed app opens a browser tab
+    for shortcut in manifest["shortcuts"]:
+        assert shortcut["url"].startswith(manifest["scope"])
+        assert shortcut["name"]
+
+
+def test_ios_install_metadata_is_in_the_served_html(client):
+    html = client.get("/").text
+    assert 'rel="manifest"' in html
+    assert 'name="apple-mobile-web-app-capable" content="yes"' in html
+    assert 'name="apple-mobile-web-app-title"' in html
+    assert 'rel="apple-touch-icon"' in html
+    assert 'name="theme-color" content="#07090c"' in html
+
+
+def test_worker_waits_to_be_asked_before_taking_over(client):
+    """A new build must not swap itself in mid-session.
+
+    Unconditional skipWaiting pairs yesterday's JS with today's hashed assets and can
+    drop a half-filled order ticket; the page asks instead.
+    """
+    body = client.get("/sw.js").text
+    assert "self.skipWaiting()" in body, "the message handler still needs it"
+    install_block = body.split("self.addEventListener('install'")[1].split("self.addEventListener('activate'")[0]
+    assert "await self.skipWaiting()" not in install_block
+    assert "if (event.data && event.data.type === 'SKIP_WAITING')" in body
+
+
+def test_the_shipped_bundle_contains_the_install_and_update_flow():
+    bundle = _bundle_text()
+    assert "beforeinstallprompt" in bundle      # install button, not just browser UI
+    assert "display-mode: standalone" in bundle  # hides the invitation once installed
+    assert "SKIP_WAITING" in bundle              # page can activate the waiting worker
+    assert "appinstalled" in bundle
+
+
+def test_the_shipped_bundle_separates_offline_from_server_unreachable():
+    """Two different failures, two different sentences — never "live" when it is not."""
+    bundle = _bundle_text()
+    assert "ออฟไลน์" in bundle
+    assert "เซิร์ฟเวอร์ไม่ตอบ" in bundle
+    assert "ข้อมูลล่าสุด" in bundle
+    assert "no7:server-unreachable" in bundle
+
+
+def test_pwa_banners_are_mounted_and_storage_is_requested():
+    app = (SRC / "App.vue").read_text("utf-8")
+    assert "<PwaBanners" in app
+    pwa_js = (SRC / "lib" / "pwa.js").read_text("utf-8")
+    assert "navigator.storage.persist()" in pwa_js
+    assert "navigator.storage.estimate()" in pwa_js
+    worker = (DIST / "sw.js").read_text("utf-8")
+    assert "__NO7_VERSION__" in worker, "the source keeps the placeholder; the server fills it"
+
+
+def test_install_and_update_state_machine_is_exercised_for_real():
+    """No headless browser here, so the shipped module runs in Node with stubbed APIs."""
+    import shutil
+    import subprocess
+
+    node = shutil.which("node")
+    if not node:
+        pytest.skip("node is not installed")
+    script = (Path(__file__).resolve().parents[1] / "apps" / "web-dashboard" / "scripts"
+              / "pwa-smoke.mjs")
+    result = subprocess.run([node, str(script)], capture_output=True, text=True, timeout=90)
+    assert result.returncode == 0, result.stderr or result.stdout
+    assert "install, update, storage and dismissal all behave" in result.stdout

@@ -144,7 +144,7 @@
 - ยังไม่มี hedging/netting handling พิเศษ, ไม่มี partial-fill ต่อคำสั่ง (โบรกเกอร์คืน volume ที่ fill มาทั้งก้อนในผลลัพธ์เดียว)
 - ไม่มีการยืนยัน two-way ว่า EA ใช้เวอร์ชันไหน: `terminal.build` แสดงใน status แต่เซิร์ฟเวอร์ไม่ได้บังคับเวอร์ชัน
 
-## PWA / ออฟไลน์ (รอบ 13)
+## PWA / ออฟไลน์ (รอบ 13, 17)
 
 - ติดตั้งเป็นแอปได้ (manifest + ไอคอน 192/512/maskable + apple-touch-icon) และเปิดหน้าเดิมได้ตอนออฟไลน์
   แต่ **ข้อมูลไม่ถูกแคชเลย**: `/api/*` และ `/ws` ถูกกันออกจาก service worker โดยเจตนา — ออฟไลน์ = ขึ้นแถบเตือน
@@ -154,8 +154,17 @@
 - service worker ลงทะเบียนเฉพาะ production build (`import.meta.env.PROD`); dev server ไม่มี SW
 - cache name มาจาก hash ของ `dist/index.html` ที่เซิร์ฟเวอร์ inject ตอนส่ง `/sw.js` → build ใหม่ = cache ใหม่
   และ cache เก่าถูกลบตอน activate; แต่ถ้าเบราว์เซอร์ยังไม่ reload หลัง deploy หน้าเก่าจะยังอยู่จนกว่าจะปิดแท็บ
+- **รอบ 17 — install polish**: มีแถบเชิญติดตั้งของแอปเอง (`beforeinstallprompt`), มีแถบ
+  "มีเวอร์ชันใหม่ → รีเฟรช" (worker **ไม่** `skipWaiting` เองแล้ว), แยกข้อความ
+  "ออฟไลน์" กับ "เซิร์ฟเวอร์ไม่ตอบ" พร้อมเวลาข้อมูลล่าสุด, และหน้า /system แสดงสถานะ
+  service worker + `storage.persist()`/`estimate()`
+- iOS/Safari ยังไม่มี prompt API — แอปขึ้น **คำใบ้** (แชร์ → เพิ่มไปที่หน้าจอโฮม) แทนปุ่มติดตั้ง
+- `navigator.storage.persist()` เป็นคำขอ ไม่ใช่สิทธิ์: Firefox/Safari อาจปฏิเสธ และเบราว์เซอร์
+  ลบข้อมูลเองได้เมื่อพื้นที่ใกล้เต็ม — ไม่มีการรับประกันว่าแคชเชลล์จะอยู่ตลอด
+- ไม่มี `screenshots` ใน manifest (ต้องใช้ภาพหน้าจอจริงจากเบราว์เซอร์ ซึ่งเครื่องนี้ไม่มี
+  headless browser ตามกติกาทดสอบ) — Chrome จึงใช้ UI ติดตั้งแบบพื้นฐาน
+- ไม่มี `apple-touch-startup-image` (splash screen iOS) เพราะต้องสร้างภาพหลายขนาดต่อรุ่นเครื่อง
 - ไม่มี offline fallback สำหรับหน้า `/api/docs` (Swagger) — เป็น HTML จาก CDN, ต้องต่อเน็ต
-- iOS ยังไม่รองรับ `beforeinstallprompt`, ไม่มีปุ่ม "ติดตั้งแอป" ในตัว — ต้องใช้ Add to Home Screen เอง
 
 ## การแจ้งเตือนภายนอก
 

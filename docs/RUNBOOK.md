@@ -272,14 +272,26 @@ backtest อ่านเฉพาะวันทีหน้าต่างแ�
 ```bash
 cd apps/web-dashboard && npm run build      # ต้อง build ก่อน; public/ ถูกคัดลอกเข้า dist/
 .venv/bin/python scripts/make_pwa_icons.py  # สร้างไอคอนใหม่ (ไม่ต้องใช้ Photoshop/ Pillow)
-curl -s localhost:8000/manifest.webmanifest | jq '{name,start_url,display,icons:[.icons[].sizes]}'
+curl -s localhost:8000/manifest.webmanifest | jq '{id,start_url,scope,display,display_override,icons:[.icons[].sizes]}'
+curl -s localhost:8000/sw.js | grep -c 'SKIP_WAITING'   # 1 = มีช่องให้หน้าเว็บสั่ง activate เอง
 curl -sD - -o /dev/null localhost:8000/sw.js | grep -i 'cache-control\|service-worker-allowed'
 curl -s localhost:8000/sw.js | grep "const VERSION"   # ต้องเป็น hash 12 ตัว ไม่ใช่ __NO7_VERSION__
 ```
 
 - เปิดจากมือถือแล้วเลือก **Add to Home Screen / ติดตั้งแอป** → เปิดแบบ standalone
-- ออฟไลน์: เปิดแอปได้ (shell ถูกแคช) แต่ขึ้นแถบ "ออฟไลน์" และไม่มีข้อมูลใหม่ — service worker
-  **ไม่แคช** `/api/*` หรือ `/ws` โดยตั้งใจ
+- **แถบเชิญติดตั้ง**: แอปจับ `beforeinstallprompt` เองแล้วขึ้นแถบ "ติดตั้ง No7 เป็นแอป"
+  (ปิดได้ด้วย "ไม่ใช่ตอนนี้" และจำไว้ใน `localStorage`) — บน iOS ไม่มี prompt API
+  จึงขึ้นคำใบ้ *แชร์ → เพิ่มไปที่หน้าจอโฮม*; เมื่อติดตั้งแล้วแถบหายเอง (`display-mode: standalone`)
+- **อัปเดต**: worker ใหม่จะ **รอ** ไม่แทรกกลางเซสชัน (กันอาการ JS เก่าคู่กับ asset hash ใหม่
+  และกัน ticket ที่กรอกค้างหาย) — หน้าเว็บขึ้นแถบ "มีเวอร์ชันใหม่" พร้อมปุ่ม *รีเฟรชเดี๋ยวนี้*
+  ซึ่งส่ง `SKIP_WAITING`; มี `registration.update()` ทุก 30 นาทีเป็นตัวช่วย
+- **ออฟไลน์ vs เซิร์ฟเวอร์ไม่ตอบ** แยกข้อความกัน: อุปกรณ์หลุดเน็ต → "ออฟไลน์",
+  เปิดเชลล์จากแคชได้แต่ `/api` ยิงไม่ถึง → "เซิร์ฟเวอร์ไม่ตอบ — ตัวเลขที่เห็นคือข้อมูลเก่า"
+  พร้อมเวลาข้อมูลล่าสุด (`ข้อมูลล่าสุด HH:MM`) — ไม่มีทางที่ตัวเลขเก่าจะดูเหมือนราคาสด
+- **แคชเชลล์ / storage**: เรียก `navigator.storage.persist()` ให้เบราว์เซอร์ไม่ลบแคช
+  และแสดง `estimate()` (MB ที่ใช้/โควตา) ในหน้า **/system → แอป / PWA** พร้อมสถานะ
+  service worker และปุ่มติดตั้ง (admin ไม่จำเป็น — เป็นข้อมูลฝั่งเบราว์เซอร์)
+- service worker **ไม่แคช** `/api/*` หรือ `/ws` โดยตั้งใจ และไม่มี background sync ของออเดอร์
 - deploy build ใหม่: ไม่ต้องแก้อะไร — `/sw.js` ที่เสิร์ฟมี cache name ตาม hash ของ `index.html`
   เบราว์เซอร์จะได้ worker ใหม่ตอนเปิดครั้งถัดไป (cache เก่าถูกลบใน `activate`)
 - ถ้าอยากล้าง cache ทั้งหมดระหว่าง debug: DevTools → Application → Service Workers → Unregister + Clear storage

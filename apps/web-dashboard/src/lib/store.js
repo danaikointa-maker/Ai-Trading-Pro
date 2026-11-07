@@ -16,6 +16,8 @@ export const state = reactive({
   toasts: [],
   loading: false,
   lastError: '',
+  serverUnreachable: false,   // shell served, API not answering — say so, do not pretend
+  lastLiveAt: 0,              // epoch ms of the newest data actually received
   riskSettings: null,
 })
 
@@ -111,6 +113,8 @@ export function applyLive(payload, transport = 'ws') {
   state.live = merged
   if (payload.symbol && payload.symbol !== state.symbol) state.symbol = payload.symbol
   state.connected = true
+  state.serverUnreachable = false
+  state.lastLiveAt = Date.now()
   state.transport = transport
 }
 
@@ -169,6 +173,11 @@ export function stopLive() {
   pollTimer = null
   state.connected = false
 }
+
+// The API tells us when it cannot be reached. A websocket that drops only means the
+// socket is gone (we fall back to polling), so only an HTTP failure flips this flag.
+window.addEventListener('no7:server-unreachable', () => { state.serverUnreachable = true })
+window.addEventListener('no7:server-reachable', () => { state.serverUnreachable = false })
 
 window.addEventListener('no7:unauthorized', () => {
   state.user = null

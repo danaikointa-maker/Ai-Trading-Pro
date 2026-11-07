@@ -57,6 +57,62 @@
       </section>
 
       <section class="panel">
+        <div class="panel-head">
+          <div class="panel-title">แอป / PWA</div>
+          <span class="chip" :class="pwa.installed ? 'chip-up' : 'chip-warn'">
+            {{ pwa.installed ? 'ติดตั้งแล้ว' : 'เปิดในเบราว์เซอร์' }}
+          </span>
+        </div>
+        <dl class="px-4 py-3">
+          <div class="kv">
+            <dt>service worker</dt>
+            <dd>
+              <span class="chip" :class="workerReady ? 'chip-up' : 'chip-warn'">
+                {{ workerReady ? 'active' : 'ไม่ทำงาน (dev/ยังไม่โหลด)' }}
+              </span>
+              <span v-if="pwa.updateReady" class="chip chip-warn ml-1">มีเวอร์ชันใหม่</span>
+            </dd>
+          </div>
+          <div class="kv">
+            <dt>แคชเชลล์</dt>
+            <dd class="num text-[10.5px]">
+              <template v-if="pwa.storageUsedMb !== null">
+                {{ pwa.storageUsedMb }} MB / {{ pwa.storageQuotaMb }} MB
+              </template>
+              <span v-else class="text-muted">—</span>
+              <span class="ml-2 chip" :class="pwa.storagePersisted ? 'chip-up' : 'chip-warn'">
+                {{ pwa.storagePersisted === null ? 'ไม่ทราบ'
+                   : pwa.storagePersisted ? 'persist แล้ว' : 'ยังไม่ persist' }}
+              </span>
+            </dd>
+          </div>
+          <div class="kv">
+            <dt>ติดตั้ง</dt>
+            <dd class="flex flex-wrap items-center gap-1.5">
+              <button v-if="pwa.canInstall" class="btn py-1 text-[10.5px]" @click="installNow">
+                ติดตั้งแอป
+              </button>
+              <span v-else-if="pwa.installed" class="text-[10.5px] text-muted">
+                เปิดจากหน้าจอโฮมอยู่แล้ว
+              </span>
+              <span v-else class="text-[10.5px] text-muted">
+                ใช้เมนูเบราว์เซอร์ → ติดตั้ง (หรือแชร์ → เพิ่มไปที่หน้าจอโฮม บน iOS)
+              </span>
+            </dd>
+          </div>
+          <div class="kv">
+            <dt>ข้อมูลสด</dt>
+            <dd class="text-[10.5px]">
+              <span class="chip" :class="state.serverUnreachable ? 'chip-down' : 'chip-up'">
+                {{ state.serverUnreachable ? 'เซิร์ฟเวอร์ไม่ตอบ' : 'เชื่อมต่อปกติ' }}
+              </span>
+              <span class="ml-1 text-muted">/api และ /ws ไม่ถูกแคชเด็ดขาด</span>
+            </dd>
+          </div>
+        </dl>
+      </section>
+
+      <section class="panel">
         <div class="panel-head"><div class="panel-title">Model registry</div><span class="chip">{{ models.length }} versions</span></div>
         <div class="max-h-[260px] overflow-auto">
           <table class="table-base">
@@ -244,8 +300,15 @@ import Stat from '../components/Stat.vue'
 import { api } from '../lib/api'
 import { clock, datetime, fmt } from '../lib/format'
 import { permissions, state, toast } from '../lib/store'
+import { pwa, promptInstall, refreshStorageEstimate } from '../lib/pwa'
 
 const health = ref(null)
+const workerReady = ref(false)
+
+async function installNow() {
+  const accepted = await promptInstall()
+  if (accepted) toast('ติดตั้งแอปเรียบร้อย', 'success')
+}
 // Say what the feed *is*, not what it usually is: simulated, imported replay or live MT5.
 const FEED_TEXT = {
   simulated: 'ข้อมูล feed ในเครื่องนี้เป็นข้อมูลจำลอง — ผลทดสอบไม่ควรใช้ตัดสินใจกับเงินจริง',
