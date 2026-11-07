@@ -146,6 +146,10 @@ class Settings:
     def alerts(self) -> dict[str, Any]:
         return self.app.get("alerts", {})
 
+    @property
+    def cluster(self) -> dict[str, Any]:
+        return self.app.get("cluster", {})
+
     # ------------------------------------------------------------- brokers
     def broker(self, broker_id: str) -> dict[str, Any]:
         for profile in self.brokers.get("brokers", []):

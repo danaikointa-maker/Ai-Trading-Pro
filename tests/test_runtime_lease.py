@@ -139,8 +139,12 @@ def test_a_blocked_runtime_cannot_release_the_live_owner_lease(runtime, tmp_path
         rt = type(runtime).__new__(type(runtime))  # avoid a second full runtime
         from collections import deque
 
+        from services.api_gateway.cluster import LocalSharedState
+
         rt.db, rt._owner = live, lease_owner()
         rt.lease, rt.errors = {"state": "unclaimed"}, deque(maxlen=5)
+        rt.shared, rt.shared_status = LocalSharedState(), {"backend": "local"}
+        rt.replica, rt._replica_frame = False, None
         assert rt._claim_lease() is False
         assert rt.lease["owner"] == holder
         release_runtime_lease(live, rt._owner)

@@ -95,6 +95,15 @@ alerts:
   webhook_enabled: ${NO7_WEBHOOK_ENABLED:false}    # needs NO7_WEBHOOK_URL
   webhook_url: ${NO7_WEBHOOK_URL:}
 
+# More than one process. The runtime lease already guarantees only one process
+# trades; a shared backend lets the others serve its live frames instead of idling
+# (that is what makes `uvicorn --workers N` usable). `local` = single process.
+cluster:
+  backend: ${NO7_CLUSTER_BACKEND:local}      # local | redis
+  redis_url: ${NO7_REDIS_URL:}               # e.g. redis://127.0.0.1:6379/0
+  key_prefix: no7
+  state_ttl_seconds: 10                      # a frame older than this is gone, by design
+
 # WebSocket: a light frame every second, a full payload (with analysis/forecast)
 # at least this often so those panels never freeze.
 ws:

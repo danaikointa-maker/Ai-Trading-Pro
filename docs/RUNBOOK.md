@@ -127,7 +127,31 @@ export NO7_WEBHOOK_ENABLED=1
 > ถ้าตั้ง token แล้วแต่ยังไม่เปิดใช้ ระบบจะ **ไม่ส่ง** อะไรออกนอกเครื่อง (โดยเจตนา)
 > และจะบอกว่ายังไม่ได้ตั้งค่า ไม่ใช่เงียบ
 
-## 7. รันได้ทีละโพรเซสเท่านั้น (single-writer)
+## 7. หลาย worker / replica (ต้องมี Redis)
+
+ค่าเริ่มต้นคือโปรเซสเดียว (`cluster.backend: local`) — เฟรมสดอยู่แต่ในโปรเซสนั้น
+
+ถ้าต้องการให้มี API หลายโปรเซสหรือหลายเครื่อง โดยที่ **ยังมีคนเทรดคนเดียว**:
+
+```bash
+docker run -d -p 6379:6379 redis:7-alpine
+export NO7_CLUSTER_BACKEND=redis
+export NO7_REDIS_URL=redis://127.0.0.1:6379/0
+# แล้วรัน API ได้หลายโปรเซส
+.venv/bin/python -m uvicorn services.api_gateway.app:app --host 0.0.0.0 --port 8000 --workers 4
+```
+
+- โปรเซสที่ถือ **lease** = `leader` → เทรด และ `SET no7:live:v1 <frame> EX 10` ทุกวินาที
+- โปรเซสอื่น = `replica` → ไม่ tick/ไม่เทรด/ไม่เทรน แต่ `/api/trading/live` และ `/ws/live`
+  เสิร์ฟเฟรมของ leader (payload มี `replica: true`, `served_by`, `frame_age_seconds`)
+- ดูสถานะที่ `/api/system/health` → `cluster: {role, backend, requested, reason, shared_health}`
+  และแถว `cluster` บนหน้า /system
+
+ถ้าตั้ง `backend: redis` แต่ยังใช้ไม่ได้ (ไม่มี URL / ไม่ได้ `pip install redis` / ต่อเซิร์ฟเวอร์ไม่ได้)
+ระบบจะ **ถอยไปใช้ in-process store** และบอกเหตุผลใน `cluster.reason` — replica จะไม่มีอะไรอ่าน
+จึงกลายเป็น `blocked` ตามเดิม (ไม่แอบทำงานครึ่ง ๆ กลาง ๆ)
+
+## 8. รันได้ทีละโพรเซสเท่านั้น (single-writer)
 
 runtime (tick, signal, order) ใช้ **lease** ในตาราง `kv` (`runtime_lease`) — โปรเซสเดียวเท่านั้นที่ขับเคลื่อนได้
 ถ้าเปิดโปรเซสที่สองบนฐานข้อมูลเดียวกัน:
@@ -142,7 +166,7 @@ runtime (tick, signal, order) ใช้ **lease** ในตาราง `kv` (`r
 
 heartbeat ทุก 5 วินาที, ถือว่า lease ตายเมื่อเงียบเกิน 30 วินาที → เปิดใหม่ได้ทันทีแม้โดน `kill -9`
 
-## 8. ความปลอดภัย
+## 9. ความปลอดภัย
 
 - อย่าเปิดพอร์ต 8000 สู่อินเทอร์เน็ตโดยไม่มี reverse proxy + TLS + auth
 - `NO7_JWT_SECRET` ต้องไม่ซ้ำกับระบบอื่น และไม่เข้า git
