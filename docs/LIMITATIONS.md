@@ -116,6 +116,22 @@
 - `use_ticks: true` โดยไม่มีไฟล์ = ทำงานเหมือนเดิม (ไม่ error) แต่ `diagnostics.intra_bar.mode` = `conservative`
 - tick ไม่ได้ใช้กับ paper/live execution หรือ training เลย — ใช้เฉพาะใน backtest
 
+## EA bridge / MQL5 (รอบ 14)
+
+- **EA `.mq5` ยังไม่เคย compile หรือรันกับ MT5 จริง** ในเครื่องนี้ (ไม่มี Windows/terminal) —
+  โปรโตคอลถูก pin ด้วย `tests/test_bridge.py` (26 tests) และ exercised ด้วย `scripts/run_bridge_sim.py`
+  แต่การคอมไพล์/รันครั้งแรกต้องทำบนเครื่องคุณ
+- ไม่มี TLS/HTTPS ในตัว: token วิ่งแบบ plaintext ถ้าไม่ได้อยู่หลัง reverse proxy — ห้ามใช้ข้ามอินเทอร์เน็ต
+  โดยไม่ใส่ HTTPS (หรือ VPN)
+- state ของ bridge อยู่ใน memory ของโปรเซสเดียว: รีสตาร์ทเซิร์ฟเวอร์ = session/คิวหาย (EA จะ register ใหม่ใน 1 รอบ)
+  และห้ามรันหลาย worker เมื่อใช้ bridge
+- ไม่มี background sync: คำสั่งที่ค้างตอนเซิร์ฟเวอร์ปิดหายไป (ไม่มีการกู้คิว) — ตั้งใจ เพราะคำสั่งเทรดเก่าไม่ควรถูกส่งย้อนหลัง
+- EA จำกัดที่ symbol ที่ใส่ใน `InpSymbols`, M1 rates ที่ `InpRatesBars` และกรองเฉพาะโพซิชัน magic `70707`
+  หรือคอมเมนต์ที่มี `no7` (โพซิชันของ EA ตัวอื่นจะไม่ถูกแตะ)
+- `positions()` คือ snapshot ล่าสุดจาก EA ไม่ใช่ streaming: อัตราการอัปเดต = poll interval (ปกติ 1s)
+- ยังไม่มี hedging/netting handling พิเศษ, ไม่มี partial-fill ต่อคำสั่ง (โบรกเกอร์คืน volume ที่ fill มาทั้งก้อนในผลลัพธ์เดียว)
+- ไม่มีการยืนยัน two-way ว่า EA ใช้เวอร์ชันไหน: `terminal.build` แสดงใน status แต่เซิร์ฟเวอร์ไม่ได้บังคับเวอร์ชัน
+
 ## PWA / ออฟไลน์ (รอบ 13)
 
 - ติดตั้งเป็นแอปได้ (manifest + ไอคอน 192/512/maskable + apple-touch-icon) และเปิดหน้าเดิมได้ตอนออฟไลน์

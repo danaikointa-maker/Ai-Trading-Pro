@@ -247,7 +247,47 @@ curl -s localhost:8000/sw.js | grep "const VERSION"   # ต้องเป็น
 - ถ้าอยากล้าง cache ทั้งหมดระหว่าง debug: DevTools → Application → Service Workers → Unregister + Clear storage
 - dev (vite 5173) **ไม่มี** service worker — การทดสอบ PWA ต้องใช้ build + uvicorn เท่านั้น
 
-## 12. ความปลอดภัย
+## 12. เชื่อม MT5 ผ่าน EA bridge (ไม่ต้องรันเซิร์ฟเวอร์บน Windows)
+
+**หลักการ**: เซิร์ฟเวอร์ไม่ถือรหัส MT5 เลย — EA ในเทอร์มินัลจะ poll `/api/bridge/poll` ทุก 1 วินาที
+ส่ง snapshot (บัญชี/ราคา/โพซิชัน/M1 rates) และรับคำสั่งไป execute แล้วรายงานกลับครั้งเดียว
+
+```bash
+# 1) เปิด bridge ฝั่งเซิร์ฟเวอร์ + ตั้ง token (ปิดไว้โดยค่าเริ่มต้น = fail closed)
+export NO7_BRIDGE_ENABLED=true
+export NO7_BRIDGE_TOKEN="$(openssl rand -hex 24)"   # เก็บให้ดี = credential ของบัญชีนี้
+scripts/run.sh                                       # หรือ uvicorn ตามปกติ (worker เดียว!)
+
+# 2) ตรวจว่าเซิร์ฟเวอร์พร้อม (ยังไม่มี EA = bridges ว่าง, enabled true)
+curl -s localhost:8000/api/bridge/session -H "Authorization: Bearer $TOKEN" | jq
+
+# 3a) ทดสอบก่อนโดยไม่มี MT5 — EA จำลอง (โปรโตคอลเดียวกันเป๊ะ)
+.venv/bin/python scripts/run_bridge_sim.py --server http://127.0.0.1:8000 \
+    --account mt5-bridge-demo --token "$NO7_BRIDGE_TOKEN" --duration 120 --rates
+
+# 3b) ของจริงบน Windows: MetaEditor -> เปิด bridge/No7BridgeEA.mq5 -> compile
+#     ใส่ InpServerUrl / InpToken / InpAccountId ("mt5-bridge-demo") / InpSymbols
+#     Tools > Options > Expert Advisors > Allow WebRequest for listed URL: เพิ่ม URL เซิร์ฟเวอร์
+#     Attach เข้ากราฟ 1 ชาร์ต (EA ตัวเดียวต่อบัญชี) แล้วเปิด Algo Trading
+
+# 4) ตรวจว่าต่อติด + สลับ broker ที่ใช้งาน
+curl -s localhost:8000/api/bridge/status -H "Authorization: Bearer $TOKEN" | jq '.sessions'
+curl -s -X POST localhost:8000/api/brokers/mt5-bridge-demo/activate \
+     -H "Authorization: Bearer $TOKEN" -H 'Content-Type: application/json' -d '{}' | jq
+```
+
+อ่านสถานะ: `health: connected` = snapshot ใหม่กว่า `fresh_seconds` (5s), `stale` = 5–15s, `disconnected` = เกิน 15s
+(ช่วง stale/disconnected ระบบ **ไม่ยอมใช้ราคาหรือส่งคำสั่ง** — ขึ้น error ไม่ใช่ราคาเก่า)
+
+**เมื่อ EA หลุด/รีสตาร์ท**: register ใหม่จะได้ `generation + 1`, คิวเดิมถูกทิ้งเป็น `orphaned_commands`
+(ดูใน `/api/bridge/status`) และ snapshot เก่าถูกล้าง — ระบบไม่เอา state ของเทอร์มินัลเก่ามาใช้ต่อ
+
+**ข้อบังคับจากการออกแบบ**
+- รัน **worker เดียว** เมื่อเทรดผ่าน bridge (คิวอยู่ในโปรเซส; หลาย worker = หลายคิว)
+- คำสั่งที่ EA ไม่ ack จะหมดอายุ (`command_ttl_seconds` 30s / `ack_grace_seconds` 20s) และ **ไม่ส่งซ้ำ**
+- ต้องเปิด Algo Trading ในเทอร์มินัล ไม่งั้น EA ไม่ execute (ฝั่งเซิร์ฟเวอร์จะเห็นแค่ `expired`)
+
+## 13. ความปลอดภัย
 
 - อย่าเปิดพอร์ต 8000 สู่อินเทอร์เน็ตโดยไม่มี reverse proxy + TLS + auth
 - `NO7_JWT_SECRET` ต้องไม่ซ้ำกับระบบอื่น และไม่เข้า git

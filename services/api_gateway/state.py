@@ -20,6 +20,7 @@ from typing import Any
 
 from integrations.brokers.base import BrokerAdapter, BrokerError
 from integrations.brokers.registry import BrokerRegistry
+from services.bridge.relay import BridgeRelay
 from packages.persistence.db import Database
 from packages.shared_schemas.models import (
     AnalysisSnapshot,
@@ -151,6 +152,27 @@ def release_runtime_lease(db: Any, owner: str) -> tuple[bool, dict[str, Any]]:
     return True, record
 
 
+def build_bridge_relay(settings: Settings, audit=None) -> BridgeRelay:
+    """Relay configured from `bridge:` in app.yaml (empty tokens disable accounts)."""
+    cfg = dict(settings.app.get("bridge") or {})
+    accounts = {str(row.get("id")): str(row.get("token") or "")
+                for row in (cfg.get("accounts") or []) if row.get("id")}
+    relay = BridgeRelay(
+        {k: v for k, v in accounts.items() if v},
+        fresh_seconds=float(cfg.get("fresh_seconds", 5)),
+        stale_seconds=float(cfg.get("stale_seconds", 15)),
+        command_ttl_seconds=float(cfg.get("command_ttl_seconds", 30)),
+        ack_grace_seconds=float(cfg.get("ack_grace_seconds", 20)),
+        max_pending=int(cfg.get("max_pending", 50)),
+        poll_interval_ms=int(cfg.get("poll_interval_ms", 1000)),
+        order_timeout_seconds=float(cfg.get("order_timeout_seconds", 20)),
+        enabled=bool(cfg.get("enabled", False)),
+    )
+    if audit is not None:
+        relay.audit = audit
+    return relay
+
+
 class TradingRuntime:
     def __init__(self, settings: Settings | None = None) -> None:
         self.settings = settings or get_settings()
@@ -173,7 +195,8 @@ class TradingRuntime:
             self.settings.app.setdefault("_feed_notes", []).append(self.feed_note)
         self.db.kv_set("virtual_clock_start", self.feed.end_time)
 
-        self.registry = BrokerRegistry(self.settings, self.feed)
+        self.bridge = build_bridge_relay(self.settings, audit=self.db.audit)
+        self.registry = BrokerRegistry(self.settings, self.feed, relay=self.bridge)
         self.registry.build()
         for adapter in self.registry.all():
             if hasattr(adapter, "clock"):

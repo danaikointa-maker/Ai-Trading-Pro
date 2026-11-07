@@ -4,6 +4,7 @@
   * ``simulated_mt5`` — paper account with MT5 contract specs and local fills
   * ``mt5``           — real terminal via the official Python package
   * ``generic_mt5``   — same as mt5, kept as an explicit template profile
+  * ``bridge``        — an MQL5 Expert Advisor polls this server (see services/bridge)
 """
 from __future__ import annotations
 
@@ -11,6 +12,7 @@ import os
 from typing import Any
 
 from integrations.brokers.base import BrokerAdapter
+from integrations.brokers.bridge import BridgeBroker
 from integrations.brokers.mt5_live import MT5Broker
 from integrations.brokers.paper import PaperBroker
 from packages.shared_schemas.settings import Settings
@@ -18,9 +20,12 @@ from services.market_data.simulator import SyntheticFeed
 
 
 class BrokerRegistry:
-    def __init__(self, settings: Settings, feed: SyntheticFeed) -> None:
+    def __init__(self, settings: Settings, feed: SyntheticFeed, relay: Any = None) -> None:
         self.settings = settings
         self.feed = feed
+        # The EA-bridge relay is shared with the /api/bridge routes, so an order queued
+        # by the adapter is the same command the EA receives on its next poll.
+        self.relay = relay
         self._adapters: dict[str, BrokerAdapter] = {}
         self.active_id = settings.default_broker_id()
 
@@ -34,6 +39,10 @@ class BrokerRegistry:
                         starting_balance=float(profile.get("starting_balance", 10000.0)),
                         seed=abs(hash(profile["id"])) % 10_000,
                     )
+                elif adapter_type == "bridge":
+                    if self.relay is None:
+                        raise RuntimeError("bridge profile needs the bridge relay")
+                    self._adapters[profile["id"]] = BridgeBroker(profile, self.relay)
                 elif adapter_type in ("mt5", "generic_mt5"):
                     broker = MT5Broker(
                         profile,

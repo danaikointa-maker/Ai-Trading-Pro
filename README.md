@@ -20,6 +20,7 @@
 |---|---|
 | API Gateway (FastAPI) + JWT + WebSocket | ✅ ทำงาน |
 | Market data (simulated feed, seed 7) + MT5 adapter | ✅ / ⏳ ต้องเทอร์มินัล Windows |
+| EA bridge (MQL5 poll → API) | ✅ ฝั่งเซิร์ฟเวอร์ + EA จำลองทดสอบแล้ว / ⏳ EA จริงยังไม่ compile |
 | นำเข้าข้อมูลจริง (CSV) + ประเมิน offline บนข้อมูลจริง | ✅ `scripts/import_candles.py` (ดู `docs/DATA.md`) |
 | Live replay จากข้อมูลที่นำเข้า (`feed_mode: replay`) | ✅ ใช้งานได้ (ยังไม่ใช่ tick data) |
 | Trend · Market structure (BOS/CHoCH) · S/R confluence | ✅ |
@@ -70,9 +71,10 @@ packages/
   market_structure/        swings, BOS, CHoCH, regime
   strategy_rules/          zone builder (confluence), entry rules
   persistence/             SQLite (swap for Postgres later)
+services/bridge/           EA bridge relay (MQL5 EA polls out, queue + freshness)
+bridge/                    No7BridgeEA.mq5 — EA client (ต้อง compile บน Windows, ยังไม่ทดสอบจริง)
 integrations/
-  brokers/                 adapter interface, paper/MT5, registry, profiles
-  mt5/                     python bridge + MQL5 EA (TODO)
+  brokers/                 adapter interface, paper/MT5/bridge, registry, profiles
   no7_local_ai/            Ollama client for explanations only
 config/                    app.yaml, brokers.yaml, risk.yaml, strategies.yaml
 tests/                     pytest — maths, risk gate, zones, HTTP contract
@@ -143,3 +145,6 @@ python3 -m pytest tests/ -q      # 54 tests: maths, risk gate, zones, forecast s
 | `./scripts/test.sh` | รันชุดทดสอบทั้งหมด (unit + API contract + invariant สูตร) |
 | `./scripts/smoke.py` | เช็คว่าระบบมีชีวิตและ payload ครบ (health/live/model/errors) |
 | `TOKEN=… ./scripts/train.sh XAUUSD` | สั่งฝึกโมเดลใหม่ผ่าน API |
+| `.venv/bin/python scripts/run_bridge_sim.py --token …` | EA จำลอง (โปรโตคอลเดียวกับ EA จริง) สำหรับทดสอบ bridge ก่อนมี MT5 |
+| `.venv/bin/python scripts/import_ticks.py --csv … --symbol XAUUSD` | นำเข้า tick จริงให้ backtest ตัดสินลำดับในแท่ง |
+| `.venv/bin/python scripts/make_pwa_icons.py` | สร้างไอคอน PWA (ถ้าแก้ดีไซน์) |

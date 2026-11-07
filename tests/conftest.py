@@ -20,6 +20,10 @@ os.environ.setdefault("NO7_LOG_DIR", str(_TMP / "logs"))
 os.environ.setdefault("NO7_FEED_MODE", "simulate")
 os.environ.setdefault("NO7_JWT_SECRET", "test-secret-key-for-pytest-only-32bytes")
 os.environ.setdefault("NO7_SIM_SPEED", "0")
+# The EA bridge is off by default in production config (fail closed); the tests turn it
+# on with a known token so the protocol can be exercised end to end.
+os.environ.setdefault("NO7_BRIDGE_ENABLED", "true")
+os.environ.setdefault("NO7_BRIDGE_TOKEN", "test-bridge-token-0123456789")
 
 
 @pytest.fixture(scope="session")

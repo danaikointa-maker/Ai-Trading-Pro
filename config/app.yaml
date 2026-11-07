@@ -84,6 +84,29 @@ execution:
   idempotency_ttl_minutes: 120
   verify_after_send: true
 
+# ---------------------------------------------------------------------------
+# EA bridge: an MQL5 Expert Advisor inside a Windows MT5 terminal polls this
+# server, executes, and reports back. The token per account is the whole
+# credential — leave it empty to disable the account (fail closed).
+#
+# Nothing old is reused: quotes/positions are only served while their snapshot
+# is inside `fresh_seconds`/`stale_seconds`, a command is delivered once, and a
+# reconnect discards the previous session's queue and snapshot.
+# ---------------------------------------------------------------------------
+bridge:
+  enabled: ${NO7_BRIDGE_ENABLED:false}
+  fresh_seconds: ${NO7_BRIDGE_FRESH_SECONDS:5}
+  stale_seconds: ${NO7_BRIDGE_STALE_SECONDS:15}
+  command_ttl_seconds: ${NO7_BRIDGE_COMMAND_TTL:30}
+  ack_grace_seconds: ${NO7_BRIDGE_ACK_GRACE:20}
+  max_pending: ${NO7_BRIDGE_MAX_PENDING:50}
+  poll_interval_ms: ${NO7_BRIDGE_POLL_MS:1000}
+  order_timeout_seconds: ${NO7_BRIDGE_ORDER_TIMEOUT:20}
+  accounts:
+    - id: mt5-bridge-demo
+      label: MT5 (EA bridge, demo)
+      token: ${NO7_BRIDGE_TOKEN:}
+
 alerts:
   # In-app alerts are always on. External channels are opt-in: an outbound
   # message leaves this machine, so it needs a token *and* an explicit enable.
