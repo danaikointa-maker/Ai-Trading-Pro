@@ -131,7 +131,7 @@ volume profile, VWAP, EMA, equal highs/lows, round number, reaction history
    ยังเป็นการประมาณ; snapshot ของ dataset สำหรับ reproducible backtest ก็ยังไม่มี
 3. **หลาย worker / หลายเครื่อง** — มีสองชั้นแล้ว: (ก) lease ทำให้มี **เจ้าของเดียว** ที่เทรด
    (ข) `cluster.backend: redis` ให้ leader เผยแพร่เฟรมสด แล้วโปรเซสอื่นเสิร์ฟเป็น **replica** ได้
-   (อ่านอย่างเดียว) · ที่ยังไม่มี: scheduler/training ยังไม่แชร์คิวข้ามเครื่อง, ws hub ยัง fan-out
+   (อ่านอย่างเดียว) · การได้มา/ต่ออายุ lease เป็น compare-and-set ใน SQL เดียว จึงแข่งกันแล้วมีผู้ชนะคนเดียว · ที่ยังไม่มี: scheduler/training ยังไม่แชร์คิวข้ามเครื่อง, ws hub ยัง fan-out
    ในโปรเซสตัวเอง และ rate limit ข้ามเครื่องยังต้องใช้ store กลาง (`ratelimit.store: sqlite`
    แชร์ได้เฉพาะในเครื่องเดียว)
 4. Mobile PWA + Telegram/LINE push

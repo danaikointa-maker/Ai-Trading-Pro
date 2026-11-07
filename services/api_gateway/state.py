@@ -97,7 +97,35 @@ def claim_runtime_lease(db: Any, owner: str, now: float | None = None,
         "heartbeat": now,
         "started_at": started,
     }
-    db.kv_set(LEASE_KEY, record)
+
+    if force:
+        # An operator explicitly opted into sharing; the guard below would (correctly)
+        # refuse to overwrite a live owner, so this path is a plain write.
+        db.kv_set(LEASE_KEY, record)
+        return True, dict(record)
+
+    # Compare-and-set in one statement. A read-then-write let two processes that
+    # started in the same instant both see a stale lease and both become leader —
+    # which means two trading loops. The UPDATE only applies while the condition
+    # still holds, so exactly one caller can win.
+    written = db.execute(
+        "INSERT INTO kv(key, value, updated_at) VALUES(?,?,?) "
+        "ON CONFLICT(key) DO UPDATE SET value=excluded.value, updated_at=excluded.updated_at "
+        "WHERE json_extract(kv.value, '$.owner') = ? "
+        "   OR CAST(COALESCE(json_extract(kv.value, '$.heartbeat'), 0) AS REAL) <= ?",
+        (LEASE_KEY, json.dumps(record), now, owner, now - stale_seconds),
+    )
+    if not written:
+        fresh = db.kv_get(LEASE_KEY, {}) or {}
+        fresh_owner = fresh.get("owner", other)
+        fresh_age = now - float(fresh.get("heartbeat") or 0)
+        return False, {
+            "state": "blocked",
+            "owner": fresh_owner,
+            "heartbeat_age_seconds": round(max(0.0, fresh_age), 1),
+            "blocked_owner": owner,
+            "raced": True,
+        }
     return True, dict(record)
 
 

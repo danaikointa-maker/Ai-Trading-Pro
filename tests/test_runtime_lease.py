@@ -152,3 +152,36 @@ def test_a_blocked_runtime_cannot_release_the_live_owner_lease(runtime, tmp_path
         assert live.kv_get(LEASE_KEY)["state"] == "held"
     finally:
         live.close()
+
+
+def test_only_one_process_can_win_a_lease_race(db):
+    """Two processes seeing the same stale lease must not both become leader."""
+    import threading
+
+    claim_runtime_lease(db, "host-a#1", now=1000.0)
+    stale_now = 1000.0 + LEASE_STALE_SECONDS + 5
+    results: dict[str, bool] = {}
+    barrier = threading.Barrier(2)
+
+    def attempt(owner: str) -> None:
+        barrier.wait(timeout=5)
+        ok, _ = claim_runtime_lease(db, owner, now=stale_now)
+        results[owner] = ok
+
+    threads = [threading.Thread(target=attempt, args=(f"host-b#{i}",)) for i in (1, 2)]
+    for t in threads:
+        t.start()
+    for t in threads:
+        t.join(timeout=5)
+
+    assert sum(results.values()) == 1, f"exactly one winner expected, got {results}"
+    winner = next(owner for owner, won in results.items() if won)
+    assert db.kv_get(LEASE_KEY)["owner"] == winner
+    assert db.kv_get(LEASE_KEY)["state"] == "held"
+
+
+def test_a_fresh_lease_is_not_stolen_by_an_atomic_write(db):
+    claim_runtime_lease(db, "host-a#1", now=1000.0)
+    ok, record = claim_runtime_lease(db, "host-a#2", now=1002.0)
+    assert not ok and record["owner"] == "host-a#1"
+    assert db.kv_get(LEASE_KEY)["heartbeat"] == pytest.approx(1000.0)
