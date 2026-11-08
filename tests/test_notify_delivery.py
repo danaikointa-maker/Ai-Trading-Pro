@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import json
 import threading
+import time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 import pytest
@@ -187,19 +188,41 @@ def test_the_bot_token_never_appears_in_status_or_errors(db, provider):
     assert "TEST-TOKEN" not in str([dict(r)["payload"] for r in rows])
 
 
-def test_a_storm_is_paced_and_counted_instead_of_flooding(db, provider):
+def test_a_storm_is_paced_then_delivered_from_the_queue(db, provider):
+    """Pacing used to lose the second message. It now delays it instead."""
     n = notifier(db, provider, min_interval_seconds=60)
     first = n.emit("info", "t1", "m1")
     second = n.emit("info", "t2", "m2")
     assert len(provider.requests) == 1, "the second message must be held back"
     assert second.meta["delivery"][0]["ok"] is None
     assert second.meta["delivery"][0]["skipped"] == "pacing"
-    assert n.dropped == 1 and n.status()["dropped"] == 1
+    assert second.meta["delivery"][0]["queued"] is True
+    assert n.dropped == 0, "held back is not dropped any more — it is queued"
+    assert n.outbox.pending() == 1
     assert first.meta["delivery"][0]["ok"] is True
     # a skip is not a failure: health must not flip to "failing"
     assert n.status()["state"] == "external"
     assert n.status()["channels"]["telegram"]["ok"] is True
     assert n.status()["channels"]["telegram"]["skipped"] == 1
+
+    # the queued copy is due exactly when the pacing window opens, not on a
+    # generic backoff — so one minute later the drain delivers it
+    n.min_interval = 0
+    result = n.drain(now=time.time() + 61)
+    assert result["sent"] == 1 and n.outbox.pending() == 0
+    assert len(provider.requests) == 2
+    assert "t2" in provider.requests[1]["payload"]["text"]
+
+
+def test_pacing_still_drops_when_the_outbox_is_switched_off(db, provider):
+    """Without the queue the old behaviour must remain: skipped, and counted."""
+    n = notifier(db, provider, min_interval_seconds=60, outbox={"enabled": False})
+    n.emit("info", "t1", "m1")
+    second = n.emit("info", "t2", "m2")
+    assert second.meta["delivery"][0]["skipped"] == "pacing"
+    assert "queued" not in second.meta["delivery"][0]
+    assert n.dropped == 1 and n.status()["dropped"] == 1
+    assert n.outbox.pending() == 0
 
 
 def test_long_messages_are_truncated_to_the_provider_limit(db, provider):
@@ -233,7 +256,7 @@ def test_a_paced_test_is_not_reported_as_a_failure(db, provider):
     assert second["ok"] is True, "pacing is not a delivery failure"
     assert second["paced"] == ["telegram"]
     assert "ลองใหม่" in second["note"]
-    assert n.dropped == 1
+    assert n.outbox.pending() == 1, "the paced test message is queued, not lost"
 
 
 # ------------------------------------------------------------------ base safety

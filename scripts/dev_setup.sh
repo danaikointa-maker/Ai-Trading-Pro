@@ -98,7 +98,7 @@ step "Ready"
 cat <<'NEXT'
     run the app      ./scripts/run.sh                 # http://127.0.0.1:8000
                                                       # demo@no7.ai / no7demo1234
-    run the gate     ./scripts/dev_check.sh           # ruff + 410 tests (~3 min)
+    run the gate     ./scripts/dev_check.sh           # ruff + 548 tests (~2 min)
     fast test loop   .venv/bin/python -m pytest tests/test_api.py -q
     frontend loop    cd apps/web-dashboard && npm run dev      # :5173, proxies /api
     read first       docs/DEVELOPMENT.md              # where things live, recipes,
