@@ -11,7 +11,7 @@
 ```bash
 ./scripts/dev_setup.sh      # venv + deps + .env + dashboard bundle (ครั้งแรก ~2 นาที)
 ./scripts/run.sh            # http://127.0.0.1:8000  →  demo@no7.ai / no7demo1234
-./scripts/dev_check.sh      # เกตก่อน commit: ruff + 485 tests (~2 นาที)
+./scripts/dev_check.sh      # เกตก่อน commit: ruff + 520 tests (~2 นาที)
 ```
 
 ทั้งสามคำสั่งรันซ้ำได้เสมอ ไม่พังของเดิม
@@ -88,9 +88,11 @@ curl -s -H "Authorization: Bearer $TOK" localhost:8000/api/system/health | pytho
 
 | ชุด | จำนวน | เวลา |
 |---|---|---|
-| ทั้งหมด (`pytest -q`) | 485 (479 pass + 6 skip) | **~2 นาที** (รวม backtest ที่ใช้โมเดล 3 รัน ≈ 50 วินาที) |
-| ตัดสองไฟล์ที่หนักที่สุด `--ignore=tests/test_backtest_engine.py --ignore=tests/test_model_validation.py` | 420 | ~55 → **~27** วินาที |
-| `tests/test_backtest_engine.py` + `tests/test_model_validation.py` | 28 | ~75 → **~17** วินาที |
+| ทั้งหมด (`pytest -q`) | 520 (514 pass + 6 skip) | **~2 นาที** (รวม backtest ที่ใช้โมเดล 3 รัน ≈ 50 วินาที) |
+| ตัดสองไฟล์ที่หนักที่สุด `--ignore=tests/test_backtest_engine.py --ignore=tests/test_model_validation.py` | 492 | ~30 → **~95** วินาที (แล้วแต่โหลดเครื่อง) |
+| `tests/test_backtest_engine.py` + `tests/test_model_validation.py` | 28 | ~75 → **~22** วินาที |
+| `tests/test_ws_quota.py` (โควตา WebSocket) | 32 | ~5 วินาที |
+| `tests/test_redis_real.py` (redis จริง, skip ถ้าไม่มี binary) | 20 | ~4 วินาที |
 
 (6 ที่ skip คือเทสต์สคริปต์ที่ต้องมี `bash`/`.venv` ซึ่งไม่มีในบางสภาพแวดล้อม)
 
@@ -324,11 +326,24 @@ segment ด้วย **expanding window ที่ purge แล้ว**: label �
 ฝั่งเซิร์ฟเวอร์ทดสอบครบแล้วด้วย EA จำลอง (`scripts/run_bridge_sim.py`) แต่ของจริงจะเจอเรื่อง
 filling mode / stops level / requote ที่ยังไม่เคยเจอ
 
-### 9.5 หลายผู้ใช้จริงจัง
+### 9.5 หลายผู้ใช้จริงจัง — WebSocket quota ✅ เสร็จแล้ว (รอบ 26), ที่เหลือยังค้าง
 
-SQLite + runtime โพรเซสเดียวคือเพดานปัจจุบัน (`--workers N` ยังไม่รองรับ)
-ถ้าจะไปต่อ: ย้าย persistence ไป Postgres, แยก scheduler/simulator ออกจาก API worker,
-แล้วค่อยเพิ่ม quota ของ WebSocket แบบ distributed (ตอนนี้จำกัดเฉพาะ HTTP)
+เสร็จแล้ว: **quota ของ WebSocket แบบ distributed** (`services/api_gateway/wsquota.py`)
+— ก่อนหน้านี้ `/ws/live` ไม่มีเพดานเลย ใครก็เปิด socket ได้ไม่จำกัดจนเครื่องหมดแรง
+
+```bash
+# ดูเพดานและการใช้งานจริง
+curl -s localhost:8000/api/system/health | jq .websockets
+# {"enforced":true,"store":"redis","shared":true,"max_per_user":4,"max_total":64,
+#  "lease_ttl_seconds":45,"open":3,"granted":12,"refused":2,"degraded":0}
+```
+
+slot เป็น **lease ที่หมดอายุ** ไม่ใช่ตัวนับ เพราะ worker ที่โดน SIGKILL ไม่มีทางคืนค่าตัวนับ
+(วัดจริงแล้ว: ฆ่า worker ทิ้งขณะถือ socket → lease ยังอยู่ใน Redis พร้อม TTL แล้วหายเองตามเวลา)
+ใช้ store เดียวกับ rate limit (memory / sqlite / redis) ภายใต้ prefix `no7:ws`
+
+ยังค้าง: ย้าย persistence ไป Postgres, แยก scheduler/simulator ออกจาก API worker
+(ตอนนี้ runtime ยัง single-writer ด้วย lease — `--workers N` จึงยังไม่ใช่โหมดที่รองรับ)
 
 ### 9.6 ของเล็กที่ยังค้าง
 

@@ -407,3 +407,71 @@ def test_build_shared_state_falls_back_when_the_port_is_dead():
     assert status["backend"] == "local"
     assert "redis unreachable" in status["reason"]
     assert state.healthy()["backend"] == "local"
+
+
+# ------------------------------------------------- websocket quota, really shared
+_WS_WORKER = (
+    """
+import sys
+sys.path.insert(0, {root!r})
+import redis
+from services.api_gateway.wsquota import RedisLeaseStore
+
+client = redis.Redis.from_url({url!r}, decode_responses=True)
+store = RedisLeaseStore(client, prefix={prefix!r})
+granted = 0
+for i in range({attempts}):
+    ok, _held, _used = store.acquire("user:shared", f"{worker}-{{i}}", {limit}, 0, 60.0, 10_000.0)
+    granted += 1 if ok else 0
+print(granted)
+"""
+)
+
+
+def test_four_workers_cannot_exceed_one_socket_budget(redis_server, prefix):
+    """`--workers N` must not multiply the socket cap, which is the whole point."""
+    procs = []
+    for worker in range(4):
+        code = _WS_WORKER.format(root=str(ROOT), url=redis_server.url, prefix=prefix,
+                                 attempts=5, limit=6, worker=f"w{worker}")
+        procs.append(subprocess.Popen([sys.executable, "-c", code], stdout=subprocess.PIPE,
+                                      stderr=subprocess.PIPE, text=True))
+    granted = []
+    for proc in procs:
+        out, err = proc.communicate(timeout=120)
+        assert proc.returncode == 0, f"worker failed: {err}"
+        granted.append(int(out.strip()))
+
+    assert sum(granted) == 6, f"a cap of 6 was handed out {sum(granted)} times across {granted}"
+    assert redis_server.client().zcard(f"{prefix}:id:user:shared") == 6
+
+
+def test_a_killed_worker_releases_its_socket_slot_by_expiry(redis_server, prefix):
+    """No decrement ever runs for a SIGKILLed worker — only the lease TTL saves us."""
+    from services.api_gateway.wsquota import RedisLeaseStore
+
+    store = RedisLeaseStore(redis_server.client(), prefix=prefix)
+    now = 20_000.0
+    assert store.acquire("user:ghost", "dead", 1, 0, 30.0, now)[0] is True
+    assert store.acquire("user:ghost", "new", 1, 0, 30.0, now)[0] is False
+
+    # The caller's clock moves past the lease; the server never had to be told.
+    assert store.acquire("user:ghost", "new", 1, 0, 30.0, now + 31)[0] is True
+    held, _total = store.counts("user:ghost", now + 31)
+    assert held == 1
+
+
+def test_the_socket_quota_survives_the_server_disappearing(disposable_redis):
+    from services.api_gateway.wsquota import RedisLeaseStore, WebSocketQuota
+
+    quota = WebSocketQuota(RedisLeaseStore(disposable_redis.client(), prefix="no7:test:wsdie"),
+                           per_identity=2, total=10, ttl_seconds=30)
+    assert quota.acquire("user:a") is not None
+    disposable_redis.stop()
+
+    lease = quota.acquire("user:a")
+    assert lease is not None and lease.degraded is True, "a dead cache must not kill the dashboard"
+    assert quota.acquire("user:a") is None, "the local fallback still caps at 2"
+    status = quota.status()
+    assert status["degraded"] >= 1 and status["shared"] is False
+    assert "Connection refused" in status["last_error"] or "Error" in status["last_error"]

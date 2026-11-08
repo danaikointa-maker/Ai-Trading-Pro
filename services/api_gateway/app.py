@@ -20,6 +20,7 @@ from fastapi.staticfiles import StaticFiles
 from packages.shared_schemas.settings import get_settings
 from services.api_gateway.auth import ensure_demo_user
 from services.api_gateway.ratelimit import RateLimiter, RateLimitMiddleware, build_store
+from services.api_gateway.wsquota import WebSocketQuota, build_lease_store
 from services.api_gateway.netutil import parse_networks
 from services.api_gateway.security import (SecurityHeadersMiddleware,
                                            parse_origins)
@@ -88,6 +89,18 @@ def create_app(runtime: TradingRuntime | None = None) -> FastAPI:
     # cannot hide behind the configuration chosen at boot.
     runtime.ratelimit = limiter
     app.state.ratelimit = limiter
+
+    # Same store configuration, its own key prefix: operators set one backend up.
+    ws_cfg = settings.app.get("ws") or {}
+    ws_store, ws_store_status = build_lease_store(rl_cfg, path=store_path)
+    ws_quota = WebSocketQuota(
+        ws_store,
+        per_identity=int(ws_cfg.get("max_connections_per_user", 4)),
+        total=int(ws_cfg.get("max_connections_total", 64)),
+        ttl_seconds=float(ws_cfg.get("lease_ttl_seconds", 45)))
+    runtime.ws_quota = ws_quota
+    runtime.ws_store_status = ws_store_status
+    app.state.ws_quota = ws_quota
     trusted = parse_networks(settings.trusted_proxies)
     app.add_middleware(RateLimitMiddleware, limiter=limiter, settings=settings,
                        trusted_proxies=settings.trusted_proxies)
