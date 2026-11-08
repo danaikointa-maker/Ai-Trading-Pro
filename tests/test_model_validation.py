@@ -6,6 +6,8 @@ folds must clear the same bar), never looser.
 """
 from __future__ import annotations
 
+import time
+
 import pytest
 
 from services.ai_forecast.trainer import ForecastTrainer, decide_approval, split_folds
@@ -200,8 +202,13 @@ def test_predictor_loads_the_newest_run_not_the_newest_approval(runtime):
     from services.ai_forecast.predictor import ForecastPredictor
 
     registry = runtime.model_registry
-    for version, created, approved in (("m-old-approved", 100, 1),
-                                       ("m-new-rejected", 200, 0)):
+    # Timestamps deliberately in the future. The runtime trains a model on boot
+    # (`auto_train_on_boot`), and that background thread registers a row stamped
+    # "now" at some unpredictable point during the session — with created_at=100/200
+    # this test passed or failed depending on how long the tests before it took.
+    base = int(time.time()) + 10_000
+    for version, created, approved in (("m-old-approved", base, 1),
+                                       ("m-new-rejected", base + 100, 0)):
         registry.db.execute(
             "INSERT OR REPLACE INTO models(version, created_at, method, approved, samples,"
             " metrics, notes, path) VALUES(?,?,?,?,?,?,?,?)",
@@ -215,7 +222,7 @@ def test_predictor_loads_the_newest_run_not_the_newest_approval(runtime):
     target.mkdir(parents=True, exist_ok=True)
     joblib.dump({"version": "m-new-rejected", "approved": False, "models": {},
                  "metrics": {"horizons": {}, "approval_rule": 2}, "symbol": "XAUUSD",
-                 "trained_at": 200, "notes": "rejected on evidence"}, target / "models.joblib")
+                 "trained_at": base + 100, "notes": "rejected on evidence"}, target / "models.joblib")
 
     predictor = ForecastPredictor(runtime.settings, registry)
     predictor.load_latest()

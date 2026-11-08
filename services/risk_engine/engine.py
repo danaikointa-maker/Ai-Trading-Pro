@@ -107,6 +107,15 @@ class RiskEngine:
         monday = dt - timedelta(days=dt.weekday())
         return int(monday.replace(hour=0, minute=0, second=0, microsecond=0).timestamp())
 
+    # Public aliases: the backtester must cut its days and weeks on exactly the same
+    # boundaries as the live engine, or its daily/weekly limits measure a different
+    # window than production and the simulation stops being comparable.
+    def day_start(self, now: float) -> int:
+        return self._day_start(now)
+
+    def week_start(self, now: float) -> int:
+        return self._week_start(now)
+
     @staticmethod
     def _notional(adapter: BrokerAdapter, positions) -> float:
         """Open exposure in the *account* currency.

@@ -432,13 +432,19 @@ class StrategyEngine:
 
     def evaluate_gate(self, signal: Signal, spec: SymbolSpec, tick: Tick, risk_state,
                       data_quality: dict, news_lockout: dict, broker_health: Health,
-                      model_approved: bool, atr_pct: float) -> RiskGate:
-        """Run the risk engine against an already-built signal."""
+                      model_approved: bool, atr_pct: float, now: float | None = None) -> RiskGate:
+        """Run the risk engine against an already-built signal.
+
+        `now` matters for anything time-relative inside the gate (today: the cooldown
+        deadline). Live callers leave it None and get the wall clock; a backtest must
+        pass the bar's timestamp, or a cooldown set at bar time is compared against
+        today's date and never blocks anything.
+        """
         return self.risk.gate(
             risk_state, spec, float(tick.spread_points), data_quality, news_lockout,
             atr_pct=atr_pct, requested_lot=signal.plan.lot if signal.plan else 0.0,
             broker_health=broker_health, is_full_auto=signal.mode == TradeMode.full_auto,
-            signal_score=signal.score,
+            signal_score=signal.score, now=now,
             calibrated_probability=(signal.explanation.get("p_tp_before_sl")
                                     if signal.explanation.get("calibrated") else None),
             model_approved=model_approved,

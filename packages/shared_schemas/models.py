@@ -649,6 +649,10 @@ class BacktestRequest(BaseModel):
     snapshot_id: str | None = None
     # Use imported tick data to settle bars that cover both stop and target.
     use_ticks: bool = True
+    # "rule-proxy" (default) scores the rule core with a deterministic forecast;
+    # "model" fits the production classifier on an expanding, purged window and
+    # lets it drive the forecast edge inside the decision loop.
+    forecast_source: Literal["rule-proxy", "model"] = "rule-proxy"
 
 
 class BacktestMetrics(BaseModel):
