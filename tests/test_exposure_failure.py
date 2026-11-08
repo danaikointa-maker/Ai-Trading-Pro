@@ -52,6 +52,20 @@ def test_state_reads_positions_once(settings, tmp_path):
         db.close()
 
 
+def test_invalid_persisted_peak_cannot_be_written_back(settings, tmp_path):
+    db = Database(str(tmp_path / "risk.sqlite3"))
+    db.kv_set("peak_equity", "Infinity")
+    adapter = Mock()
+    adapter.account_info.return_value = SimpleNamespace(balance=10000.0, equity=10000.0)
+    adapter.positions.return_value = []
+    try:
+        with pytest.raises(BrokerError, match="exposure"):
+            RiskEngine(settings, db).state(adapter, now=0)
+        assert db.kv_get("peak_equity") == "Infinity"
+    finally:
+        db.close()
+
+
 def test_failed_positions_read_never_updates_peak(settings, tmp_path):
     db = Database(str(tmp_path / "risk.sqlite3"))
     adapter = Mock()
@@ -83,6 +97,16 @@ def test_bridge_missing_positions_is_failure(monkeypatch):
     monkeypatch.setattr(broker, "_snapshot", lambda: {"account": {}})
     with pytest.raises(BrokerError, match="positions"):
         broker.positions()
+
+
+def test_bridge_unknown_symbol_never_inherits_gold_defaults():
+    from integrations.brokers.bridge import BridgeBroker
+
+    relay = Mock()
+    relay.snapshot.return_value = {"symbols": {}}
+    broker = BridgeBroker({"id": "fake"}, relay, order_timeout=1)
+    with pytest.raises(BrokerError, match="spec"):
+        broker.symbol_spec("UNKNOWN")
 
 
 def test_empty_positions_are_valid_for_both_adapters(monkeypatch):

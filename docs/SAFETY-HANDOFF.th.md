@@ -142,3 +142,33 @@ NO7_ALLOW_FULL_AUTO=false
 ดู logs ที่ `storage/local-dev/qa/safety/` (ถูก ignore จาก Git)
 และผลสรุปในบทสนทนาส่งงาน ต้องใช้ผลรอบสุดท้ายหลังแก้ทั้งหมด
 ก่อนผ่าน gate ภายนอกต้องมีหลักฐานจากเครื่องจริงตามข้อ 3–4 เพิ่มเสมอ
+
+### Integration รอบ 2026-11-08
+
+- รวม safety `61fbb89` กับ main `b4cb632` บน `integration/safety-main-2026-11-08`;
+  ไม่แก้ประวัติ branch เดิม และไม่ merge เข้า main
+- WS ตรวจ user/role ต่อเนื่องพร้อม connection lease และคืน lease เมื่อ accept/revocation ล้มเหลว
+- Notification คง bounded background queue พร้อม signed durable retry outbox;
+  serialize send/drain และ shutdown รอทั้ง delivery และ drain workers ภายใน budget เดียว
+- Background delivery เก็บ level/symbol; model validation ใช้ registry แยกจาก runtime
+- Risk ปฏิเสธ persisted peak/P&L ที่ไม่ finite ก่อนเขียน peak; `now=0` ใช้ได้
+- Bridge ปฏิเสธ unknown symbol แทนการใช้ default spec โดยไม่มีข้อมูลต้นทาง
+- ผล final local: **599 passed, 39 skipped, 1 warning**, pytest exit 0;
+  Dashboard Vite build exit 0; Ruff `--select F,E9` ผ่านใน services/tests/integrations/packages
+- Skipped ไม่ใช่ผ่าน: real Redis ไม่มี binary และ bash/script checks ที่ environment ไม่รองรับ
+  หรือเป็น intentional skips; warning มาจาก Starlette testclient deprecation
+- หลักฐาน: `integration-final.{log,err,xml,exit}`, `integration-build.{log,err,exit}`
+  ใน local QA directory ที่ถูก ignore; ไม่เผยแพร่ raw runtime logs/secrets
+
+### Gate ที่ยังไม่ปิดหลัง integration
+
+1. Spec provenance/completeness: การปฏิเสธ unknown symbol ไม่ได้ยืนยันทุก field;
+   ยังต้องตรวจ complete contract/lot/tick specs และ conversion ตาม account currency จริง
+2. Partial fill/netting/history: ยังคง strict single-position reconciliation;
+   ambiguity ต้อง pending/manual review ห้าม retry ด้วย key ใหม่เพื่อบังคับส่ง
+3. EA durable deduplication และ broker exactly-once ยังไม่รับประกัน
+4. Tenant/account isolation ต้องกำหนด ownership/data migration และทดสอบข้ามบัญชีก่อนเปิดใช้หลาย tenant
+5. MQL5 compile, MT5 Demo/VM acceptance และ real Redis integration ต้องมีหลักฐานจาก environment ที่รองรับ
+
+รายการเหล่านี้เป็นข้อจำกัดและงานต่อ ไม่ใช่สิ่งที่ full local suite รับรองว่าเสร็จแล้ว
+คง read-only/Demo safety gates จนกว่าจะผ่านการตรวจแยกที่ได้รับอนุญาต

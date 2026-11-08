@@ -19,6 +19,13 @@ Design rules, learned the hard way:
 * **Tokens never leak through errors.** The Telegram token is part of the URL, so an
   exception message can contain it and `status()` is served to any logged-in user:
   every string that leaves this module is scrubbed of the configured secrets.
+* **An undelivered alert is not a dropped alert.** Transient failures used to end
+  in a logged error and nothing else; now they land in a durable SQLite outbox
+  (`outbox.py`) that survives a restart and is drained with backoff. Anything the
+  queue eventually gives up on is counted and reported, never silently discarded.
+* **Webhooks are signed.** `webhook_secret` used to be read only so it could be
+  redacted from logs. It now produces an HMAC over `timestamp.body` (`signing.py`),
+  because a webhook URL is not a credential: anyone who learns it can forge alerts.
 * **The API base is configurable.** `NO7_TELEGRAM_API_BASE` / `NO7_LINE_API_BASE`
   exist so the transport can be pointed at a local server that speaks the same
   protocol (which is how the delivery path is tested here); a non-HTTPS base is only
@@ -38,6 +45,8 @@ from typing import Any, Callable
 
 from packages.persistence.db import Database
 from packages.shared_schemas.models import Alert
+from services.notification.outbox import OutboxQueue
+from services.notification.signing import canonical_body, sign_headers
 
 STATUS_KEY = "notify_status"
 
@@ -60,7 +69,9 @@ Transport = Callable[[str, dict[str, Any], dict[str, str]], dict[str, Any]]
 def _http_post_json(url: str, payload: dict[str, Any],
                     headers: dict[str, str]) -> dict[str, Any]:
     """POST JSON with the stdlib (no third-party dependency to forget)."""
-    body = json.dumps(payload, default=str).encode("utf-8")
+    # Must be the *same* bytes the signature was computed over: re-serialising
+    # here with different key order or separators invalidates every signature.
+    body = canonical_body(payload)
     req = urllib.request.Request(
         url, data=body, method="POST",
         headers={"Content-Type": "application/json", **headers},
@@ -179,6 +190,12 @@ class Notifier:
             self.env.get("LINE_CHANNEL_TOKEN", "").strip(),
             _text(self.cfg.get("webhook_secret") or self.env.get("NO7_WEBHOOK_SECRET", "")),
         ) if v]
+        self.webhook_secret = _text(self.cfg.get("webhook_secret")
+                                    or self.env.get("NO7_WEBHOOK_SECRET", ""))
+        self.outbox = OutboxQueue(db, self.cfg.get("outbox") or {})
+        self._drain_lock = threading.Lock()
+        self._draining = False
+        self._drain_worker: threading.Thread | None = None
         self.bases: dict[str, str] = {}
         self.base_warnings: list[str] = []
         for channel, raw, fallback in (
@@ -268,6 +285,12 @@ class Notifier:
                       "capacity": self._queue.maxsize, "dropped": self._queue_dropped,
                       "errors": self._worker_errors, "closed": self._closing.is_set(),
                       "running": bool(self._worker and self._worker.is_alive())},
+            "outbox": self.outbox.status(),
+            "webhook_signed": bool(self.webhook_secret),
+            "webhook_warning": (
+                "webhook เปิดอยู่แต่ไม่ได้ตั้ง NO7_WEBHOOK_SECRET — ปลายทางแยกไม่ออกว่า "
+                "ข้อความมาจากระบบนี้จริงหรือใครก็ได้ที่รู้ URL"
+                if "webhook" in self.channels and not self.webhook_secret else ""),
             "disabled_reason": "" if self.external_channels else (
                 "ไม่มีช่องทางภายนอกที่เปิดใช้ — in-app เท่านั้น "
                 "(ต้องมี token + เปิดใช้ใน config หรือ env: TELEGRAM_BOT_TOKEN + chat id, "
@@ -280,7 +303,9 @@ class Notifier:
         limit = MAX_LEN.get(channel, 4096)
         return text if len(text) <= limit else text[: limit - 1] + "…"
 
-    def _payload(self, channel: str, title: str, message: str) -> tuple[str, dict, dict]:
+    def _payload(self, channel: str, title: str, message: str, level: str = "info",
+                 symbol: str | None = None, ts: float | None = None
+                 ) -> tuple[str, dict, dict]:
         text = self._fit(channel, f"[No7 AI] {title}\n{message}")
         cfg = self.cfg
         if channel == "telegram":
@@ -297,7 +322,12 @@ class Notifier:
                     {"to": target, "messages": [{"type": "text", "text": text}]},
                     {"Authorization": f"Bearer {token}"})
         url = _text(cfg.get("webhook_url") or self.env.get("NO7_WEBHOOK_URL", ""))
+        # `level` and `symbol` let a receiver route or filter without parsing prose;
+        # `ts` is when the alert happened, which is not when it is delivered if it
+        # spent time in the outbox.
         return (url, {"title": title, "message": self._fit(channel, message),
+                      "level": level, "symbol": symbol or "",
+                      "ts": int(ts if ts is not None else time.time()),
                       "source": "no7-ai-trading-pro"}, {})
 
     def _paced(self, channel: str) -> bool:
@@ -315,39 +345,180 @@ class Notifier:
         self._last_send[channel] = now
         return True
 
-    def _send(self, channel: str, title: str, message: str) -> dict[str, Any]:
-        with self._send_lock:
-            return self._send_serial(channel, title, message)
+    def _attempt(self, channel: str, title: str, message: str, *, level: str = "info",
+                 symbol: str | None = None, ts: float | None = None,
+                 delivery_id: str = "", queued_at: float | None = None,
+                 attempt: int = 1) -> dict[str, Any]:
+        """One request, no retry loop, no queueing. The single place that signs."""
+        url, payload, headers = self._payload(channel, title, message, level, symbol, ts)
+        if not url:
+            return {"ok": False, "status": 0, "error": "no destination configured"}
+        if channel == "webhook" and self.webhook_secret:
+            # Sign here, at send time: a message drained from the outbox ten minutes
+            # late must carry a fresh timestamp or the receiver's replay window
+            # rejects it. `X-No7-Queued-At` preserves when it was first raised.
+            headers = {**headers, **sign_headers(
+                self.webhook_secret, canonical_body(payload), delivery_id=delivery_id,
+                queued_at=queued_at, attempt=attempt)}
+        return self.transport(url, payload, headers)
 
-    def _send_serial(self, channel: str, title: str, message: str) -> dict[str, Any]:
+    def _send(self, channel: str, title: str, message: str, *, level: str = "info",
+              symbol: str | None = None) -> dict[str, Any]:
+        with self._send_lock:
+            return self._send_serial(channel, title, message, level=level, symbol=symbol)
+
+    def _send_serial(self, channel: str, title: str, message: str, *, level: str = "info",
+              symbol: str | None = None) -> dict[str, Any]:
+        """Deliver now; on a transient failure hand the message to the outbox.
+
+        The inline retries stay — most blips resolve inside a second and an alert
+        that arrives immediately is worth more than one that arrives in five. The
+        outbox picks up only what those retries could not fix.
+        """
+        now = time.time()
         try:
-            url, payload, headers = self._payload(channel, title, message)
+            url, _payload, _headers = self._payload(channel, title, message, level, symbol)
             if not url:
                 return {"channel": channel, "ok": False, "status": 0,
                         "error": "no destination configured"}
             if not self._paced(channel):
+                # Previously this was a silent drop. Pacing exists to protect the
+                # provider from a burst, not to lose alerts: queue it instead and
+                # let the drain deliver it a moment later.
+                queued = self.outbox.enqueue(channel, title, message, level=level,
+                                             symbol=symbol, error="paced",
+                                             delay=self.min_interval, now=now)
+                if queued:
+                    return {"channel": channel, "ok": None, "status": 0,
+                            "skipped": "pacing", "queued": True,
+                            "error": f"เลื่อนเข้าคิว: {channel} เพิ่งส่งไปไม่ถึง "
+                                     f"{self.min_interval:g} วินาที"}
                 self.dropped += 1
                 return {"channel": channel, "ok": None, "status": 0, "skipped": "pacing",
                         "error": f"skipped: {channel} used less than "
                                  f"{self.min_interval:g}s ago"}
             result: dict[str, Any] = {}
             for attempt in range(1, self.attempts + 1):
-                result = self.transport(url, payload, headers)
+                result = self._attempt(channel, title, message, level=level,
+                                       symbol=symbol, ts=now, attempt=attempt)
                 status = int(result.get("status") or 0)
                 if result.get("ok") or status not in RETRYABLE or attempt == self.attempts:
                     break
                 self.retries += 1
                 delay = result.get("retry_after")
                 delay = min(float(delay), 30.0) if delay else self.backoff * attempt
-                if delay > 0 and self._closing.wait(delay):
-                    break
-            return {"channel": channel, "ok": bool(result.get("ok")),
-                    "status": int(result.get("status") or 0),
-                    "error": self._redact(result.get("error") or ""),
-                    "attempts": attempt}
+                if delay > 0:
+                    self._closing.wait(delay)
+            out = {"channel": channel, "ok": bool(result.get("ok")),
+                   "status": int(result.get("status") or 0),
+                   "error": self._redact(result.get("error") or ""),
+                   "attempts": attempt}
+            if out["ok"]:
+                # Proof the destination is reachable again: stop making whatever is
+                # queued for it wait out a backoff computed while it was down.
+                self.outbox.reschedule_channel(channel, now)
+            if not out["ok"] and out["status"] in RETRYABLE:
+                # Retryable means "this could work later". A 400/401/403 means the
+                # configuration is wrong and queueing it would only build a backlog
+                # of messages that can never be delivered.
+                if self.outbox.enqueue(channel, title, message, level=level, symbol=symbol,
+                                       status=out["status"], error=out["error"],
+                                       attempts=attempt, now=now):
+                    out["queued"] = True
+            return out
         except Exception as exc:  # noqa: BLE001 - a channel must never break an alert
-            return {"channel": channel, "ok": False, "status": 0,
-                    "error": self._redact(f"{type(exc).__name__}: {exc}")}
+            error = self._redact(f"{type(exc).__name__}: {exc}")
+            out = {"channel": channel, "ok": False, "status": 0, "error": error}
+            if self.outbox.enqueue(channel, title, message, level=level, symbol=symbol,
+                                   error=error, attempts=1, now=now):
+                out["queued"] = True
+            return out
+
+    # ------------------------------------------------------------------ draining
+    def drain(self, now: float | None = None, limit: int = 10) -> dict[str, Any]:
+        with self._send_lock:
+            return self._drain_serial(now=now, limit=limit)
+
+    def _drain_serial(self, now: float | None = None, limit: int = 10) -> dict[str, Any]:
+        """Try the queued messages that are due. Safe to call from any thread.
+
+        One attempt per message per pass: the outbox *is* the retry mechanism, so an
+        inner retry loop here would multiply the backoff schedule by three.
+        """
+        moment = time.time() if now is None else now
+        # A caller that supplied its own clock is simulating; only a real-time
+        # drain is allowed to sleep.
+        allow_sleep = now is None
+        expired = self.outbox.sweep(moment)
+        sent = failed = paced = 0
+        for row in self.outbox.due(moment, limit=limit):
+            if self._closing.is_set():
+                break
+            channel = str(row["channel"])
+            if channel not in self.external_channels:
+                # The channel was turned off while the message waited. Dropping it
+                # is the honest outcome — it is counted as expired, not delivered.
+                self.outbox.discard(row["id"], reason="channel disabled")
+                continue
+            if not self._paced(channel):
+                # Measured on the real app: skipping here drains a backlog at one
+                # message per loop cycle (15s). This runs on its own thread, so
+                # waiting out the channel's interval is free and the backlog clears
+                # at exactly the speed the provider allows. Bounded by `limit`.
+                gap = self.min_interval - (time.monotonic()
+                                           - self._last_send.get(channel, 0.0))
+                if allow_sleep and 0 < gap <= self.min_interval:
+                    if self._closing.wait(gap):
+                        break
+                if not self._paced(channel):
+                    paced += 1
+                    continue
+            attempt = int(row["attempts"] or 0) + 1
+            try:
+                result = self._attempt(
+                    channel, str(row["title"]), str(row["message"]),
+                    level=str(row["level"] or "info"), symbol=str(row["symbol"] or "") or None,
+                    ts=float(row["created_at"]), delivery_id=str(row["id"]),
+                    queued_at=float(row["created_at"]), attempt=attempt)
+            except Exception as exc:  # noqa: BLE001 - drain must never raise
+                result = {"ok": False, "status": 0, "error": f"{type(exc).__name__}: {exc}"}
+            if result.get("ok"):
+                self.outbox.mark_delivered(row["id"])
+                self.outbox.reschedule_channel(channel, moment)
+                sent += 1
+            else:
+                failed += 1
+                self.outbox.mark_attempt(row["id"], status=int(result.get("status") or 0),
+                                         error=self._redact(result.get("error") or ""),
+                                         now=moment)
+        return {"sent": sent, "failed": failed, "paced": paced, "expired": expired,
+                "pending": self.outbox.pending()}
+
+    def drain_async(self, limit: int = 10) -> bool:
+        """Drain on a daemon thread. Returns False if a drain is already running.
+
+        The trading loop calls this: a queued message may be waiting on a host that
+        does not answer, and blocking the tick for several timeouts would be a far
+        worse bug than a late alert.
+        """
+        if not self.outbox.enabled or not self.external_channels:
+            return False
+        def worker() -> None:
+            try:
+                self.drain(limit=limit)
+            except Exception:  # noqa: BLE001 - background thread, never propagate
+                self._worker_errors += 1
+            finally:
+                with self._drain_lock:
+                    self._draining = False
+
+        with self._lifecycle, self._drain_lock:
+            if self._closing.is_set() or self._draining:
+                return False
+            self._draining = True
+            self._drain_worker = threading.Thread(target=worker, name="no7-notify-drain", daemon=True)
+            self._drain_worker.start()
+        return True
 
     def _record_status(self, deliveries: list[dict[str, Any]]) -> None:
         if not deliveries:
@@ -391,9 +562,15 @@ class Notifier:
 
         self._last[key] = now
         deliveries = ([] if self.background else
-                      [self._send(ch, title, message) for ch in self.external_channels])
+                      [self._send(ch, title, message, level=level, symbol=symbol)
+                       for ch in self.external_channels])
         self.last_delivery = deliveries
         self._record_status(deliveries)
+        # Flush the backlog *after* the live alert: a fresh "cooldown engaged" must
+        # not wait behind ten stale messages pointed at a host that is still down.
+        # Each delivery carries `X-No7-Queued-At`, so the order remains readable.
+        if not self.background and self.outbox.pending():
+            self.drain_async()
 
         # Levels are a small set; a caller typo must degrade to a visible warning
         # rather than raise *after* the external channels already fired.
@@ -429,7 +606,7 @@ class Notifier:
                     state = "stopped"
                 else:
                     try:
-                        self._queue.put_nowait((alert.id, title, message, dict(payload)))
+                        self._queue.put_nowait((alert.id, title, message, dict(payload), level_out, symbol))
                     except queue.Full:
                         self._queue_dropped += 1
                         state = "queue_full"
@@ -446,11 +623,12 @@ class Notifier:
     def _deliver_loop(self) -> None:
         while not self._closing.is_set() or not self._queue.empty():
             try:
-                alert_id, title, message, payload = self._queue.get(timeout=0.1)
+                alert_id, title, message, payload, level, symbol = self._queue.get(timeout=0.1)
             except queue.Empty:
                 continue
             try:
-                deliveries = [self._send(ch, title, message) for ch in self.external_channels]
+                deliveries = [self._send(ch, title, message, level=level, symbol=symbol)
+                              for ch in self.external_channels]
                 with self._send_lock:
                     self.last_delivery = deliveries
                     self._record_status(deliveries)
@@ -470,10 +648,12 @@ class Notifier:
         """
         with self._lifecycle:
             self._closing.set()
-            worker = self._worker
-        if worker is not None:
-            worker.join(timeout=max(0.0, timeout))
-        return not bool(worker and worker.is_alive())
+            workers = (self._worker, self._drain_worker)
+        deadline = time.monotonic() + max(0.0, timeout)
+        for worker in workers:
+            if worker is not None:
+                worker.join(timeout=max(0.0, deadline - time.monotonic()))
+        return not any(worker and worker.is_alive() for worker in workers)
 
     def send_test(self) -> dict[str, Any]:
         """Prove the configured channels work, from the UI, with the real transport."""

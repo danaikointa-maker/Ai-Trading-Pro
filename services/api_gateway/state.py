@@ -469,7 +469,26 @@ class TradingRuntime:
             for trade in closed:
                 self._on_trade_closed(trade)
         self._manage_cycle(now)
+        self._drain_notify_outbox()
         self.version += 1
+
+    # A backlog must clear even when nothing new is happening — an outage that
+    # ends quietly should not leave alerts sitting in the queue until the next
+    # trade. The drain itself runs on its own thread (see `Notifier.drain_async`):
+    # a queued message may be pointed at a host that never answers, and blocking
+    # the trading loop on socket timeouts would be the worse bug by far.
+    OUTBOX_DRAIN_SECONDS = 15.0
+
+    def _drain_notify_outbox(self) -> None:
+        now = time.time()
+        if now - getattr(self, "_last_outbox_drain", 0.0) < self.OUTBOX_DRAIN_SECONDS:
+            return
+        self._last_outbox_drain = now
+        try:
+            if self.notifier.outbox.pending():
+                self.notifier.drain_async()
+        except Exception as exc:  # noqa: BLE001 - never let the queue break the loop
+            self._log_error("notify-outbox", exc)
 
     def _on_trade_closed(self, trade: TradeRecord) -> None:
         self.gateway.record_trade(trade)
@@ -1059,6 +1078,7 @@ class TradingRuntime:
             "notify": self.notifier.status(),
             "security": self._security_status(),
             "ratelimit": self._ratelimit_status(),
+            "websockets": self._websocket_status(),
             "cluster": {**self.shared_status, "role": role,
                         "shared_health": self.shared.healthy()},
             "runtime_lease": {**self.lease,
@@ -1083,10 +1103,42 @@ class TradingRuntime:
         }
         if base.get("path") and backend == "sqlite":
             out["path"] = base["path"]
-        if not out["shared"]:
+
+        # The lines above describe the store chosen at boot. They would keep claiming
+        # `shared: true` through an outage, so ask the limiter that is actually
+        # enforcing right now: every spend it could not send to the shared store was
+        # answered by this process's own bucket (and marked x-ratelimit-degraded).
+        limiter = getattr(self, "ratelimit", None)
+        live = limiter.status() if limiter is not None else {}
+        degraded = int(live.get("degraded", 0) or 0)
+        out["degraded"] = degraded
+        if degraded:
+            out["shared"] = False
+            out["last_error"] = str(live.get("last_error", ""))
+            out["warning"] = (f"the {backend} store failed {degraded} time(s); those requests "
+                              "were limited against this process only, so the configured "
+                              "limit is not shared right now (see x-ratelimit-degraded)")
+        elif not out["shared"]:
             out["warning"] = ("store=memory: every worker process keeps its own budget, "
                               "so --workers N multiplies the configured limit. Use "
                               "store: sqlite (one host) or store: redis (several hosts).")
+        return out
+
+    def _websocket_status(self) -> dict[str, Any]:
+        """Live socket capacity — the limit, how much of it is in use, and where it is kept.
+
+        A WebSocket is not covered by the per-minute HTTP limits: it is one request
+        that keeps costing CPU. This block exists so an operator can see the cap is
+        real (and shared) instead of assuming it.
+        """
+        quota = getattr(self, "ws_quota", None)
+        if quota is None:
+            return {"enforced": False,
+                    "reason": "no quota attached to this app (older boot path)"}
+        out = {"enforced": True, **quota.status()}
+        boot = dict(getattr(self, "ws_store_status", {}) or {})
+        if boot.get("reason"):
+            out["store_reason"] = boot["reason"]
         return out
 
     def _security_status(self) -> dict[str, Any]:

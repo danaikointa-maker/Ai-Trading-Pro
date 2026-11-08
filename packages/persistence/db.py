@@ -114,6 +114,15 @@ CREATE TABLE IF NOT EXISTS bridge_commands (
 );
 CREATE INDEX IF NOT EXISTS idx_bridge_commands
     ON bridge_commands(account_id, state, seq);
+-- Alerts that could not be delivered in-process. Stored as title/message rather
+-- than as a rendered request so that no bot token or webhook URL is written to
+-- disk, and so a corrected destination flushes the backlog to the right place.
+CREATE TABLE IF NOT EXISTS notify_outbox (
+    id TEXT PRIMARY KEY, channel TEXT NOT NULL, title TEXT, message TEXT,
+    level TEXT, symbol TEXT, created_at REAL NOT NULL, next_attempt_at REAL NOT NULL,
+    attempts INTEGER DEFAULT 0, last_status INTEGER DEFAULT 0, last_error TEXT DEFAULT ''
+);
+CREATE INDEX IF NOT EXISTS idx_notify_outbox ON notify_outbox(next_attempt_at);
 """
 
 

@@ -75,3 +75,46 @@ def test_shutdown_timeout_is_reported_and_test_send_is_refused(tmp_path):
 
 def test_runtime_always_uses_background_delivery(runtime):
     assert runtime.notifier.background is True
+
+
+def test_background_failure_keeps_metadata_for_durable_retry(tmp_path):
+    db = Database(str(tmp_path / "notify.sqlite3"))
+    notifier = Notifier(db, cfg={"webhook_url": "http://127.0.0.1/hook", "webhook_enabled": True,
+                                "retry_attempts": 1, "min_interval_seconds": 0},
+                        env={}, transport=lambda *_: {"ok": False, "status": 503},
+                        background=True)
+    try:
+        notifier.emit("critical", "risk", "blocked", symbol="XAUUSD")
+        notifier._queue.join()
+        rows = db.query("SELECT * FROM notify_outbox")
+        assert len(rows) == 1
+        assert rows[0]["level"] == "critical"
+        assert rows[0]["symbol"] == "XAUUSD"
+    finally:
+        assert notifier.close(5)
+        db.close()
+
+
+def test_close_waits_for_outbox_worker_and_refuses_new_drains(tmp_path):
+    db = Database(str(tmp_path / "notify.sqlite3"))
+    entered, release = threading.Event(), threading.Event()
+
+    def slow(*_):
+        entered.set()
+        assert release.wait(5)
+        return {"ok": True, "status": 200}
+
+    notifier = Notifier(db, cfg={"telegram_enabled": True, "min_interval_seconds": 0},
+                        env={"TELEGRAM_BOT_TOKEN": "secret", "TELEGRAM_CHAT_ID": "1"},
+                        transport=slow, background=True)
+    notifier.outbox.enqueue("telegram", "title", "message", delay=0)
+    try:
+        assert notifier.drain_async()
+        assert entered.wait(2)
+        assert notifier.close(0) is False
+        assert notifier.drain_async() is False
+    finally:
+        release.set()
+        assert notifier.close(5)
+        assert notifier.outbox.pending() == 0
+        db.close()

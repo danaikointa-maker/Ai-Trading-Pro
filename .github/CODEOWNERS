@@ -1,0 +1,28 @@
+# Who GitHub asks for review when a path is touched.
+#
+# Two teams work on this repository, so the point of this file is less "approval"
+# and more "the other team finds out before it lands". Owners must have write
+# access to the repository; a handle that does not, is silently ignored by GitHub.
+#
+# To split ownership, uncomment the lines below and replace the placeholder handles
+# with the real ones, most specific rule last (the last match wins).
+
+*                               @danaikointa-maker
+
+# --- suggested split when the second team starts ----------------------------
+# Backend / trading core
+# /services/                    @danaikointa-maker
+# /packages/                    @danaikointa-maker
+# /integrations/                @danaikointa-maker
+# /tests/                       @danaikointa-maker
+#
+# Front-end
+# /apps/web-dashboard/          @second-team-handle
+#
+# Shared surfaces — changes here collide most often, so review them together
+# /config/                      @danaikointa-maker @second-team-handle
+# /docs/                        @danaikointa-maker @second-team-handle
+# /scripts/                     @danaikointa-maker @second-team-handle
+# /.github/                     @danaikointa-maker @second-team-handle
+# /requirements.txt             @danaikointa-maker @second-team-handle
+# /requirements-dev.txt         @danaikointa-maker @second-team-handle

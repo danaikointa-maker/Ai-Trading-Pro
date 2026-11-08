@@ -14,6 +14,8 @@ def test_stream_stops_after_authority_changes(monkeypatch, change, code):
     row = {"email": "test@example.invalid", "role": "admin", "active": 1}
     db = Mock()
     db.query_one.side_effect = lambda *_: row
+    quota = Mock()
+    quota.acquire.return_value = SimpleNamespace(expires_at=9999999999)
     claims = {"sub": row["email"], "role": "admin", "exp": 9999999999}
     monkeypatch.setattr(routes, "decode_token", lambda *_: claims)
     monkeypatch.setattr(routes, "get_settings", lambda: SimpleNamespace(security={"require_auth": True}, app={}))
@@ -24,7 +26,7 @@ def test_stream_stops_after_authority_changes(monkeypatch, change, code):
     monkeypatch.setattr(routes.asyncio, "sleep", immediate)
 
     class Socket:
-        app = SimpleNamespace(state=SimpleNamespace(runtime=SimpleNamespace(
+        app = SimpleNamespace(state=SimpleNamespace(ws_quota=quota, runtime=SimpleNamespace(
             db=db, live_payload=lambda *_: {"safe": True})))
         frames = 0
         closed = None
@@ -53,6 +55,22 @@ def test_stream_stops_after_authority_changes(monkeypatch, change, code):
     asyncio.run(routes.live_socket(socket, "test-token"))
     assert socket.frames == 1
     assert socket.closed == code
+    quota.release.assert_called_once_with(quota.acquire.return_value)
+
+
+def test_accept_failure_releases_reserved_lease(monkeypatch):
+    from unittest.mock import AsyncMock
+
+    monkeypatch.setattr(routes, "get_settings", lambda: SimpleNamespace(security={"require_auth": True}, app={}))
+    monkeypatch.setattr(routes, "decode_token", lambda *_: {"sub": "test", "exp": 9999999999})
+    quota = Mock()
+    quota.acquire.return_value = SimpleNamespace(expires_at=9999999999)
+    socket = SimpleNamespace(app=SimpleNamespace(state=SimpleNamespace(ws_quota=quota,
+        runtime=SimpleNamespace(db=SimpleNamespace(query_one=lambda *_: {
+            "email": "test", "role": "viewer", "active": 1})))),
+        accept=AsyncMock(side_effect=RuntimeError("disconnect")), close=AsyncMock())
+    asyncio.run(routes.live_socket(socket, "token"))
+    quota.release.assert_called_once_with(quota.acquire.return_value)
 
 
 def test_missing_user_is_rejected_before_accept(monkeypatch):

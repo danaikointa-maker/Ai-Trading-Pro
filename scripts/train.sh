@@ -7,6 +7,8 @@
 #     | python3 -c 'import sys,json;print(json.load(sys.stdin)["token"])')
 #   TOKEN=$TOKEN ./scripts/train.sh XAUUSD
 set -euo pipefail
+cd "$(dirname "$0")/.."
+source scripts/python_bin.sh
 SYMBOL="${1:-XAUUSD}"
 BASE="${NO7_BASE:-http://127.0.0.1:8000}"
 if [ -z "${TOKEN:-}" ]; then
@@ -15,4 +17,4 @@ if [ -z "${TOKEN:-}" ]; then
 fi
 curl -s -X POST "${BASE}/api/forecast/train" \
   -H "Authorization: Bearer ${TOKEN}" -H 'Content-Type: application/json' \
-  -d "{\"symbol\":\"${SYMBOL}\"}" | python3 -m json.tool
+  -d "{\"symbol\":\"${SYMBOL}\"}" | "${PY}" -m json.tool

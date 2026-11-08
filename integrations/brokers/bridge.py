@@ -119,6 +119,8 @@ class BridgeBroker(BrokerAdapter):
         snapshot = self.relay.snapshot(self.account_id)
         reported = (snapshot.get("symbols") or {}).get(symbol) or {}
         declared = self.declared.get(symbol) or {}
+        if not reported and not declared:
+            raise BrokerError(f"symbol spec unavailable for {symbol}")
         merged = {**declared, **{k: v for k, v in reported.items() if v is not None}}
         merged.setdefault("symbol", symbol)
         return SymbolSpec(**merged)

@@ -7,6 +7,9 @@ venv/
 .mypy_cache/
 .ruff_cache/
 
+# Local tooling fetched on demand (scripts/fetch_redis_server.sh)
+.tools/
+
 # Node
 node_modules/
 apps/web-dashboard/dist/

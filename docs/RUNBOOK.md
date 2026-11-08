@@ -38,7 +38,16 @@ python3 -m uvicorn services.api_gateway.app:app --host 0.0.0.0 --port 8000
 
 ## 3. คำสั่งที่ใช้บ่อย
 
+> จะ **แก้โค้ด** ไม่ใช่แค่ดูแลระบบ: `./scripts/dev_setup.sh` ติดตั้งทุกอย่างให้ในคำสั่งเดียว
+> และ [`DEVELOPMENT.md`](DEVELOPMENT.md) อธิบายแผนที่โค้ด/เกต/งานถัดไป
+
 ```bash
+# ติดตั้งหรือกู้สภาพแวดล้อมพัฒนา (venv + deps + .env + dashboard bundle)
+./scripts/dev_setup.sh
+
+# เกตก่อน commit: ruff + ตรวจ bundle + pytest ทั้งชุด
+./scripts/dev_check.sh
+
 # rebuild dashboard หลังแก้ frontend
 cd apps/web-dashboard && npm run build
 
@@ -47,7 +56,8 @@ cd apps/web-dashboard && NO7_BACKEND=http://127.0.0.1:8000 npm run dev   # :5173
 
 # tests (fakeredis/ruff/pyarrow อยู่ใน requirements-dev.txt; ไม่ลงก็แค่ skip)
 python3 -m pip install -r requirements-dev.txt
-python3 -m pytest tests/ -q
+./scripts/test.sh                 # = pytest tests/ -q แต่เลือกล่ามจาก .venv ให้เอง
+./scripts/dev_check.sh            # เกตเต็ม (เหมือนที่ CI รันทุก PR)
 
 # ดู report ย้อนหลังใน DB
 sqlite3 storage/db/no7.sqlite3 "SELECT id,symbol,json_extract(payload,'$.metrics.trades') FROM backtests ORDER BY created_at DESC LIMIT 5;"
@@ -436,6 +446,211 @@ curl -s localhost:8000/api/system/health | jq .ratelimit
 
 ทดสอบฝั่งเทสต์: `tests/test_ratelimit_shared.py` รันสัญญาเดียวกันบน memory/sqlite/redis
 (fakeredis รัน Lua ตัวจริง) และมีเคส 4 โปรเซสแยกกันแย่ง bucket 40 → ปล่อยผ่านได้ 40 พอดี
+ส่วนการพิสูจน์กับ **redis-server ตัวจริง** อยู่ที่ §12.6
+
+> **health บอกความจริงระหว่างที่ Redis ล่ม** — `/api/system/health → ratelimit` มีฟิลด์
+> `degraded` (จำนวนครั้งที่ต้องถอยไป bucket ในโปรเซส) และเมื่อ `degraded > 0` ฟิลด์
+> `shared` จะกลายเป็น `false` พร้อม `last_error` + `warning` แทนที่จะยังเขียวว่า `shared: true`
+
+## 12.6 Redis จริง — พิสูจน์ก่อน deploy
+
+fakeredis เป็น implementation คนละตัว การอ้างว่า "Redis ใช้ได้" จึงต้องมีหลักฐานกับ
+`redis-server` ตัวจริง ทุกอย่างด้านล่างรันได้โดยไม่ต้องเป็น root
+
+### 12.6.1 เอา redis-server มาโดยไม่ต้องติดตั้ง
+
+```bash
+./scripts/fetch_redis_server.sh          # → .tools/bin/redis-server (+ redis-cli), 6.2.14
+.venv/bin/python -m pytest tests/test_redis_real.py -q     # 17 passed
+```
+
+ไม่มี binary = เทสต์ชุดนี้ **skip** (ไม่ใช่ผ่าน) และ CI จะ fail ถ้ามันถูก skip
+— ดู step "Prove the real-Redis tests actually ran" ใน `.github/workflows/ci.yml`
+
+### 12.6.2 ตรวจเซิร์ฟเวอร์จริงก่อนชี้ production ไปหา
+
+```bash
+.venv/bin/python scripts/check_redis.py --url redis://10.0.0.5:6379/0 --ttl 2
+#  PASS PING / server identifies itself / eviction policy / Lua token bucket /
+#       budget shared across connections / refill / exact balance / TTL /
+#       frame bus / frames expire / hostile key / cleans up after itself
+#  12/12 checks passed — OK
+```
+
+เครื่องมือนี้ **ไม่เคย FLUSHDB**, เขียนเฉพาะคีย์ `no7:selftest:<random>:*` แล้วลบทิ้ง,
+ปิดรหัสผ่านใน URL ที่พิมพ์ออกมา และคืนค่า exit 0 (ผ่าน) / 1 (มีเช็กตก) / 2 (ต่อไม่ได้)
+ถ้า `maxmemory-policy` ไม่ใช่ `noeviction` จะได้ **WARN** เพราะ bucket อาจถูก evict
+แล้วโควตารีเซ็ตเงียบ ๆ
+
+### 12.6.3 ผลที่วัดได้จริงด้วยสองโปรเซส + Redis จริง
+
+| ทดสอบ | ผล |
+|---|---|
+| 2 API (`:8051` leader, `:8052` replica) + Redis `:6392` | ทั้งคู่: `cluster.backend=redis`, `shared_health.ok=true`, `ratelimit {store: redis, shared: true}` |
+| ยิงสลับพอร์ตด้วยผู้ใช้เดียว (โควตา default 300/นาที) | ผ่าน **303** ครั้ง (8051=152 + 8052=151) แล้ว **429 ทั้งสองพอร์ต** = โควตาเดียวกันจริง |
+| bucket ใน Redis หลังโดนจำกัด | `tokens 0.3343195915222168`, TTL 60s (17 หลัก = ไม่ถูกปัด) |
+| ฆ่า leader `:8051` | `:8052` ขึ้นเป็น leader ภายใน **≤4 วินาที**, frame `no7:live:v1` เปลี่ยนเจ้าของ |
+| ฆ่า Redis ทั้งตัว | API ยังตอบ 200 พร้อม `x-ratelimit-degraded: redis`, health: `shared_health.ok=false` + `Connection refused`, `ratelimit.degraded > 0` และ `shared=false` |
+
+### 12.6.4 เช็กลิสต์ก่อนใช้ production
+
+- `maxmemory-policy noeviction` (ตัวนับห้ามถูก evict)
+- Redis อยู่ในเครือข่ายส่วนตัว หรือมี `requirepass` — **ยังไม่ได้ทดสอบ** `requirepass`/TLS (`rediss://`) ที่นี่
+- `NO7_RATELIMIT_PREFIX` แยกต่อ environment (`no7:prod:ratelimit`, `no7:staging:ratelimit`)
+- ตั้ง NTP ให้ทุกเครื่อง: ตัวนับใช้เวลาของแอป ไม่ใช่ `TIME` ของ Redis
+- ไม่ต้องเปิด persistence: bucket หายคือโควตาเริ่มใหม่ ไม่ใช่ข้อมูลสูญหาย
+- socket timeout 2 วินาที (ค่าในโค้ด) — Redis ที่ "ช้าแต่ไม่ตาย" จะหน่วงคำขอได้ถึง 2 วินาที
+  ก่อนถอยไป bucket ในเครื่อง ยังไม่มีการทดสอบกรณีนี้
+
+## 12.7 เพดานจำนวน WebSocket ที่เปิดพร้อมกัน
+
+HTTP ถูกจำกัดเป็น "กี่ครั้งต่อนาที" แต่ socket คือคำขอเดียวที่กิน CPU ไปเรื่อย ๆ จนกว่าจะปิด
+จึงต้องจำกัดคนละแบบ: **เปิดพร้อมกันได้กี่ตัว**
+
+```yaml
+# config/app.yaml
+ws:
+  max_connections_per_user: 4     # ต่อบัญชี (ไม่มี token → ต่อ IP)
+  max_connections_total: 64       # ทั้ง deployment
+  lease_ttl_seconds: 45           # slot หมดอายุเองถ้าไม่มีใครต่ออายุ
+```
+
+store มาจากบล็อก `ratelimit` อันเดียวกัน (memory / sqlite / redis) ใช้ prefix `no7:ws`
+→ ตั้ง `NO7_RATELIMIT_STORE=redis` ครั้งเดียว ได้ทั้งโควตา HTTP และโควตา socket ที่แชร์ข้ามเครื่อง
+
+```bash
+curl -s localhost:8000/api/system/health | jq .websockets
+# {"enforced":true,"store":"redis","shared":true,"max_per_user":4,"max_total":64,
+#  "lease_ttl_seconds":45,"open":3,"granted":12,"refused":2,"degraded":0}
+```
+
+**ทำไมเป็น lease ไม่ใช่ตัวนับ**: worker ที่ถูก SIGKILL/OOM ไม่มีโอกาสรัน "ลดตัวนับ" — ถ้าใช้
+ตัวนับ ทุกครั้งที่ worker ตายคือ capacity หายถาวรจนกว่าจะรีสตาร์ต lease แก้ด้วยเวลา:
+socket ที่ยังสตรีมอยู่จะต่ออายุ lease เรื่อย ๆ ส่วน socket ของโปรเซสที่ตายไปแล้วจะหมดอายุเอง
+ราคาที่จ่ายคือ "slot คืนช้าได้ถึง `lease_ttl_seconds`" ซึ่งยอมรับได้มากกว่าการสูญ capacity ถาวร
+
+**client เห็นอะไร**: โดนปฏิเสธ = ได้ 1 เฟรมบอกเหตุผลแล้วปิดด้วย code **4429**;
+token หมดอายุระหว่างสตรีม = ปิดด้วย **4401** (socket ต้องไม่อยู่นานกว่าสิทธิ์ที่เปิดมัน)
+
+### 12.7.1 ผลที่วัดได้จริง (2 worker + redis จริง)
+
+| ทดสอบ | ผล |
+|---|---|
+| health ทั้งสอง worker | `{"store":"redis","shared":true,"max_per_user":4}` |
+| เปิด 3 socket ที่ `:8061` แล้วอีก 3 ที่ `:8062` | เปิดได้ **4** (A=3 + B=1) ตัวที่ 5-6 ถูกปฏิเสธ `4429` พร้อมข้อความ `already holds 4 of 4 live sockets` |
+| ปิด socket ทั้งหมด | `open: 0` และไม่มีคีย์ `no7:ws*` ค้างใน Redis |
+| `kill -9` worker A ขณะถือ socket | lease ยังอยู่ (`zcard = 1`, key TTL 88s) แล้วหายเองตามเวลา — ไม่มีใครรัน release เลย |
+
+### 12.7.2 ปรับเพดานยังไง
+
+- ผู้ใช้หนึ่งคนเปิดได้กี่แท็บคือ `max_connections_per_user` (dashboard ใช้ 1 socket/แท็บ)
+  ตั้งต่ำเกินไป = เปิดสองแท็บแล้วพัง; 3-5 เป็นค่าที่ใช้งานได้จริง
+- `max_connections_total` ควรตั้งจากจำนวน thread ที่เครื่องรับไหว: ทุก socket ใช้ 1 thread
+  ตอนสร้าง payload (`asyncio.to_thread`) — เริ่มที่ 64 แล้วดู CPU
+- ตั้ง `0` = ไม่จำกัด (ไม่แนะนำ แต่รองรับไว้สำหรับ deployment ที่มี proxy จำกัดให้แล้ว)
+- `lease_ttl_seconds` ต่ำ = คืน slot เร็วแต่ต่ออายุถี่ขึ้น; อย่าตั้งต่ำกว่า ~15 วินาที
+
+## 12.8 แจ้งเตือนออกนอกเครื่อง — คิวที่ไม่หาย และลายเซ็นที่ตรวจได้
+
+### 12.8.1 ปัญหาเดิม
+
+`Notifier` ลองส่งซ้ำอยู่ประมาณ 1 วินาทีแล้วเลิก — ครอบคลุมแค่แพ็กเก็ตตก ไม่ครอบคลุม
+กรณีปกติที่สุดคือ "ปลายทางกำลัง deploy อยู่ 1-2 นาที" alert ทุกตัวในช่วงนั้นหายหมด
+รวมถึงตัวที่มีไว้เพราะไม่มีใครนั่งดูจอ (`ขาดทุนถึงลิมิตรายวัน`, `Cooldown engaged`)
+
+และ webhook เดิม **ไม่มีลายเซ็น**: `webhook_secret` ถูกอ่านมาเพื่อลบออกจากล็อกเท่านั้น
+URL ของ webhook ไม่ใช่ความลับ (มันอยู่ใน config, ใน log ของ CI, ในภาพหน้าจอ) ใครรู้ URL
+ก็ยิง alert ปลอมเข้าระบบรับได้
+
+### 12.8.2 ตั้งค่า
+
+```bash
+export NO7_WEBHOOK_ENABLED=true
+export NO7_WEBHOOK_URL=https://hooks.example.com/no7
+export NO7_WEBHOOK_SECRET=$(python3 -c 'import secrets;print("whsec_"+secrets.token_hex(24))')
+```
+
+```yaml
+# config/app.yaml → alerts.outbox
+outbox:
+  enabled: true
+  max_attempts: 20           # รวมครั้งที่ส่งสดครั้งแรกด้วย
+  max_age_seconds: 1800      # เก่ากว่านี้ไม่ต้องส่งแล้ว
+  backoff_seconds: 5         # หน่วงครั้งแรก แล้วคูณสองไปเรื่อย ๆ
+  backoff_cap_seconds: 60    # เพดานหน่วง = ช้าสุดที่ backlog จะเริ่มไหลหลังปลายทางฟื้น
+  capacity: 500              # คิวเต็มแล้วทิ้ง "ตัวเก่าสุด" (ของใหม่มีค่ากว่า)
+```
+
+```bash
+curl -s localhost:8000/api/system/notify | jq '{webhook_signed, outbox}'
+# {"webhook_signed": true,
+#  "outbox": {"enabled":true,"pending":0,"queued":12,"delivered":12,
+#             "expired":0,"exhausted":0,"overflowed":0,"oldest_seconds":0.0}}
+```
+
+### 12.8.3 ฝั่งรับต้องตรวจยังไง
+
+เซ็นด้วย HMAC-SHA256 บน `"<timestamp>." + body` ส่งมาใน 2 เฮดเดอร์หลัก:
+
+| เฮดเดอร์ | ความหมาย |
+|---|---|
+| `X-No7-Signature` | `sha256=<hex>` |
+| `X-No7-Timestamp` | epoch วินาที ที่ใช้เซ็น (เวลาที่ **ส่ง** ไม่ใช่เวลาที่เกิดเหตุ) |
+| `X-No7-Delivery-Id` | มีเมื่อส่งจากคิว — ใช้กันข้อความซ้ำ (การส่งเป็นแบบ at-least-once) |
+| `X-No7-Queued-At` | มีเมื่อส่งจากคิว — เวลาที่ alert เกิดจริง |
+| `X-No7-Attempt` | ครั้งที่เท่าไรของข้อความนี้ |
+
+```python
+import hashlib, hmac, time
+
+SECRET = "whsec_..."
+
+def verify(raw_body: bytes, headers) -> bool:
+    stamp = headers.get("X-No7-Timestamp", "")
+    sent = headers.get("X-No7-Signature", "")
+    if not stamp or not sent:
+        return False
+    if abs(time.time() - float(stamp)) > 300:      # กันการเล่นซ้ำ
+        return False
+    expect = "sha256=" + hmac.new(
+        SECRET.encode(), f"{stamp}.".encode() + raw_body, hashlib.sha256).hexdigest()
+    return hmac.compare_digest(expect, sent)       # เทียบแบบ constant-time
+```
+
+**กับดักที่พังบ่อยที่สุด**: ต้องตรวจบน **raw bytes ที่ได้รับ** ห้าม `json.loads` แล้ว `json.dumps`
+ใหม่ — ลำดับคีย์/ช่องว่างเปลี่ยนนิดเดียวลายเซ็นก็ไม่ตรง (ฝั่งส่งก็ใช้ฟังก์ชันเดียวกันตอนเซ็น
+และตอนส่ง ด้วยเหตุผลเดียวกัน — ดู `services/notification/signing.py`)
+
+**เซ็นตอนส่ง ไม่ใช่ตอนเข้าคิว**: ถ้าเซ็นตั้งแต่เข้าคิว ข้อความที่รอในคิว 10 นาทีจะมาพร้อม
+timestamp เก่า แล้วถูกฝั่งรับปฏิเสธว่าเป็น replay ทุกครั้งที่ retry — เวลาที่เกิดเหตุจริงอยู่ใน
+`X-No7-Queued-At` และในฟิลด์ `ts` ของ body แทน
+
+### 12.8.4 ผลที่วัดได้จริง (`scripts/check_outbox.py`)
+
+รันกับแอปจริง: ปลายทางล่ม → รีสตาร์ต API → ปลายทางกลับมา
+
+| ทดสอบ | ผล |
+|---|---|
+| ปลายทางล่ม แล้วยิง alert | เข้าคิว `pending=1` (เดิม: หายไปเฉย ๆ) |
+| ฆ่าโปรเซส API แล้วเปิดใหม่ | `pending=1` เท่าเดิม — คิวอยู่ใน sqlite |
+| เปิดปลายทางกลับมา ไม่แตะอะไรอีก | ลูปส่งให้เองจนคิวว่าง `delivered=1 pending=0` |
+| ตรวจลายเซ็นฝั่งรับ | ผ่าน — `signed_at` ช้ากว่า `queued_at` 79 วินาที (เซ็นตอนส่งจริง) |
+| เฮดเดอร์ dedupe | `X-No7-Delivery-Id: OB3f14296c4a31` |
+
+```bash
+# ทำซ้ำเองได้
+.venv/bin/python scripts/check_outbox.py --port 8000 --stage before-restart   # ปลายทางยังไม่เปิด
+# ... รีสตาร์ตเซิร์ฟเวอร์ ...
+.venv/bin/python scripts/check_outbox.py --port 8000 --stage after-restart
+```
+
+### 12.8.5 สิ่งที่คิวนี้ **ไม่** รับประกัน
+
+- **ส่งอย่างน้อยหนึ่งครั้ง ไม่ใช่ครั้งเดียวเป๊ะ** — ถ้า POST สำเร็จแต่ตอบกลับหาย จะส่งซ้ำ
+  ฝั่งรับต้อง dedupe ด้วย `X-No7-Delivery-Id`
+- **ไม่รับประกันลำดับ** — alert สดถูกส่งก่อน backlog โดยตั้งใจ (ข่าวด่วนไม่ควรรอคิวเก่า)
+- **ของเก่าเกิน `max_age_seconds` ถูกทิ้ง** — แต่ถูกนับไว้ใน `outbox.expired` และขึ้น `warning`
+- คิวนี้เป็นของเครื่องนี้ (sqlite ไฟล์เดียว) ยังไม่ใช่คิวกลางสำหรับหลายเครื่อง
 
 ## 13. ความปลอดภัย — TLS, reverse proxy และ perimeter
 

@@ -145,6 +145,21 @@ alerts:
   line_target_id: ${NO7_LINE_TARGET_ID:}
   webhook_enabled: ${NO7_WEBHOOK_ENABLED:false}    # needs NO7_WEBHOOK_URL
   webhook_url: ${NO7_WEBHOOK_URL:}
+  # Shared secret for the HMAC-SHA256 signature on every webhook POST. A webhook
+  # URL is not a credential — anyone who learns it can forge alerts — so without
+  # this the receiver cannot tell a real alert from a fake one. Env only.
+  webhook_secret: ${NO7_WEBHOOK_SECRET:}
+  # Durable outbox: an alert that the inline retries could not deliver is written
+  # to sqlite and retried with backoff, so a receiver that is down for a deploy
+  # does not cost you the alerts raised during it. Everything the queue gives up
+  # on is counted in /api/system/health → notify.outbox, never dropped silently.
+  outbox:
+    enabled: true
+    max_attempts: 8            # ~8 tries spread over about half an hour
+    max_age_seconds: 1800      # older than this is not worth delivering any more
+    backoff_seconds: 5         # first retry delay; doubles each attempt
+    backoff_cap_seconds: 300
+    capacity: 500              # full queue drops the OLDEST (newest alert wins)
   # API base override: point the transport at a local server that speaks the same
   # protocol (how delivery is tested here). Plain HTTP is accepted only for a
   # private host; anything else falls back to the public endpoint and says so.
@@ -169,6 +184,14 @@ cluster:
 # at least this often so those panels never freeze.
 ws:
   full_snapshot_seconds: 5
+  # A socket is one request that then costs CPU for as long as it stays open, so it
+  # gets a concurrency cap rather than a per-minute one. Slots are leases that expire:
+  # a worker killed mid-stream releases its slot after lease_ttl_seconds instead of
+  # leaking it until restart. The store comes from the `ratelimit` block below, so
+  # sqlite/redis make the cap shared across workers/hosts (health says which).
+  max_connections_per_user: 4
+  max_connections_total: 64
+  lease_ttl_seconds: 45
 
 # Per-identity limits (token buckets). Separate from the login throttle: this is
 # about capacity, not credentials. `default` covers GETs and everything unlisted.

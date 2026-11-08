@@ -6,6 +6,7 @@ folds must clear the same bar), never looser.
 """
 from __future__ import annotations
 
+
 import pytest
 
 from services.ai_forecast.trainer import ForecastTrainer, decide_approval, split_folds

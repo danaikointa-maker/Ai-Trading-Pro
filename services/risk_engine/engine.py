@@ -108,6 +108,15 @@ class RiskEngine:
         monday = dt - timedelta(days=dt.weekday())
         return int(monday.replace(hour=0, minute=0, second=0, microsecond=0).timestamp())
 
+    # Public aliases: the backtester must cut its days and weeks on exactly the same
+    # boundaries as the live engine, or its daily/weekly limits measure a different
+    # window than production and the simulation stops being comparable.
+    def day_start(self, now: float) -> int:
+        return self._day_start(now)
+
+    def week_start(self, now: float) -> int:
+        return self._week_start(now)
+
     @staticmethod
     def _notional(adapter: BrokerAdapter, positions) -> float:
         """Open exposure in the *account* currency.
@@ -133,7 +142,7 @@ class RiskEngine:
         return total
 
     def state(self, adapter: BrokerAdapter, now: float | None = None) -> RiskState:
-        now = now or time.time()
+        now = time.time() if now is None else now
         info: AccountInfo = adapter.account_info()
         positions = adapter.positions()
         notional = self._notional(adapter, positions)
@@ -152,7 +161,14 @@ class RiskEngine:
         daily_pct = (daily_pnl / base_equity * 100) if base_equity else 0.0
         weekly_pct = (weekly_pnl / base_equity * 100) if base_equity else 0.0
 
-        peak = max(float(self.db.kv_get("peak_equity", info.equity) or info.equity), info.equity)
+        try:
+            stored_peak = float(self.db.kv_get("peak_equity", info.equity))
+        except (TypeError, ValueError, OverflowError) as exc:
+            raise BrokerError("exposure unavailable: invalid peak equity") from exc
+        if any(not math.isfinite(v) for v in
+               (daily_pnl, weekly_pnl, base_equity, daily_pct, weekly_pct, stored_peak)):
+            raise BrokerError("exposure unavailable: invalid persisted risk data")
+        peak = max(stored_peak, info.equity)
         self.db.kv_set("peak_equity", peak)
         drawdown = ((info.equity - peak) / peak * 100) if peak else 0.0
 

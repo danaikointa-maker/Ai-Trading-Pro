@@ -40,8 +40,13 @@ service worker **ไม่แคช** `/api/*` และ `/ws` (ราคา/ค
 ## Rate limits
 
 ตัวนับ rate limit อยู่ที่ `ratelimit.store` — `memory` (ต่อโปรเซส), `sqlite` (ต่อเครื่อง),
-`redis` (ข้ามเครื่อง) และทุก response ที่ถูกจำกัดจะแนบ `x-ratelimit-remaining`;
-ถ้า Redis ล่มกลางทางจะแนบ `x-ratelimit-degraded: redis` มาด้วย (จำกัดด้วย bucket ในเครื่องแทน)
+`redis` (ข้ามเครื่อง) และทุก response ที่ถูกจำกัดจะแนบ `x-ratelimit-remaining`
+
+ถ้า store ที่ใช้ร่วมกันล่มกลางทาง คำขอจะถูกจำกัดด้วย bucket ในโปรเซสแทน และผลลัพธ์จะบอกตรง ๆ:
+`x-ratelimit-degraded: redis` แนบมาทั้งกับ **200** และ **429** (รอบ 24 แก้บั๊กที่ 429 ไม่ส่ง header นี้
+— ผู้เรียกจึงเคยแยกไม่ออกว่าโดนปฏิเสธด้วยโควตารวมหรือโควตาสำรอง) ฝั่งผู้ดูแลดูได้ที่
+`/api/system/health → ratelimit`: `degraded` คือจำนวนครั้งที่ต้องถอย, `last_error` คือสาเหตุล่าสุด
+และ `shared` จะเป็น `false` ตลอดช่วงที่ยังถอยอยู่ แทนที่จะยังเขียวว่าแชร์โควตากันอยู่
 
 CORS เป็น **allowlist**: ค่าเริ่มต้นไม่ให้ origin อื่นเลย (dashboard เสิร์ฟจาก origin เดียวกัน
 และ Vite dev proxy `/api` ให้อยู่แล้ว) — เปิดเฉพาะที่ตั้งใจด้วย
@@ -106,7 +111,7 @@ CORS เป็น **allowlist**: ค่าเริ่มต้นไม่ใ�
 | GET | `/api/users` · `POST /api/users` · `PATCH /api/users/{email}` · `DELETE /api/users/{email}` | จัดการผู้ใช้ (**admin เท่านั้น**) |
 | GET | `/api/users/me/permissions` | `{role, can_trade, can_manage_users, roles}` — UI ใช้ปิดปุ่ม |
 | GET | `/api/system/health` → `cluster` | `{role: leader\|replica\|blocked\|solo, backend, requested, reason, shared_health}` + `runtime_lease` |
-| GET | `/api/system/notify` | สถานะช่องทาง (`configured/ok/failures/skipped/base`), `state`, `retry_attempts`, `retries`, `dropped`, `min_interval_seconds`, `base_warnings` (ไม่คืน token — ถูกแทนด้วย `***`) |
+| GET | `/api/system/notify` | สถานะช่องทาง (`configured/ok/failures/skipped/base`), `state`, `retry_attempts`, `retries`, `dropped`, `min_interval_seconds`, `base_warnings`, `webhook_signed`, `webhook_warning`, และ `outbox` (`pending/queued/delivered/expired/exhausted/overflowed/oldest_seconds` + `warning`) — ไม่คืน token/secret (ถูกแทนด้วย `***`) |
 | POST | `/api/system/alerts/test` | ส่งข้อความทดสอบจริงผ่านทุกช่องทางที่เปิดใช้ → `{ok, deliveries:[{channel, ok, status, error, attempts}], paced:[…], note}` · `ok:null` = ถูกเลื่อนเพราะ pacing (ไม่ใช่ล้มเหลว) · ถ้ายังไม่ตั้งค่า จะคืน `ok:false` + `reason` แทนการเงียบ |
 | GET | `/api/system/health` → `ratelimit` | `{store: memory\|sqlite\|redis, requested, shared, reason, path?, warning?}` — `shared:false` = โควตาคูณตามจำนวน worker |
 | GET | `/api/system/health` → `security` | `{require_auth, jwt_secret_from_env, cors:{origins, wildcard, cross_origin_allowed}, trusted_proxies, csp_mode, hsts_when_https}` — perimeter ที่ใช้งานจริง (ไม่มีความลับ) |
@@ -164,7 +169,7 @@ CORS เป็น **allowlist**: ค่าเริ่มต้นไม่ใ�
 | POST | `/api/brokers/{id}/activate` | สลับโบรกเกอร์ |
 | GET | `/api/brokers/{id}/symbols` | spec จริงต่อบัญชี (`source: broker|declared`) |
 | GET | `/api/brokers/{id}/account` \| `/health` | account info / health probe |
-| POST | `/api/backtests` | `{symbol,bars,spread_points?,commission_per_lot?,slippage_points,starting_balance,validate_walk_forward,snapshot_id?}` → `{job_id}` · `bars` ต้อง ≥ 1700 (ไม่งั้น 400 พร้อมบอกขั้นต่ำ) · ใส่ `snapshot_id` เพื่อรันซ้ำบนแท่งเทียนชุดเดิม (ตรวจ sha256 ก่อน, ผิด→400) · `use_ticks` (ค่าเริ่มต้น `true`) = ใช้ tick ที่ import ไว้ตัดสินลำดับเหตุการณ์ในแท่ง ที่ชนทั้ง SL และ TP; ถ้าไม่มี tick จะใช้สมมติฐานเดิม (SL ก่อน) และรายงานบอกว่าใช้อย่างไหนกี่แท่ง |
+| POST | `/api/backtests` | `{symbol,bars,spread_points?,commission_per_lot?,slippage_points,starting_balance,validate_walk_forward,snapshot_id?}` → `{job_id}` · `bars` ต้อง ≥ 1700 (ไม่งั้น 400 พร้อมบอกขั้นต่ำ) · ใส่ `snapshot_id` เพื่อรันซ้ำบนแท่งเทียนชุดเดิม (ตรวจ sha256 ก่อน, ผิด→400) · `use_ticks` (ค่าเริ่มต้น `true`) = ใช้ tick ที่ import ไว้ตัดสินลำดับเหตุการณ์ในแท่ง ที่ชนทั้ง SL และ TP; ถ้าไม่มี tick จะใช้สมมติฐานเดิม (SL ก่อน) และรายงานบอกว่าใช้อย่างไหนกี่แท่ง · `forecast_source` = `"rule-proxy"` (ค่าเริ่มต้น) หรือ `"model"` = ฝึกโมเดลแบบ walk-forward ในรันแล้วให้มันขับ forecast edge; ผลอยู่ที่ `diagnostics.model_edge` (ความแม่นของโมเดลเทียบ rule proxy บนแท่งเดียวกัน, จำนวนการตัดสินใจที่ถอยไปใช้ proxy, ตารางรายเซกเมนต์) และ `assumptions` จะบอกว่าใครตัดสินใจ |
 | GET | `/api/datasets` \| `POST /api/datasets` \| `GET /api/datasets/{id}` | snapshot ของแท่งเทียน: list / freeze ข้อมูลปัจจุบัน / manifest + ตรวจ hash |
 | GET | `/api/datasets/ticks/status?symbol=` | ข้อมูล tick ที่ import ไว้: จำนวนแถว, ช่วงเวลา, แถวที่ถูกทิ้งเพราะอะไร, และ flag `reconstruction` ถ้าเป็นข้อมูลจำลอง |
 | GET | `/api/backtests/jobs/{job_id}` | `{state,pct,message,report_id,metrics}` |
@@ -189,10 +194,44 @@ payload เต็ม:
 `account, positions, risk_state, limits, signal, gate, analysis, forecast, model,
 training, reconcile, alerts, errors, ticker, mode, feed, virtual_time`
 
+**เพดานจำนวน socket** (รอบ 26 — ก่อนหน้านี้ไม่มีเลย): socket คือคำขอเดียวที่กิน CPU ต่อเนื่อง
+จึงจำกัดแบบ *พร้อมกันกี่ตัว* ไม่ใช่กี่ครั้งต่อนาที — `ws.max_connections_per_user` (default 4)
+และ `ws.max_connections_total` (default 64) นับรวมทุก worker เมื่อใช้ store แบบ sqlite/redis
+
+| close code | ความหมาย |
+|---|---|
+| `4401` | ไม่มี token / token ใช้ไม่ได้ **หรือ token หมดอายุระหว่างสตรีม** (socket ต้องไม่อยู่นานกว่าสิทธิ์ที่เปิดมัน) |
+| `4429` | เกินเพดาน — ก่อนปิดจะส่ง 1 เฟรม `{"type":"error","code":4429,"error":...,"detail":"...holds 4 of 4 live sockets..."}` |
+
+slot เป็น **lease ที่มีอายุ** (`ws.lease_ttl_seconds`, default 45) ไม่ใช่ตัวนับ: worker ที่ถูก
+SIGKILL ไม่มีโอกาสคืน slot — slot จึงคืนเองเมื่อ lease หมดอายุ ดูสถานะได้ที่
+`/api/system/health → websockets` (`open`, `granted`, `refused`, `degraded`, `shared`)
+
 ตัวเลขที่ dashboard อ่านตรง ๆ: `risk_state.daily_pnl_pct`, `limits.max_daily_loss_pct`,
 `signal.plan.{entry,sl,tp1..3,sl_points,lot,reward_risk_net,partials[]}`,
 `forecast.horizons[].{p_up,p_down,p_sideways,p10_price,p90_price,p_tp_before_sl}`,
 `analysis.spec.{digits,point,contract_size,lot_step}`
+
+---
+
+## Webhook ขาออก (ระบบนี้เป็นฝ่ายยิงออก)
+
+```
+POST <NO7_WEBHOOK_URL>
+Content-Type: application/json
+X-No7-Signature: sha256=<hex>      ← HMAC-SHA256 ของ "<timestamp>." + raw body
+X-No7-Timestamp: 1794154099        ← epoch ตอน "ส่ง" (ไม่ใช่ตอนเกิดเหตุ)
+X-No7-Delivery-Id: OB3f14296c4a31  ← เฉพาะที่ส่งจากคิว: ใช้กันซ้ำ (at-least-once)
+X-No7-Queued-At: 1794154020        ← เฉพาะที่ส่งจากคิว: เวลาที่ alert เกิดจริง
+X-No7-Attempt: 2                   ← ครั้งที่เท่าไรของข้อความนี้
+
+{"level":"critical","message":"...","source":"no7-ai-trading-pro",
+ "symbol":"XAUUSD","title":"Daily loss limit","ts":1794154020}
+```
+
+ตรวจลายเซ็นบน **raw bytes ที่ได้รับ** เท่านั้น (อย่า parse แล้ว serialize ใหม่) —
+โค้ดตัวอย่างพร้อมใช้อยู่ใน `docs/RUNBOOK.md §12.8.3` · ไม่ตั้ง `NO7_WEBHOOK_SECRET`
+= ไม่มีเฮดเดอร์ลายเซ็นเลย และ `/api/system/notify` จะขึ้นคำเตือน
 
 ---
 

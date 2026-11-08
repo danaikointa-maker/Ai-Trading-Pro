@@ -1,5 +1,7 @@
 # No7 AI Trading Pro — V1
 
+[![gate](https://github.com/danaikointa-maker/TradeAi/actions/workflows/ci.yml/badge.svg)](https://github.com/danaikointa-maker/TradeAi/actions/workflows/ci.yml)
+
 แพลตฟอร์มเทรดส่วนตัวแบบ **Local-First + Hybrid Quant AI + Multi-Broker**
 รวมกราฟราคาแบบ TradingView, การวิเคราะห์โครงสร้างตลาด, แนวรับ–แนวต้านแบบ confluence,
 การพยากรณ์ราคาเป็นช่วงความน่าจะเป็น, สัญญาณ Buy/Sell พร้อม SL/TP, Risk Engine ที่ยับยั้งได้ทุกคำสั่ง
@@ -126,15 +128,16 @@ For the local safety changes and operator-only MT5/VM setup gates, see
    before considering any live-account enablement.
 
 ```bash
-python3 -m pip install -r requirements.txt   # เวอร์ชันที่ใช้จริงตอนพัฒนา
-
-cd apps/web-dashboard && npm install && npm run build && cd ../..
-
+./scripts/dev_setup.sh           # venv + dependencies + .env + dashboard bundle (ครั้งแรก ~2 นาที)
 ./scripts/run.sh                 # ตรวจ/สร้าง dashboard bundle แล้วเปิด port 8000
 # เทียบเท่า: python3 -m uvicorn services.api_gateway.app:app --host 0.0.0.0 --port 8000
 # เปิด http://127.0.0.1:8000  →  demo@no7.ai / no7demo1234
 # API docs: http://127.0.0.1:8000/api/docs
 ```
+
+ติดตั้งเองทีละขั้นก็ได้: `python3 -m pip install -r requirements.txt` แล้ว
+`cd apps/web-dashboard && npm install && npm run build`
+**จะพัฒนาต่อ** อ่าน [`docs/DEVELOPMENT.md`](docs/DEVELOPMENT.md) (แผนที่โค้ด, สูตรสำเร็จ, กับดัก, งานถัดไป)
 
 `npm run build` คือขั้นตอนที่ทำให้ FastAPI เสิร์ฟ dashboard ที่ `/` ได้
 ถ้ายังไม่ build ระบบจะแสดงหน้า placeholder พร้อมคำสั่งที่ต้องรัน
@@ -203,8 +206,11 @@ storage/                   db / datasets / models / backtests / logs (git-ignore
 ## ทดสอบ
 
 ```bash
-python3 -m pytest tests/ -q      # 54 tests: maths, risk gate, zones, forecast shape, HTTP contract
+./scripts/dev_check.sh           # เกตเต็ม: ruff + dashboard bundle + 548 tests (~2 นาที)
+./scripts/test.sh                # เฉพาะ pytest (เลือก .venv ให้เอง)
 ```
+
+เกตตัวเดียวกันนี้ถูกรันอัตโนมัติทุก pull request ผ่าน GitHub Actions (`.github/workflows/ci.yml`)
 
 ## ข้อจำกัดที่ต้องอ่านก่อนใช้เงินจริง
 
@@ -223,12 +229,15 @@ python3 -m pytest tests/ -q      # 54 tests: maths, risk gate, zones, forecast s
 - [`docs/RUNBOOK.md`](docs/RUNBOOK.md) — ตั้งค่า Windows + MT5, env, การแก้ปัญหา
 - [`docs/MATH.md`](docs/MATH.md) — สูตรคำนวณทุกตัว (points/lot/RR/probability/metrics) + สิ่งที่ยังเป็นการประมาณ
 - [`docs/LIMITATIONS.md`](docs/LIMITATIONS.md) — สิ่งที่ยังไม่จริง/ยังไม่ครบ (อ่านก่อนตัดสินใจ)
+- [`docs/DEVELOPMENT.md`](docs/DEVELOPMENT.md) — พัฒนาต่อยังไง: ติดตั้ง, ลูปงาน, เกต, แผนที่โค้ด, backlog
 - [`.env.example`](.env.example) — ตัวแปรทั้งหมดที่ต้องตั้ง
 
 ## คำสั่งที่ใช้บ่อย (`scripts/`)
 
 | คำสั่ง | ทำอะไร |
 |---|---|
+| `./scripts/dev_setup.sh` | ติดตั้ง/กู้สภาพแวดล้อมพัฒนา: `.venv` + deps + `.env` + dashboard bundle |
+| `./scripts/dev_check.sh` | เกตก่อน commit: ruff → ตรวจ bundle → pytest ทั้งชุด |
 | `./scripts/run.sh` | เปิดแอปที่ port 8000 (สร้าง dashboard ให้ถ้ายังไม่มี) |
 | `./scripts/build_ui.sh` | `npm install` + build dashboard ลง `apps/web-dashboard/dist` |
 | `./scripts/test.sh` | รันชุดทดสอบทั้งหมด (unit + API contract + invariant สูตร) |
@@ -237,3 +246,4 @@ python3 -m pytest tests/ -q      # 54 tests: maths, risk gate, zones, forecast s
 | `.venv/bin/python scripts/run_bridge_sim.py --token …` | EA จำลอง (โปรโตคอลเดียวกับ EA จริง) สำหรับทดสอบ bridge ก่อนมี MT5 |
 | `.venv/bin/python scripts/import_ticks.py --csv … --symbol XAUUSD` | นำเข้า tick จริงให้ backtest ตัดสินลำดับในแท่ง (แยกไฟล์ต่อวัน, อ่านแบบ lazy) |
 | `.venv/bin/python scripts/make_pwa_icons.py` | สร้างไอคอน PWA (ถ้าแก้ดีไซน์) |
+| `./scripts/fetch_redis_server.sh` | ดึง `redis-server` จริง (ไม่ต้อง root) ไว้ทดสอบ shared rate limit / cluster |

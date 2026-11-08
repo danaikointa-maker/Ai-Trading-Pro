@@ -157,15 +157,20 @@ class Backtester:
         path_adapter = _PathAdapter(table)
         strategy = StrategyEngine(self.settings, self.risk, path_adapter, self.planner)  # type: ignore[arg-type]
 
+        # Optional: let the trained model drive the forecast edge instead of the
+        # rule proxy. Imported here so the default path never pays for lightgbm.
+        edge = None
+        if getattr(request, "forecast_source", "rule-proxy") == "model":
+            from services.backtest_engine.model_edge import WalkForwardEdge
+
+            edge = WalkForwardEdge(self.settings, horizon_minutes=30)
+            edge.prepare(m5, warmup)
+
         balance = float(request.starting_balance)
         equity_curve: list[EquityPoint] = []
         trades: list[TradeRecord] = []
         holds: list[float] = []
-        sim = {
-            "balance": balance, "peak": balance, "day": None, "day_start_equity": balance,
-            "consecutive_losses": 0, "cooldown_until": 0, "trades_today": 0, "trades_week": 0,
-            "kill": False, "kill_reason": "", "day_pnl": 0.0,
-        }
+        sim = self._fresh_sim(balance)
         pos: SimPosition | None = None
         # `decisions` is the denominator of no_trade_rate, so it may only count the
         # points where analysis actually ran. Points skipped for lack of
@@ -177,6 +182,8 @@ class Backtester:
         actionable = 0
         gate_blocked = 0
         skipped = 0
+        model_decisions = 0
+        proxy_decisions = 0
         last_ctx = None
         fold_marks: list[dict[str, Any]] = []
         fold_count = 4
@@ -191,15 +198,9 @@ class Backtester:
             bar_time = int(bar["t"])
             spread_price = spread_points * spec.point
 
-            # ---------------- daily bookkeeping
-            day = bar_time // 86400
-            if sim["day"] != day:
-                sim["day"] = day
-                sim["day_start_equity"] = balance + (self._floating(pos, float(bar["c"]), spec) if pos else 0.0)
-                sim["trades_today"] = 0
-                if sim["kill"] and not self.kill_cfg.get("require_manual_reset", True):
-                    sim["kill"] = False
-                    sim["kill_reason"] = ""
+            # ---------------- daily / weekly bookkeeping
+            self._roll_periods(sim, bar_time,
+                               balance + (self._floating(pos, float(bar["c"]), spec) if pos else 0.0))
 
             # ---------------- manage open position on this bar
             if pos is not None:
@@ -244,6 +245,24 @@ class Backtester:
             horizon_choice = 30
             p_up, p_side = self._direction_proxy(ctx)
             forecast = self._forecast_proxy(price, spec, ctx, p_up, p_side, horizon_choice)
+            if edge is not None:
+                proxy_p_down = float(np.clip(1 - p_up - p_side, 0.02, 0.9))
+                hit = edge.predict(i)
+                if hit is not None:
+                    # A model fitted only on bars before this segment began.
+                    forecast = self._forecast_bundle(
+                        price, spec, ctx, hit.p_up, hit.p_side, horizon_choice,
+                        method="walk-forward-model", model_version=f"backtest-wf-seg{hit.segment}",
+                        approved=hit.approved, calibrated=hit.approved,
+                        confidence=0.55 if hit.approved else 0.35,
+                        note=("Walk-forward model: trained on data before this segment"
+                              + ("; validated on earlier folds." if hit.approved
+                                 else "; not yet validated, discounted.")))
+                    edge.observe(i, hit.p_up, hit.p_down, "model", p_up, proxy_p_down)
+                    model_decisions += 1
+                else:
+                    edge.observe(i, p_up, proxy_p_down, "proxy", p_up, proxy_p_down)
+                    proxy_decisions += 1
             tick = Tick(t=float(bar_time), bid=price - spread_price / 2, ask=price + spread_price / 2,
                         spread_points=spread_points, last=price)
             signal = strategy.generate(ctx, spec.symbol, broker_id, TradeMode.manual, tick,
@@ -251,22 +270,14 @@ class Backtester:
             if signal.action not in (SignalAction.buy, SignalAction.sell) or signal.plan is None:
                 continue
             actionable += 1
-            risk_state = RiskState(
-                balance=balance, equity=equity, peak_equity=sim["peak"],
-                daily_pnl=round(equity - sim["day_start_equity"], 2),
-                daily_pnl_pct=round((equity - sim["day_start_equity"]) / max(1e-9, sim["day_start_equity"]) * 100, 3),
-                weekly_pnl=round(equity - request.starting_balance, 2),
-                weekly_pnl_pct=round((equity - request.starting_balance) / request.starting_balance * 100, 3),
-                drawdown_pct=round((equity - sim["peak"]) / max(1e-9, sim["peak"]) * 100, 3),
-                open_trades=0, open_lots=0.0, exposure_pct=0.0,
-                consecutive_losses=sim["consecutive_losses"], trades_today=sim["trades_today"],
-                trades_this_week=sim["trades_today"], cooldown_until=sim["cooldown_until"] or None,
-                kill_switch_active=sim["kill"], kill_switch_reason=sim["kill_reason"],
-            )
+            risk_state = self._risk_state(sim, balance, equity)
             gate = strategy.evaluate_gate(
                 signal, spec, tick, risk_state, ctx.snapshot.data_quality, {"active": False},
                 Health.connected, False,
-                ctx.snapshot.indicators.atr14 / price * 100 if price else 0.0)
+                ctx.snapshot.indicators.atr14 / price * 100 if price else 0.0,
+                # Simulated time, not the wall clock: without this the cooldown after
+                # consecutive losses is compared against today and never blocks a trade.
+                now=bar_time)
             if not gate.allow:
                 gate_blocked += 1
                 continue
@@ -378,8 +389,7 @@ class Backtester:
                 "Overnight swap is charged once per UTC midnight crossed, three times on "
                 "Wednesday; a position opened and closed inside one day pays none.",
                 "When a bar contains both stop and target, the stop is assumed first (conservative).",
-                "The trained ML model's directional edge is NOT used inside this backtest; the "
-                "forecast component is a deterministic rule proxy and is discounted as unvalidated.",
+                self._forecast_note(edge, model_decisions, proxy_decisions),
                 "TP-before-SL probability table is fitted on the first 60% of the sample and reused "
                 "out-of-sample, so it is mildly in-sample for early folds.",
                 self._intra_bar_note(ticks),
@@ -397,6 +407,9 @@ class Backtester:
             diagnostics={
                 "intra_bar": (ticks.stats() if ticks is not None else
                               {"mode": "conservative", "reason": "no tick data imported"}),
+                "forecast_source": getattr(request, "forecast_source", "rule-proxy"),
+                "model_edge": (edge.summary() if edge is not None else
+                               {"available": False, "reason": "forecast_source=rule-proxy"}),
                 "decision_points": decision_points,
                 "analysed": decisions,
                 "no_context": no_context,
@@ -461,6 +474,87 @@ class Backtester:
                 f"stop-first assumption.")
 
     @staticmethod
+    def _fresh_sim(balance: float) -> dict[str, Any]:
+        return {
+            "balance": balance, "peak": balance, "day": None, "day_start_equity": balance,
+            "week": None, "week_start_equity": balance,
+            "consecutive_losses": 0, "cooldown_until": 0, "trades_today": 0, "trades_week": 0,
+            "kill": False, "kill_reason": "", "day_pnl": 0.0,
+        }
+
+    def _roll_periods(self, sim: dict[str, Any], bar_time: int, equity: float) -> None:
+        """Start a new day/week exactly where the live risk engine starts them.
+
+        Boundaries come from the risk engine, not from `bar_time // 86400`: live resets
+        the day at midnight in the configured timezone (default Asia/Bangkok, UTC+7), so
+        a UTC cut here would apply the daily limits over a window shifted by seven hours
+        from the one production uses. The weekly counters are separate from the daily
+        ones — a day rollover must not forgive the week's trades.
+        """
+        week = self.risk.week_start(bar_time)
+        if sim["week"] != week:
+            sim["week"] = week
+            sim["week_start_equity"] = equity
+            sim["trades_week"] = 0
+        day = self.risk.day_start(bar_time)
+        if sim["day"] != day:
+            sim["day"] = day
+            sim["day_start_equity"] = equity
+            sim["trades_today"] = 0
+            if sim["kill"] and not self.kill_cfg.get("require_manual_reset", True):
+                sim["kill"] = False
+                sim["kill_reason"] = ""
+
+    @staticmethod
+    def _risk_state(sim: dict[str, Any], balance: float, equity: float) -> RiskState:
+        """The account state the gate sees — in the same windows the live engine uses.
+
+        Two fields were wrong before and both made the simulation permissive:
+        `weekly_pnl` was the whole run's return (so the weekly-loss gate measured the
+        wrong window, more wrongly the longer the run), and `trades_this_week` was fed
+        the *daily* count, so `max_weekly_trades` could never bind in a backtest.
+        """
+        return RiskState(
+            balance=balance, equity=equity, peak_equity=sim["peak"],
+            daily_pnl=round(equity - sim["day_start_equity"], 2),
+            daily_pnl_pct=round((equity - sim["day_start_equity"])
+                                / max(1e-9, sim["day_start_equity"]) * 100, 3),
+            weekly_pnl=round(equity - sim["week_start_equity"], 2),
+            weekly_pnl_pct=round((equity - sim["week_start_equity"])
+                                 / max(1e-9, sim["week_start_equity"]) * 100, 3),
+            drawdown_pct=round((equity - sim["peak"]) / max(1e-9, sim["peak"]) * 100, 3),
+            open_trades=0, open_lots=0.0, exposure_pct=0.0,
+            consecutive_losses=sim["consecutive_losses"], trades_today=sim["trades_today"],
+            trades_this_week=sim["trades_week"], cooldown_until=sim["cooldown_until"] or None,
+            kill_switch_active=sim["kill"], kill_switch_reason=sim["kill_reason"],
+        )
+
+    @staticmethod
+    def _forecast_note(edge: Any, model_decisions: int, proxy_decisions: int) -> str:
+        """Say which forecast actually drove the decisions — and how well it did."""
+        if edge is None:
+            return ("The trained ML model's directional edge is NOT used inside this backtest; the "
+                    "forecast component is a deterministic rule proxy and is discounted as "
+                    "unvalidated (run with forecast_source=\"model\" to use the model).")
+        summary = edge.summary()
+        if not summary.get("available"):
+            return (f"The walk-forward model was requested but could not run "
+                    f"({summary.get('reason', 'unknown reason')}); every decision used the rule proxy.")
+        total = model_decisions + proxy_decisions
+        head = (f"Forecast edge came from a walk-forward model on {model_decisions} of {total} "
+                f"decisions (the other {proxy_decisions} fell back to the rule proxy): each segment "
+                f"was fitted only on bars ending {summary['label_purge_bars']} bars "
+                f"({summary['horizon_minutes']} minutes) before that segment started, so no model "
+                f"scored a bar it had seen.")
+        if summary.get("scored_decisions"):
+            head += (f" On those bars the model called direction right "
+                     f"{summary['model_dir_accuracy']:.1%} of the time versus "
+                     f"{summary['proxy_dir_accuracy_same_bars']:.1%} for the rule proxy "
+                     f"({summary['scored_decisions']} scored, sideways excluded) — measured after "
+                     f"the run, never fed back into it.")
+        return head
+
+    @staticmethod
     def _regime_key(ctx: Any) -> str:
         if ctx is None:
             return "unknown"
@@ -480,28 +574,44 @@ class Backtester:
         return float(np.clip(p_up, 0.05, 0.95)) * (1 - p_side) + 0.5 * p_side, p_side
 
     @staticmethod
-    def _forecast_proxy(price: float, spec: SymbolSpec, ctx: Any, p_up: float, p_side: float,
-                        horizon: int) -> ForecastBundle:
+    def _forecast_bundle(price: float, spec: SymbolSpec, ctx: Any, p_up: float, p_side: float,
+                         horizon: int, *, method: str, model_version: str, approved: bool,
+                         calibrated: bool, confidence: float, note: str) -> ForecastBundle:
+        """One construction path for every forecast the backtest feeds the strategy.
+
+        The rule proxy and the walk-forward model differ only in the probabilities and
+        in how they describe themselves — building both here keeps the geometry (band,
+        quantiles, invalidation levels) identical, so a comparison between the two
+        measures the edge and not two slightly different bundle builders.
+        """
         atr = ctx.snapshot.indicators.atr14
         p_down = float(np.clip(1 - p_up - p_side, 0.02, 0.9))
         band = atr * np.sqrt(horizon / 5)
         row = HorizonForecast(
             horizon_minutes=horizon, p_up=round(p_up, 3), p_down=round(p_down, 3),
-            p_sideways=round(p_side, 3), calibrated=False, method="rule-proxy",
+            p_sideways=round(p_side, 3), calibrated=calibrated, method=method,
             expected_move_points=round((p_up - p_down) * band / spec.point, 1),
             p10_points=round(-1.28 * band / spec.point, 0), p50_points=0.0,
             p90_points=round(1.28 * band / spec.point, 0),
             p10_price=round(price - 1.28 * band, spec.digits),
             p50_price=round(price, spec.digits),
             p90_price=round(price + 1.28 * band, spec.digits),
-            confidence=0.3, coverage_note="Rule proxy — not a validated model.",
+            confidence=confidence, coverage_note=note,
             invalidate_above=round(price + band, spec.digits),
             invalidate_below=round(price - band, spec.digits),
         )
         return ForecastBundle(symbol=spec.symbol, generated_at=int(ctx.snapshot.server_time), price=price,
-                              model_version="backtest-proxy", model_approved=False, method="rule-proxy",
-                              confidence=0.3, horizons=[row], scenarios=[], invalidation=[], narrative="",
-                              metrics={})
+                              model_version=model_version, model_approved=approved, method=method,
+                              confidence=confidence, horizons=[row], scenarios=[], invalidation=[],
+                              narrative="", metrics={})
+
+    @classmethod
+    def _forecast_proxy(cls, price: float, spec: SymbolSpec, ctx: Any, p_up: float, p_side: float,
+                        horizon: int) -> ForecastBundle:
+        return cls._forecast_bundle(price, spec, ctx, p_up, p_side, horizon,
+                                    method="rule-proxy", model_version="backtest-proxy",
+                                    approved=False, calibrated=False, confidence=0.3,
+                                    note="Rule proxy — not a validated model.")
 
     # ------------------------------------------------------------ simulation
     @staticmethod
