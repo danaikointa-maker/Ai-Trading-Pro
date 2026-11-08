@@ -545,6 +545,108 @@ token หมดอายุระหว่างสตรีม = ปิดด�
 - ตั้ง `0` = ไม่จำกัด (ไม่แนะนำ แต่รองรับไว้สำหรับ deployment ที่มี proxy จำกัดให้แล้ว)
 - `lease_ttl_seconds` ต่ำ = คืน slot เร็วแต่ต่ออายุถี่ขึ้น; อย่าตั้งต่ำกว่า ~15 วินาที
 
+## 12.8 แจ้งเตือนออกนอกเครื่อง — คิวที่ไม่หาย และลายเซ็นที่ตรวจได้
+
+### 12.8.1 ปัญหาเดิม
+
+`Notifier` ลองส่งซ้ำอยู่ประมาณ 1 วินาทีแล้วเลิก — ครอบคลุมแค่แพ็กเก็ตตก ไม่ครอบคลุม
+กรณีปกติที่สุดคือ "ปลายทางกำลัง deploy อยู่ 1-2 นาที" alert ทุกตัวในช่วงนั้นหายหมด
+รวมถึงตัวที่มีไว้เพราะไม่มีใครนั่งดูจอ (`ขาดทุนถึงลิมิตรายวัน`, `Cooldown engaged`)
+
+และ webhook เดิม **ไม่มีลายเซ็น**: `webhook_secret` ถูกอ่านมาเพื่อลบออกจากล็อกเท่านั้น
+URL ของ webhook ไม่ใช่ความลับ (มันอยู่ใน config, ใน log ของ CI, ในภาพหน้าจอ) ใครรู้ URL
+ก็ยิง alert ปลอมเข้าระบบรับได้
+
+### 12.8.2 ตั้งค่า
+
+```bash
+export NO7_WEBHOOK_ENABLED=true
+export NO7_WEBHOOK_URL=https://hooks.example.com/no7
+export NO7_WEBHOOK_SECRET=$(python3 -c 'import secrets;print("whsec_"+secrets.token_hex(24))')
+```
+
+```yaml
+# config/app.yaml → alerts.outbox
+outbox:
+  enabled: true
+  max_attempts: 20           # รวมครั้งที่ส่งสดครั้งแรกด้วย
+  max_age_seconds: 1800      # เก่ากว่านี้ไม่ต้องส่งแล้ว
+  backoff_seconds: 5         # หน่วงครั้งแรก แล้วคูณสองไปเรื่อย ๆ
+  backoff_cap_seconds: 60    # เพดานหน่วง = ช้าสุดที่ backlog จะเริ่มไหลหลังปลายทางฟื้น
+  capacity: 500              # คิวเต็มแล้วทิ้ง "ตัวเก่าสุด" (ของใหม่มีค่ากว่า)
+```
+
+```bash
+curl -s localhost:8000/api/system/notify | jq '{webhook_signed, outbox}'
+# {"webhook_signed": true,
+#  "outbox": {"enabled":true,"pending":0,"queued":12,"delivered":12,
+#             "expired":0,"exhausted":0,"overflowed":0,"oldest_seconds":0.0}}
+```
+
+### 12.8.3 ฝั่งรับต้องตรวจยังไง
+
+เซ็นด้วย HMAC-SHA256 บน `"<timestamp>." + body` ส่งมาใน 2 เฮดเดอร์หลัก:
+
+| เฮดเดอร์ | ความหมาย |
+|---|---|
+| `X-No7-Signature` | `sha256=<hex>` |
+| `X-No7-Timestamp` | epoch วินาที ที่ใช้เซ็น (เวลาที่ **ส่ง** ไม่ใช่เวลาที่เกิดเหตุ) |
+| `X-No7-Delivery-Id` | มีเมื่อส่งจากคิว — ใช้กันข้อความซ้ำ (การส่งเป็นแบบ at-least-once) |
+| `X-No7-Queued-At` | มีเมื่อส่งจากคิว — เวลาที่ alert เกิดจริง |
+| `X-No7-Attempt` | ครั้งที่เท่าไรของข้อความนี้ |
+
+```python
+import hashlib, hmac, time
+
+SECRET = "whsec_..."
+
+def verify(raw_body: bytes, headers) -> bool:
+    stamp = headers.get("X-No7-Timestamp", "")
+    sent = headers.get("X-No7-Signature", "")
+    if not stamp or not sent:
+        return False
+    if abs(time.time() - float(stamp)) > 300:      # กันการเล่นซ้ำ
+        return False
+    expect = "sha256=" + hmac.new(
+        SECRET.encode(), f"{stamp}.".encode() + raw_body, hashlib.sha256).hexdigest()
+    return hmac.compare_digest(expect, sent)       # เทียบแบบ constant-time
+```
+
+**กับดักที่พังบ่อยที่สุด**: ต้องตรวจบน **raw bytes ที่ได้รับ** ห้าม `json.loads` แล้ว `json.dumps`
+ใหม่ — ลำดับคีย์/ช่องว่างเปลี่ยนนิดเดียวลายเซ็นก็ไม่ตรง (ฝั่งส่งก็ใช้ฟังก์ชันเดียวกันตอนเซ็น
+และตอนส่ง ด้วยเหตุผลเดียวกัน — ดู `services/notification/signing.py`)
+
+**เซ็นตอนส่ง ไม่ใช่ตอนเข้าคิว**: ถ้าเซ็นตั้งแต่เข้าคิว ข้อความที่รอในคิว 10 นาทีจะมาพร้อม
+timestamp เก่า แล้วถูกฝั่งรับปฏิเสธว่าเป็น replay ทุกครั้งที่ retry — เวลาที่เกิดเหตุจริงอยู่ใน
+`X-No7-Queued-At` และในฟิลด์ `ts` ของ body แทน
+
+### 12.8.4 ผลที่วัดได้จริง (`scripts/check_outbox.py`)
+
+รันกับแอปจริง: ปลายทางล่ม → รีสตาร์ต API → ปลายทางกลับมา
+
+| ทดสอบ | ผล |
+|---|---|
+| ปลายทางล่ม แล้วยิง alert | เข้าคิว `pending=1` (เดิม: หายไปเฉย ๆ) |
+| ฆ่าโปรเซส API แล้วเปิดใหม่ | `pending=1` เท่าเดิม — คิวอยู่ใน sqlite |
+| เปิดปลายทางกลับมา ไม่แตะอะไรอีก | ลูปส่งให้เองจนคิวว่าง `delivered=1 pending=0` |
+| ตรวจลายเซ็นฝั่งรับ | ผ่าน — `signed_at` ช้ากว่า `queued_at` 79 วินาที (เซ็นตอนส่งจริง) |
+| เฮดเดอร์ dedupe | `X-No7-Delivery-Id: OB3f14296c4a31` |
+
+```bash
+# ทำซ้ำเองได้
+.venv/bin/python scripts/check_outbox.py --port 8000 --stage before-restart   # ปลายทางยังไม่เปิด
+# ... รีสตาร์ตเซิร์ฟเวอร์ ...
+.venv/bin/python scripts/check_outbox.py --port 8000 --stage after-restart
+```
+
+### 12.8.5 สิ่งที่คิวนี้ **ไม่** รับประกัน
+
+- **ส่งอย่างน้อยหนึ่งครั้ง ไม่ใช่ครั้งเดียวเป๊ะ** — ถ้า POST สำเร็จแต่ตอบกลับหาย จะส่งซ้ำ
+  ฝั่งรับต้อง dedupe ด้วย `X-No7-Delivery-Id`
+- **ไม่รับประกันลำดับ** — alert สดถูกส่งก่อน backlog โดยตั้งใจ (ข่าวด่วนไม่ควรรอคิวเก่า)
+- **ของเก่าเกิน `max_age_seconds` ถูกทิ้ง** — แต่ถูกนับไว้ใน `outbox.expired` และขึ้น `warning`
+- คิวนี้เป็นของเครื่องนี้ (sqlite ไฟล์เดียว) ยังไม่ใช่คิวกลางสำหรับหลายเครื่อง
+
 ## 13. ความปลอดภัย — TLS, reverse proxy และ perimeter
 
 ### 13.1 เปิด HTTPS (เลือกอย่างใดอย่างหนึ่ง)

@@ -111,7 +111,7 @@ CORS เป็น **allowlist**: ค่าเริ่มต้นไม่ใ�
 | GET | `/api/users` · `POST /api/users` · `PATCH /api/users/{email}` · `DELETE /api/users/{email}` | จัดการผู้ใช้ (**admin เท่านั้น**) |
 | GET | `/api/users/me/permissions` | `{role, can_trade, can_manage_users, roles}` — UI ใช้ปิดปุ่ม |
 | GET | `/api/system/health` → `cluster` | `{role: leader\|replica\|blocked\|solo, backend, requested, reason, shared_health}` + `runtime_lease` |
-| GET | `/api/system/notify` | สถานะช่องทาง (`configured/ok/failures/skipped/base`), `state`, `retry_attempts`, `retries`, `dropped`, `min_interval_seconds`, `base_warnings` (ไม่คืน token — ถูกแทนด้วย `***`) |
+| GET | `/api/system/notify` | สถานะช่องทาง (`configured/ok/failures/skipped/base`), `state`, `retry_attempts`, `retries`, `dropped`, `min_interval_seconds`, `base_warnings`, `webhook_signed`, `webhook_warning`, และ `outbox` (`pending/queued/delivered/expired/exhausted/overflowed/oldest_seconds` + `warning`) — ไม่คืน token/secret (ถูกแทนด้วย `***`) |
 | POST | `/api/system/alerts/test` | ส่งข้อความทดสอบจริงผ่านทุกช่องทางที่เปิดใช้ → `{ok, deliveries:[{channel, ok, status, error, attempts}], paced:[…], note}` · `ok:null` = ถูกเลื่อนเพราะ pacing (ไม่ใช่ล้มเหลว) · ถ้ายังไม่ตั้งค่า จะคืน `ok:false` + `reason` แทนการเงียบ |
 | GET | `/api/system/health` → `ratelimit` | `{store: memory\|sqlite\|redis, requested, shared, reason, path?, warning?}` — `shared:false` = โควตาคูณตามจำนวน worker |
 | GET | `/api/system/health` → `security` | `{require_auth, jwt_secret_from_env, cors:{origins, wildcard, cross_origin_allowed}, trusted_proxies, csp_mode, hsts_when_https}` — perimeter ที่ใช้งานจริง (ไม่มีความลับ) |
@@ -211,6 +211,27 @@ SIGKILL ไม่มีโอกาสคืน slot — slot จึงคืน
 `signal.plan.{entry,sl,tp1..3,sl_points,lot,reward_risk_net,partials[]}`,
 `forecast.horizons[].{p_up,p_down,p_sideways,p10_price,p90_price,p_tp_before_sl}`,
 `analysis.spec.{digits,point,contract_size,lot_step}`
+
+---
+
+## Webhook ขาออก (ระบบนี้เป็นฝ่ายยิงออก)
+
+```
+POST <NO7_WEBHOOK_URL>
+Content-Type: application/json
+X-No7-Signature: sha256=<hex>      ← HMAC-SHA256 ของ "<timestamp>." + raw body
+X-No7-Timestamp: 1794154099        ← epoch ตอน "ส่ง" (ไม่ใช่ตอนเกิดเหตุ)
+X-No7-Delivery-Id: OB3f14296c4a31  ← เฉพาะที่ส่งจากคิว: ใช้กันซ้ำ (at-least-once)
+X-No7-Queued-At: 1794154020        ← เฉพาะที่ส่งจากคิว: เวลาที่ alert เกิดจริง
+X-No7-Attempt: 2                   ← ครั้งที่เท่าไรของข้อความนี้
+
+{"level":"critical","message":"...","source":"no7-ai-trading-pro",
+ "symbol":"XAUUSD","title":"Daily loss limit","ts":1794154020}
+```
+
+ตรวจลายเซ็นบน **raw bytes ที่ได้รับ** เท่านั้น (อย่า parse แล้ว serialize ใหม่) —
+โค้ดตัวอย่างพร้อมใช้อยู่ใน `docs/RUNBOOK.md §12.8.3` · ไม่ตั้ง `NO7_WEBHOOK_SECRET`
+= ไม่มีเฮดเดอร์ลายเซ็นเลย และ `/api/system/notify` จะขึ้นคำเตือน
 
 ---
 

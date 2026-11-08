@@ -461,7 +461,26 @@ class TradingRuntime:
             for trade in closed:
                 self._on_trade_closed(trade)
         self._manage_cycle(now)
+        self._drain_notify_outbox()
         self.version += 1
+
+    # A backlog must clear even when nothing new is happening — an outage that
+    # ends quietly should not leave alerts sitting in the queue until the next
+    # trade. The drain itself runs on its own thread (see `Notifier.drain_async`):
+    # a queued message may be pointed at a host that never answers, and blocking
+    # the trading loop on socket timeouts would be the worse bug by far.
+    OUTBOX_DRAIN_SECONDS = 15.0
+
+    def _drain_notify_outbox(self) -> None:
+        now = time.time()
+        if now - getattr(self, "_last_outbox_drain", 0.0) < self.OUTBOX_DRAIN_SECONDS:
+            return
+        self._last_outbox_drain = now
+        try:
+            if self.notifier.outbox.pending():
+                self.notifier.drain_async()
+        except Exception as exc:  # noqa: BLE001 - never let the queue break the loop
+            self._log_error("notify-outbox", exc)
 
     def _on_trade_closed(self, trade: TradeRecord) -> None:
         self.gateway.record_trade(trade)

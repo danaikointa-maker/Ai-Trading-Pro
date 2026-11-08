@@ -11,7 +11,7 @@
 ```bash
 ./scripts/dev_setup.sh      # venv + deps + .env + dashboard bundle (ครั้งแรก ~2 นาที)
 ./scripts/run.sh            # http://127.0.0.1:8000  →  demo@no7.ai / no7demo1234
-./scripts/dev_check.sh      # เกตก่อน commit: ruff + 520 tests (~2 นาที)
+./scripts/dev_check.sh      # เกตก่อน commit: ruff + 548 tests (~2 นาที)
 ```
 
 ทั้งสามคำสั่งรันซ้ำได้เสมอ ไม่พังของเดิม
@@ -88,11 +88,12 @@ curl -s -H "Authorization: Bearer $TOK" localhost:8000/api/system/health | pytho
 
 | ชุด | จำนวน | เวลา |
 |---|---|---|
-| ทั้งหมด (`pytest -q`) | 520 (514 pass + 6 skip) | **~2 นาที** (รวม backtest ที่ใช้โมเดล 3 รัน ≈ 50 วินาที) |
-| ตัดสองไฟล์ที่หนักที่สุด `--ignore=tests/test_backtest_engine.py --ignore=tests/test_model_validation.py` | 492 | ~30 → **~95** วินาที (แล้วแต่โหลดเครื่อง) |
+| ทั้งหมด (`pytest -q`) | 548 (542 pass + 6 skip) | **~2 นาที** (รวม backtest ที่ใช้โมเดล 3 รัน ≈ 50 วินาที) |
+| ตัดสองไฟล์ที่หนักที่สุด `--ignore=tests/test_backtest_engine.py --ignore=tests/test_model_validation.py` | 520 | ~30 → **~90** วินาที (แล้วแต่โหลดเครื่อง) |
 | `tests/test_backtest_engine.py` + `tests/test_model_validation.py` | 28 | ~75 → **~22** วินาที |
 | `tests/test_ws_quota.py` (โควตา WebSocket) | 32 | ~5 วินาที |
 | `tests/test_redis_real.py` (redis จริง, skip ถ้าไม่มี binary) | 20 | ~4 วินาที |
+| `tests/test_notify_outbox.py` (คิวถาวร + ลายเซ็น webhook) | 27 | ~5 วินาที |
 
 (6 ที่ skip คือเทสต์สคริปต์ที่ต้องมี `bash`/`.venv` ซึ่งไม่มีในบางสภาพแวดล้อม)
 
@@ -347,7 +348,12 @@ slot เป็น **lease ที่หมดอายุ** ไม่ใช่ต
 
 ### 9.6 ของเล็กที่ยังค้าง
 
-- คิวส่งออกแบบทนรีสตาร์ต + ลายเซ็น webhook (ตอนนี้คิว bridge ที่ยังไม่ ack หายตอนรีสตาร์ต โดยตั้งใจ)
+- ~~คิวส่งออกแบบทนรีสตาร์ต + ลายเซ็น webhook~~ ✅ **เสร็จรอบ 27** —
+  `services/notification/outbox.py` (sqlite, backoff, หมดอายุ, คิวเต็มทิ้งของเก่าสุด) +
+  `services/notification/signing.py` (HMAC-SHA256 บน `timestamp.body`, เซ็นตอนส่ง)
+  พิสูจน์กับแอปจริงด้วย `scripts/check_outbox.py` (ล่ม → รีสตาร์ต → ฟื้น, 7/7)
+  · ที่ยังเหลือในหัวข้อนี้: **คิวคำสั่ง bridge** ที่ยังไม่ ack ยังหายตอนรีสตาร์ต โดยตั้งใจ
+  (คำสั่งเทรดเก่าที่ส่งซ้ำหลังรีสตาร์ตอันตรายกว่าคำสั่งที่หาย) และคิวนี้ยังเป็นของเครื่องเดียว
 - PWA: screenshots/splash สำหรับ install prompt ที่สวยขึ้น, Web Push (ยังไม่มีโดยตั้งใจ)
 - Monte Carlo / การกระจายของ slippage ใน backtest
 - Temporal CNN / ensemble — ต่อเมื่อ walk-forward พิสูจน์ว่าดีกว่าของเดิมจริง
