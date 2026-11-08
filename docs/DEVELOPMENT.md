@@ -11,7 +11,7 @@
 ```bash
 ./scripts/dev_setup.sh      # venv + deps + .env + dashboard bundle (ครั้งแรก ~2 นาที)
 ./scripts/run.sh            # http://127.0.0.1:8000  →  demo@no7.ai / no7demo1234
-./scripts/dev_check.sh      # เกตก่อน commit: ruff + 448 tests (~1–3 นาที)
+./scripts/dev_check.sh      # เกตก่อน commit: ruff + 468 tests (~1–3 นาที)
 ```
 
 ทั้งสามคำสั่งรันซ้ำได้เสมอ ไม่พังของเดิม
@@ -88,7 +88,7 @@ curl -s -H "Authorization: Bearer $TOK" localhost:8000/api/system/health | pytho
 
 | ชุด | จำนวน | เวลา |
 |---|---|---|
-| ทั้งหมด (`pytest -q`) | 448 (442 pass + 6 skip) | ~2 นาที 30 วินาที → **~50 วินาที** |
+| ทั้งหมด (`pytest -q`) | 468 (462 pass + 6 skip) | ~2 นาที 30 วินาที → **~50–70 วินาที** |
 | ตัดสองไฟล์ที่หนักที่สุด `--ignore=tests/test_backtest_engine.py --ignore=tests/test_model_validation.py` | 420 | ~55 → **~27** วินาที |
 | `tests/test_backtest_engine.py` + `tests/test_model_validation.py` | 28 | ~75 → **~17** วินาที |
 
@@ -254,24 +254,27 @@ conflict ให้แก้ (ไม่มีการเขียนทับเ
 
 ## 9. งานถัดไปที่คุ้มทำ (เรียงตามคุ้มค่า/แรงที่ใช้)
 
-### 9.1 พิสูจน์ Redis ด้วย `redis-server` จริง ⟵ เริ่มตรงนี้ได้เลย
-
-ตอนนี้ชุดเทสต์ของ shared rate limit รันบน **fakeredis** (Lua เดียวกัน แต่คนละ implementation)
-เครื่องมือมีให้แล้ว:
+### 9.1 พิสูจน์ Redis ด้วย `redis-server` จริง ✅ เสร็จแล้ว (รอบ 24)
 
 ```bash
-./scripts/fetch_redis_server.sh          # ดึง redis-server 6.2.14 จากวีล redislite → .tools/bin
-.tools/bin/redis-server --port 6399 --save '' --appendonly no &
-NO7_RATELIMIT_STORE=redis NO7_CLUSTER_BACKEND=redis \
-  NO7_REDIS_URL=redis://127.0.0.1:6399/0 ./scripts/run.sh
-# ตรวจแล้วได้: ratelimit {store: redis, shared: true}  /  cluster {backend: redis, role: leader}
+./scripts/fetch_redis_server.sh                         # redis-server 6.2.14 → .tools/bin (ไม่ต้อง root)
+.venv/bin/python -m pytest tests/test_redis_real.py -q  # 17 passed (~3 วินาที) — skip ถ้าไม่มี binary
+.venv/bin/python scripts/check_redis.py --url redis://HOST:6379/0 --ttl 2   # 12/12 PASS
 ```
 
-ที่ยังขาดคือ *เทสต์* ที่ยิงของจริง: `tests/test_redis_real.py` ที่สตาร์ต `redis-server` เอง
-(ข้ามเมื่อไม่มี binary), เทียบผลการตัดสินใจกับ `MemoryBucketStore` ตัวต่อตัว, จำลอง 4 โพรเซสแย่งโควตาเดียวกัน,
-ฆ่า Redis กลางทางแล้วต้องเห็น `x-ratelimit-degraded` และ `/api/system/health → cluster.shared_health.ok: false`
-จากนั้นค่อยเขียนตัวตรวจฝั่งผู้ดูแล (`scripts/check_redis.py`) ที่ยิง URL จริงโดยไม่ FLUSHDB
-เสร็จแล้วแก้ถ้อยคำใน `LIMITATIONS.md` ให้ตรง (ตอนนี้ยังเขียนว่า "ยังไม่ได้ทดสอบกับ redis-server จริง")
+สิ่งที่ทำไปแล้ว: `tests/test_redis_real.py` สตาร์ต `redis-server` เอง และเทียบผลการตัดสินใจกับ
+`MemoryBucketStore` ทุกคำขอ, 4 โพรเซสแย่งโควตาเดียวกันได้พอดีลิมิต, ฆ่า Redis กลางทางแล้วเห็น
+`x-ratelimit-degraded`, frame bus/TTL/fail-closed, `build_store`/`build_shared_state` fallback;
+CI มี step ที่ **fail ถ้าเทสต์ชุดนี้ถูก skip** และรัน `scripts/check_redis.py` กับ Redis จริง;
+หลักฐานสองโปรเซส + ตารางผลอยู่ใน `docs/RUNBOOK.md` §12.6
+
+**บั๊กที่เจอเพราะทำข้อนี้** (ทั้งหมดแก้แล้ว + มีเทสต์กันถอยหลัง):
+1. 429 ไม่ส่ง `x-ratelimit-degraded` — ผู้เรียกจึงแยกไม่ออกว่าโดนจำกัดด้วยโควตารวมหรือโควตาสำรอง
+2. Lua เซฟยอดด้วย `tostring()` (`%.14g`) → ยอดถูกปัดทุกครั้งที่ใช้ ทำให้ Redis กับ memory
+   ตัดสินใจต่างกันที่ขอบ (แก้เป็น `string.format('%.17g', …)`)
+3. `/api/system/health → ratelimit` ยังรายงาน `shared: true` ขณะ Redis ล่ม (รายงานค่าตอนบูต
+   อย่างเดียว) → ตอนนี้มี `degraded`, `last_error` และพลิก `shared: false` ตามความจริง
+
 ยังไม่ครอบคลุม: TLS (`rediss://`), `requirepass`, Sentinel/Cluster, Redis ที่ช้าแต่ไม่ตาย
 
 ### 9.2 ข้อมูลจริงแทนฟีดจำลอง

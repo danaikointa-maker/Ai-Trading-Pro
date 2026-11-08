@@ -40,8 +40,13 @@ service worker **ไม่แคช** `/api/*` และ `/ws` (ราคา/ค
 ## Rate limits
 
 ตัวนับ rate limit อยู่ที่ `ratelimit.store` — `memory` (ต่อโปรเซส), `sqlite` (ต่อเครื่อง),
-`redis` (ข้ามเครื่อง) และทุก response ที่ถูกจำกัดจะแนบ `x-ratelimit-remaining`;
-ถ้า Redis ล่มกลางทางจะแนบ `x-ratelimit-degraded: redis` มาด้วย (จำกัดด้วย bucket ในเครื่องแทน)
+`redis` (ข้ามเครื่อง) และทุก response ที่ถูกจำกัดจะแนบ `x-ratelimit-remaining`
+
+ถ้า store ที่ใช้ร่วมกันล่มกลางทาง คำขอจะถูกจำกัดด้วย bucket ในโปรเซสแทน และผลลัพธ์จะบอกตรง ๆ:
+`x-ratelimit-degraded: redis` แนบมาทั้งกับ **200** และ **429** (รอบ 24 แก้บั๊กที่ 429 ไม่ส่ง header นี้
+— ผู้เรียกจึงเคยแยกไม่ออกว่าโดนปฏิเสธด้วยโควตารวมหรือโควตาสำรอง) ฝั่งผู้ดูแลดูได้ที่
+`/api/system/health → ratelimit`: `degraded` คือจำนวนครั้งที่ต้องถอย, `last_error` คือสาเหตุล่าสุด
+และ `shared` จะเป็น `false` ตลอดช่วงที่ยังถอยอยู่ แทนที่จะยังเขียวว่าแชร์โควตากันอยู่
 
 CORS เป็น **allowlist**: ค่าเริ่มต้นไม่ให้ origin อื่นเลย (dashboard เสิร์ฟจาก origin เดียวกัน
 และ Vite dev proxy `/api` ให้อยู่แล้ว) — เปิดเฉพาะที่ตั้งใจด้วย

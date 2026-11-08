@@ -1059,7 +1059,22 @@ class TradingRuntime:
         }
         if base.get("path") and backend == "sqlite":
             out["path"] = base["path"]
-        if not out["shared"]:
+
+        # The lines above describe the store chosen at boot. They would keep claiming
+        # `shared: true` through an outage, so ask the limiter that is actually
+        # enforcing right now: every spend it could not send to the shared store was
+        # answered by this process's own bucket (and marked x-ratelimit-degraded).
+        limiter = getattr(self, "ratelimit", None)
+        live = limiter.status() if limiter is not None else {}
+        degraded = int(live.get("degraded", 0) or 0)
+        out["degraded"] = degraded
+        if degraded:
+            out["shared"] = False
+            out["last_error"] = str(live.get("last_error", ""))
+            out["warning"] = (f"the {backend} store failed {degraded} time(s); those requests "
+                              "were limited against this process only, so the configured "
+                              "limit is not shared right now (see x-ratelimit-degraded)")
+        elif not out["shared"]:
             out["warning"] = ("store=memory: every worker process keeps its own budget, "
                               "so --workers N multiplies the configured limit. Use "
                               "store: sqlite (one host) or store: redis (several hosts).")

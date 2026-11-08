@@ -257,3 +257,97 @@ def test_degraded_response_is_marked_in_the_headers(settings):
     assert "x-ratelimit-remaining" in res.headers
     assert limiter.degraded == 1
     assert time.time() > 0
+
+
+def test_a_degraded_denial_says_it_was_degraded_too(settings):
+    """A 429 from the local fallback must not look like the shared budget running out.
+
+    Before this, only the 200s carried `x-ratelimit-degraded`. A client that got a
+    429 could not tell "you really are out of quota everywhere" from "this one
+    worker improvised because Redis is down", and `retry-after` came from the local
+    bucket either way.
+    """
+    from starlette.applications import Starlette
+    from starlette.responses import JSONResponse
+    from starlette.routing import Route
+    from starlette.testclient import TestClient
+
+    class Flaky:
+        name = "redis"
+
+        def spend(self, *args, **kwargs):
+            raise ConnectionError("down")
+
+        def reset(self):
+            pass
+
+        tracked = -1
+
+    limiter = RateLimiter({"default": {"limit": 2, "window_seconds": 60}}, store=Flaky(),
+                          clock=lambda: 5000.0)
+    middleware = RateLimitMiddleware(None, limiter=limiter, settings=settings,
+                                     trusted_proxies=["127.0.0.1/32"])
+
+    async def handler(request):
+        return JSONResponse({"ok": True})
+
+    middleware.app = Starlette(routes=[Route("/api/probe", handler)])
+    client = TestClient(middleware)
+    responses = [client.get("/api/probe") for _ in range(3)]
+
+    assert [r.status_code for r in responses] == [200, 200, 429]
+    for res in responses:
+        assert res.headers["x-ratelimit-degraded"] == "redis", res.status_code
+    denied = responses[-1]
+    assert int(denied.headers["retry-after"]) >= 1
+    assert denied.headers["x-ratelimit-remaining"] == "0"
+    assert limiter.degraded == 3
+
+
+def test_health_keeps_claiming_shared_only_while_it_is_true(runtime, monkeypatch):
+    """A green `shared: true` during a Redis outage is worse than no field at all."""
+    monkeypatch.setattr(runtime, "ratelimit_status",
+                        {"backend": "redis", "requested": "redis", "shared": True, "reason": ""},
+                        raising=False)
+
+    healthy = RateLimiter({}, store=MemoryBucketStore())
+    monkeypatch.setattr(runtime, "ratelimit", healthy, raising=False)
+    good = runtime._ratelimit_status()
+    assert good["shared"] is True and good["degraded"] == 0
+    assert "warning" not in good
+
+    class Flaky:
+        name = "redis"
+        tracked = -1
+
+        def spend(self, *args, **kwargs):
+            raise ConnectionError("Error 111 connecting to 127.0.0.1:6392. Connection refused.")
+
+        def reset(self):
+            pass
+
+    degraded_limiter = RateLimiter({"default": {"limit": 5, "window_seconds": 60}}, store=Flaky())
+    degraded_limiter.check("ip:1.2.3.4", "default")
+    monkeypatch.setattr(runtime, "ratelimit", degraded_limiter, raising=False)
+
+    bad = runtime._ratelimit_status()
+    assert bad["store"] == "redis", "it still says which store was configured"
+    assert bad["shared"] is False, "the budget is not shared while the store is unreachable"
+    assert bad["degraded"] == 1
+    assert "Connection refused" in bad["last_error"]
+    assert "x-ratelimit-degraded" in bad["warning"]
+
+
+def test_health_reports_the_live_limiter_end_to_end(client, auth):
+    """Wiring check: without it, health could only report the boot-time config.
+
+    Identity (`runtime.ratelimit is app.state.ratelimit`) is deliberately not asserted:
+    the session runtime is shared by several apps in this suite, so the last app built
+    owns the attribute. What must hold is that health speaks for a live limiter.
+    """
+    runtime = client.app.state.runtime
+    assert isinstance(getattr(runtime, "ratelimit", None), RateLimiter), "create_app must wire it"
+
+    body = client.get("/api/system/health", headers=auth).json()["ratelimit"]
+    assert body["degraded"] == 0, "nothing in this suite should have degraded the store"
+    assert body["store"] and "shared" in body

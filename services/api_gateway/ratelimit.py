@@ -197,8 +197,14 @@ class RedisBucketStore:
     name = "redis"
 
     # KEYS[1] bucket key; ARGV = limit, rate (tokens/sec), now (epoch seconds), ttl ms.
-    # Returns {allowed(0|1), tokens-as-string}: Lua truncates floats, so the balance
-    # travels as a string.
+    # Returns {allowed(0|1), tokens-as-string}: Redis replies cannot carry a float, so
+    # the balance travels as a string.
+    #
+    # Every number is serialised with %.17g, not Lua's tostring(). tostring() is
+    # "%.14g", which silently rounds the balance on every single spend — enough that
+    # a bucket sitting exactly on 1.000000 token allowed one more request in memory
+    # than it did in Redis. %.17g round-trips a float64 exactly, so every backend
+    # applies the same policy down to the last bit (proved in tests/test_redis_real.py).
     SCRIPT = """
 local key = KEYS[1]
 local limit = tonumber(ARGV[1])
@@ -221,9 +227,10 @@ if tokens >= 1 then
   tokens = tokens - 1
   allowed = 1
 end
-redis.call('HSET', key, 'tokens', tostring(tokens), 'updated', tostring(now))
+redis.call('HSET', key, 'tokens', string.format('%.17g', tokens),
+           'updated', string.format('%.17g', now))
 redis.call('PEXPIRE', key, ttl)
-return {allowed, tostring(tokens)}
+return {allowed, string.format('%.17g', tokens)}
 """
 
     def __init__(self, client: Any, prefix: str = "no7:ratelimit") -> None:
@@ -466,15 +473,23 @@ class RateLimitMiddleware:
             seconds = max(1, int(retry_after + 0.999))
             body = (f'{{"detail":"rate limit exceeded for {rule}; retry in {seconds}s",'
                     f'"rule":"{rule}","retry_after":{round(retry_after, 2)}}}').encode()
+            headers = [
+                (b"content-type", b"application/json"),
+                (b"content-length", str(len(body)).encode()),
+                (b"retry-after", str(seconds).encode()),
+                (b"x-ratelimit-remaining", b"0"),
+            ]
+            if degraded:
+                # A denial from the local fallback is not the shared budget running
+                # out: the caller may well have quota left on the other workers, and
+                # `retry-after` was computed from this process's bucket. Saying so on
+                # the 429 — not only on the 200 — is what makes the two tellable apart.
+                headers.append((b"x-ratelimit-degraded",
+                                str(getattr(self.limiter.store, "name", "store")).encode()))
             await send({
                 "type": "http.response.start",
                 "status": 429,
-                "headers": [
-                    (b"content-type", b"application/json"),
-                    (b"content-length", str(len(body)).encode()),
-                    (b"retry-after", str(seconds).encode()),
-                    (b"x-ratelimit-remaining", b"0"),
-                ],
+                "headers": headers,
             })
             await send({"type": "http.response.body", "body": body})
             return
