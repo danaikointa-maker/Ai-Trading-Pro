@@ -12,6 +12,9 @@
 #
 set -euo pipefail
 cd "$(dirname "$0")/.."
+# .venv first: dev_setup.sh installs the dependencies there, and a bare `python3`
+# would be the system interpreter that has no uvicorn.
+source scripts/python_bin.sh
 PORT="${NO7_PORT:-8000}"
 if [ ! -f apps/web-dashboard/dist/index.html ]; then
   echo "dashboard bundle missing -> building it once"
@@ -35,4 +38,5 @@ fi
 
 echo "starting No7 AI Trading Pro on ${SCHEME}://127.0.0.1:${PORT} (login demo@no7.ai / no7demo1234)"
 echo "perimeter: cors=[${NO7_CORS_ORIGINS:-}] trusted_proxies=[${NO7_TRUSTED_PROXIES:-127.0.0.1/32,::1/128}] csp=${NO7_CSP_MODE:-enforce}"
-exec python3 -m uvicorn services.api_gateway.app:app "${ARGS[@]}"
+echo "python: ${PY}"
+exec "${PY}" -m uvicorn services.api_gateway.app:app "${ARGS[@]}"

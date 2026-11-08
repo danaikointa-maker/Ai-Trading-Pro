@@ -22,7 +22,7 @@ for arg in "$@"; do
   esac
 done
 
-if [ -x .venv/bin/python ]; then PY=".venv/bin/python"; else PY="python3"; fi
+source scripts/python_bin.sh
 step() { printf '\n\033[1m==> %s\033[0m\n' "$1"; }
 fail() { printf '\n\033[31m✗ %s\033[0m\n' "$1"; exit 1; }
 
