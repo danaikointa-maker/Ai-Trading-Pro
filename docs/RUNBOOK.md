@@ -441,6 +441,61 @@ curl -s localhost:8000/api/system/health | jq .ratelimit
 
 ทดสอบฝั่งเทสต์: `tests/test_ratelimit_shared.py` รันสัญญาเดียวกันบน memory/sqlite/redis
 (fakeredis รัน Lua ตัวจริง) และมีเคส 4 โปรเซสแยกกันแย่ง bucket 40 → ปล่อยผ่านได้ 40 พอดี
+ส่วนการพิสูจน์กับ **redis-server ตัวจริง** อยู่ที่ §12.6
+
+> **health บอกความจริงระหว่างที่ Redis ล่ม** — `/api/system/health → ratelimit` มีฟิลด์
+> `degraded` (จำนวนครั้งที่ต้องถอยไป bucket ในโปรเซส) และเมื่อ `degraded > 0` ฟิลด์
+> `shared` จะกลายเป็น `false` พร้อม `last_error` + `warning` แทนที่จะยังเขียวว่า `shared: true`
+
+## 12.6 Redis จริง — พิสูจน์ก่อน deploy
+
+fakeredis เป็น implementation คนละตัว การอ้างว่า "Redis ใช้ได้" จึงต้องมีหลักฐานกับ
+`redis-server` ตัวจริง ทุกอย่างด้านล่างรันได้โดยไม่ต้องเป็น root
+
+### 12.6.1 เอา redis-server มาโดยไม่ต้องติดตั้ง
+
+```bash
+./scripts/fetch_redis_server.sh          # → .tools/bin/redis-server (+ redis-cli), 6.2.14
+.venv/bin/python -m pytest tests/test_redis_real.py -q     # 17 passed
+```
+
+ไม่มี binary = เทสต์ชุดนี้ **skip** (ไม่ใช่ผ่าน) และ CI จะ fail ถ้ามันถูก skip
+— ดู step "Prove the real-Redis tests actually ran" ใน `.github/workflows/ci.yml`
+
+### 12.6.2 ตรวจเซิร์ฟเวอร์จริงก่อนชี้ production ไปหา
+
+```bash
+.venv/bin/python scripts/check_redis.py --url redis://10.0.0.5:6379/0 --ttl 2
+#  PASS PING / server identifies itself / eviction policy / Lua token bucket /
+#       budget shared across connections / refill / exact balance / TTL /
+#       frame bus / frames expire / hostile key / cleans up after itself
+#  12/12 checks passed — OK
+```
+
+เครื่องมือนี้ **ไม่เคย FLUSHDB**, เขียนเฉพาะคีย์ `no7:selftest:<random>:*` แล้วลบทิ้ง,
+ปิดรหัสผ่านใน URL ที่พิมพ์ออกมา และคืนค่า exit 0 (ผ่าน) / 1 (มีเช็กตก) / 2 (ต่อไม่ได้)
+ถ้า `maxmemory-policy` ไม่ใช่ `noeviction` จะได้ **WARN** เพราะ bucket อาจถูก evict
+แล้วโควตารีเซ็ตเงียบ ๆ
+
+### 12.6.3 ผลที่วัดได้จริงด้วยสองโปรเซส + Redis จริง
+
+| ทดสอบ | ผล |
+|---|---|
+| 2 API (`:8051` leader, `:8052` replica) + Redis `:6392` | ทั้งคู่: `cluster.backend=redis`, `shared_health.ok=true`, `ratelimit {store: redis, shared: true}` |
+| ยิงสลับพอร์ตด้วยผู้ใช้เดียว (โควตา default 300/นาที) | ผ่าน **303** ครั้ง (8051=152 + 8052=151) แล้ว **429 ทั้งสองพอร์ต** = โควตาเดียวกันจริง |
+| bucket ใน Redis หลังโดนจำกัด | `tokens 0.3343195915222168`, TTL 60s (17 หลัก = ไม่ถูกปัด) |
+| ฆ่า leader `:8051` | `:8052` ขึ้นเป็น leader ภายใน **≤4 วินาที**, frame `no7:live:v1` เปลี่ยนเจ้าของ |
+| ฆ่า Redis ทั้งตัว | API ยังตอบ 200 พร้อม `x-ratelimit-degraded: redis`, health: `shared_health.ok=false` + `Connection refused`, `ratelimit.degraded > 0` และ `shared=false` |
+
+### 12.6.4 เช็กลิสต์ก่อนใช้ production
+
+- `maxmemory-policy noeviction` (ตัวนับห้ามถูก evict)
+- Redis อยู่ในเครือข่ายส่วนตัว หรือมี `requirepass` — **ยังไม่ได้ทดสอบ** `requirepass`/TLS (`rediss://`) ที่นี่
+- `NO7_RATELIMIT_PREFIX` แยกต่อ environment (`no7:prod:ratelimit`, `no7:staging:ratelimit`)
+- ตั้ง NTP ให้ทุกเครื่อง: ตัวนับใช้เวลาของแอป ไม่ใช่ `TIME` ของ Redis
+- ไม่ต้องเปิด persistence: bucket หายคือโควตาเริ่มใหม่ ไม่ใช่ข้อมูลสูญหาย
+- socket timeout 2 วินาที (ค่าในโค้ด) — Redis ที่ "ช้าแต่ไม่ตาย" จะหน่วงคำขอได้ถึง 2 วินาที
+  ก่อนถอยไป bucket ในเครื่อง ยังไม่มีการทดสอบกรณีนี้
 
 ## 13. ความปลอดภัย — TLS, reverse proxy และ perimeter
 

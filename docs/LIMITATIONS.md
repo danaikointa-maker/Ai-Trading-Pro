@@ -66,13 +66,15 @@
   `memory` (ต่อโปรเซส, ค่าเริ่มต้น) / `sqlite` (worker บนเครื่องเดียว, write ต่อคำขอที่ถูกจำกัด) /
   `redis` (ข้ามเครื่อง, Lua atomic, key มี TTL)
   - วัดจริง: 2 worker + memory → limit 6/นาที ปล่อยผ่าน **7**; 2 worker + sqlite → **6 เท่าพอดี**
-  - Redis: **ชุดเทสต์อัตโนมัติยังรันบน fakeredis** (Lua เดียวกัน แต่คนละ implementation)
-    สิ่งที่ยืนยันกับ `redis-server` 6.2.14 ของจริงแล้วคือ *การบูตและสถานะ*: ตั้ง
-    `NO7_RATELIMIT_STORE=redis` + `NO7_CLUSTER_BACKEND=redis` แล้ว `/api/system/health` รายงาน
-    `ratelimit {store: redis, shared: true}` และ `cluster {backend: redis, role: leader}`
-    (binary ดึงได้ด้วย `scripts/fetch_redis_server.sh` โดยไม่ต้อง root)
-    ยังไม่มีเทสต์ที่ยิงของจริงในชุดเกต และยังไม่ได้ทดสอบ TLS (`rediss://`), `requirepass`,
-    Sentinel/Cluster หรือกรณี Redis ช้าแต่ไม่ตาย
+  - Redis: ยืนยันกับ **`redis-server` 6.2.14 ตัวจริง** แล้ว ไม่ใช่แค่ fakeredis —
+    `tests/test_redis_real.py` (17 เทสต์) สตาร์ตเซิร์ฟเวอร์เองและอยู่ในเกต/CI
+    (CI จะ **fail ถ้าเทสต์ชุดนี้ถูก skip**) ครอบคลุม: การตัดสินใจตรงกับ memory store ทุกคำขอ,
+    ยอดคงเหลือ round-trip ตรงบิต, โควตาเดียวกันข้าม connection, 4 โพรเซสแย่งกันได้พอดีลิมิต,
+    Redis ตายกลางทาง → `x-ratelimit-degraded`, frame bus + TTL, fallback เมื่อพอร์ตตาย
+    วัดกับสองโปรเซสจริง: ผ่าน 303 คำขอรวมกันบนโควตา 300/นาที แล้ว 429 ทั้งคู่ (ดู RUNBOOK §12.6.3)
+    `scripts/check_redis.py` ให้ผู้ดูแลยิงเช็ก Redis จริงก่อน deploy ได้ (12 เช็ก ไม่ FLUSHDB)
+    **ยังไม่ได้ทดสอบ**: TLS (`rediss://`), `requirepass`, Sentinel/Cluster
+    และกรณี Redis ช้าแต่ไม่ตาย (socket timeout 2 วินาทีจะหน่วงคำขอก่อนถอย)
   - ถ้า Redis ล่มกลางทาง ระบบ **จำกัดด้วย bucket ในโปรเซสต่อไป** + `degraded++` +
     header `x-ratelimit-degraded` (เลือกทางนี้แทนการปล่อยผ่านโล่ง ๆ หรือทำให้ระบบล่ม)
   - ตัวนับใช้เวลาของแอป (ไม่ใช่ Redis TIME) → ต้องมี NTP; clock skew ทำให้ refill คลาดเคลื่อน
@@ -220,8 +222,10 @@
 ## หลายโปรเซส (cluster)
 
 - โค้ด path ของ `replica` ถูกทดสอบกับ stub client (`set/get/ping`) และกับ store ในโปรเซส
-  — **ยังไม่เคยรันกับ Redis server จริงในสภาพแวดล้อมนี้** (ไม่มี redis-server ในแซนด์บ็อกซ์)
-  สิ่งที่ยืนยันได้แล้วคือ: TTL, การอ่าน/เขียน JSON, การถอยกลับพร้อมเหตุผลเมื่อ redis ใช้ไม่ได้
+  — รันกับ `redis-server` จริงแล้ว: frame round-trip, frame หมดอายุตาม TTL, fail-closed
+  เมื่อเซิร์ฟเวอร์ตาย และการเลื่อนขั้น leader ภายใน ≤4 วินาทีเมื่อฆ่า leader
+  (`tests/test_redis_real.py` + RUNBOOK §12.6.3) ยังเป็น lease แบบ best-effort:
+  ไม่ใช่ consensus — Redis ที่ failover เองอาจทำให้มี leader สองตัวช่วงสั้น ๆ
 - replica เสิร์ฟเฟรมที่อาจเก่าได้ถึง `state_ttl_seconds` (ค่าเริ่มต้น 10s) — payload บอก
   `frame_age_seconds` ทุกครั้ง ไม่ใช่ปล่อยให้เข้าใจว่าเป็นข้อมูลสด
 - leader ตาย → เฟรมหมดอายุเองใน 10s และ lease หมดอายุใน 30s; โปรเซสที่รออยู่จะ **ยึดงานต่อเอง**

@@ -84,6 +84,9 @@ def create_app(runtime: TradingRuntime | None = None) -> FastAPI:
     # The health endpoint lives on the runtime; hand it what the limiter ended up with
     # so the answer comes from the same object that enforces the limit.
     runtime.ratelimit_status = store_status
+    # Health asks the limiter itself how often it had to improvise, so an outage
+    # cannot hide behind the configuration chosen at boot.
+    runtime.ratelimit = limiter
     app.state.ratelimit = limiter
     trusted = parse_networks(settings.trusted_proxies)
     app.add_middleware(RateLimitMiddleware, limiter=limiter, settings=settings,
