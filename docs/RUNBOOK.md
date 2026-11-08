@@ -497,6 +497,54 @@ fakeredis เป็น implementation คนละตัว การอ้า�
 - socket timeout 2 วินาที (ค่าในโค้ด) — Redis ที่ "ช้าแต่ไม่ตาย" จะหน่วงคำขอได้ถึง 2 วินาที
   ก่อนถอยไป bucket ในเครื่อง ยังไม่มีการทดสอบกรณีนี้
 
+## 12.7 เพดานจำนวน WebSocket ที่เปิดพร้อมกัน
+
+HTTP ถูกจำกัดเป็น "กี่ครั้งต่อนาที" แต่ socket คือคำขอเดียวที่กิน CPU ไปเรื่อย ๆ จนกว่าจะปิด
+จึงต้องจำกัดคนละแบบ: **เปิดพร้อมกันได้กี่ตัว**
+
+```yaml
+# config/app.yaml
+ws:
+  max_connections_per_user: 4     # ต่อบัญชี (ไม่มี token → ต่อ IP)
+  max_connections_total: 64       # ทั้ง deployment
+  lease_ttl_seconds: 45           # slot หมดอายุเองถ้าไม่มีใครต่ออายุ
+```
+
+store มาจากบล็อก `ratelimit` อันเดียวกัน (memory / sqlite / redis) ใช้ prefix `no7:ws`
+→ ตั้ง `NO7_RATELIMIT_STORE=redis` ครั้งเดียว ได้ทั้งโควตา HTTP และโควตา socket ที่แชร์ข้ามเครื่อง
+
+```bash
+curl -s localhost:8000/api/system/health | jq .websockets
+# {"enforced":true,"store":"redis","shared":true,"max_per_user":4,"max_total":64,
+#  "lease_ttl_seconds":45,"open":3,"granted":12,"refused":2,"degraded":0}
+```
+
+**ทำไมเป็น lease ไม่ใช่ตัวนับ**: worker ที่ถูก SIGKILL/OOM ไม่มีโอกาสรัน "ลดตัวนับ" — ถ้าใช้
+ตัวนับ ทุกครั้งที่ worker ตายคือ capacity หายถาวรจนกว่าจะรีสตาร์ต lease แก้ด้วยเวลา:
+socket ที่ยังสตรีมอยู่จะต่ออายุ lease เรื่อย ๆ ส่วน socket ของโปรเซสที่ตายไปแล้วจะหมดอายุเอง
+ราคาที่จ่ายคือ "slot คืนช้าได้ถึง `lease_ttl_seconds`" ซึ่งยอมรับได้มากกว่าการสูญ capacity ถาวร
+
+**client เห็นอะไร**: โดนปฏิเสธ = ได้ 1 เฟรมบอกเหตุผลแล้วปิดด้วย code **4429**;
+token หมดอายุระหว่างสตรีม = ปิดด้วย **4401** (socket ต้องไม่อยู่นานกว่าสิทธิ์ที่เปิดมัน)
+
+### 12.7.1 ผลที่วัดได้จริง (2 worker + redis จริง)
+
+| ทดสอบ | ผล |
+|---|---|
+| health ทั้งสอง worker | `{"store":"redis","shared":true,"max_per_user":4}` |
+| เปิด 3 socket ที่ `:8061` แล้วอีก 3 ที่ `:8062` | เปิดได้ **4** (A=3 + B=1) ตัวที่ 5-6 ถูกปฏิเสธ `4429` พร้อมข้อความ `already holds 4 of 4 live sockets` |
+| ปิด socket ทั้งหมด | `open: 0` และไม่มีคีย์ `no7:ws*` ค้างใน Redis |
+| `kill -9` worker A ขณะถือ socket | lease ยังอยู่ (`zcard = 1`, key TTL 88s) แล้วหายเองตามเวลา — ไม่มีใครรัน release เลย |
+
+### 12.7.2 ปรับเพดานยังไง
+
+- ผู้ใช้หนึ่งคนเปิดได้กี่แท็บคือ `max_connections_per_user` (dashboard ใช้ 1 socket/แท็บ)
+  ตั้งต่ำเกินไป = เปิดสองแท็บแล้วพัง; 3-5 เป็นค่าที่ใช้งานได้จริง
+- `max_connections_total` ควรตั้งจากจำนวน thread ที่เครื่องรับไหว: ทุก socket ใช้ 1 thread
+  ตอนสร้าง payload (`asyncio.to_thread`) — เริ่มที่ 64 แล้วดู CPU
+- ตั้ง `0` = ไม่จำกัด (ไม่แนะนำ แต่รองรับไว้สำหรับ deployment ที่มี proxy จำกัดให้แล้ว)
+- `lease_ttl_seconds` ต่ำ = คืน slot เร็วแต่ต่ออายุถี่ขึ้น; อย่าตั้งต่ำกว่า ~15 วินาที
+
 ## 13. ความปลอดภัย — TLS, reverse proxy และ perimeter
 
 ### 13.1 เปิด HTTPS (เลือกอย่างใดอย่างหนึ่ง)

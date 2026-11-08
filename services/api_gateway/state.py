@@ -1035,6 +1035,7 @@ class TradingRuntime:
             "notify": self.notifier.status(),
             "security": self._security_status(),
             "ratelimit": self._ratelimit_status(),
+            "websockets": self._websocket_status(),
             "cluster": {**self.shared_status, "role": role,
                         "shared_health": self.shared.healthy()},
             "runtime_lease": {**self.lease,
@@ -1078,6 +1079,23 @@ class TradingRuntime:
             out["warning"] = ("store=memory: every worker process keeps its own budget, "
                               "so --workers N multiplies the configured limit. Use "
                               "store: sqlite (one host) or store: redis (several hosts).")
+        return out
+
+    def _websocket_status(self) -> dict[str, Any]:
+        """Live socket capacity — the limit, how much of it is in use, and where it is kept.
+
+        A WebSocket is not covered by the per-minute HTTP limits: it is one request
+        that keeps costing CPU. This block exists so an operator can see the cap is
+        real (and shared) instead of assuming it.
+        """
+        quota = getattr(self, "ws_quota", None)
+        if quota is None:
+            return {"enforced": False,
+                    "reason": "no quota attached to this app (older boot path)"}
+        out = {"enforced": True, **quota.status()}
+        boot = dict(getattr(self, "ws_store_status", {}) or {})
+        if boot.get("reason"):
+            out["store_reason"] = boot["reason"]
         return out
 
     def _security_status(self) -> dict[str, Any]:

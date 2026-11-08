@@ -194,6 +194,19 @@ payload เต็ม:
 `account, positions, risk_state, limits, signal, gate, analysis, forecast, model,
 training, reconcile, alerts, errors, ticker, mode, feed, virtual_time`
 
+**เพดานจำนวน socket** (รอบ 26 — ก่อนหน้านี้ไม่มีเลย): socket คือคำขอเดียวที่กิน CPU ต่อเนื่อง
+จึงจำกัดแบบ *พร้อมกันกี่ตัว* ไม่ใช่กี่ครั้งต่อนาที — `ws.max_connections_per_user` (default 4)
+และ `ws.max_connections_total` (default 64) นับรวมทุก worker เมื่อใช้ store แบบ sqlite/redis
+
+| close code | ความหมาย |
+|---|---|
+| `4401` | ไม่มี token / token ใช้ไม่ได้ **หรือ token หมดอายุระหว่างสตรีม** (socket ต้องไม่อยู่นานกว่าสิทธิ์ที่เปิดมัน) |
+| `4429` | เกินเพดาน — ก่อนปิดจะส่ง 1 เฟรม `{"type":"error","code":4429,"error":...,"detail":"...holds 4 of 4 live sockets..."}` |
+
+slot เป็น **lease ที่มีอายุ** (`ws.lease_ttl_seconds`, default 45) ไม่ใช่ตัวนับ: worker ที่ถูก
+SIGKILL ไม่มีโอกาสคืน slot — slot จึงคืนเองเมื่อ lease หมดอายุ ดูสถานะได้ที่
+`/api/system/health → websockets` (`open`, `granted`, `refused`, `degraded`, `shared`)
+
 ตัวเลขที่ dashboard อ่านตรง ๆ: `risk_state.daily_pnl_pct`, `limits.max_daily_loss_pct`,
 `signal.plan.{entry,sl,tp1..3,sl_points,lot,reward_risk_net,partials[]}`,
 `forecast.horizons[].{p_up,p_down,p_sideways,p10_price,p90_price,p_tp_before_sl}`,

@@ -165,6 +165,14 @@ cluster:
 # at least this often so those panels never freeze.
 ws:
   full_snapshot_seconds: 5
+  # A socket is one request that then costs CPU for as long as it stays open, so it
+  # gets a concurrency cap rather than a per-minute one. Slots are leases that expire:
+  # a worker killed mid-stream releases its slot after lease_ttl_seconds instead of
+  # leaking it until restart. The store comes from the `ratelimit` block below, so
+  # sqlite/redis make the cap shared across workers/hosts (health says which).
+  max_connections_per_user: 4
+  max_connections_total: 64
+  lease_ttl_seconds: 45
 
 # Per-identity limits (token buckets). Separate from the login throttle: this is
 # about capacity, not credentials. `default` covers GETs and everything unlisted.

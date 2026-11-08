@@ -92,7 +92,11 @@
     header `x-ratelimit-degraded` (เลือกทางนี้แทนการปล่อยผ่านโล่ง ๆ หรือทำให้ระบบล่ม)
   - ตัวนับใช้เวลาของแอป (ไม่ใช่ Redis TIME) → ต้องมี NTP; clock skew ทำให้ refill คลาดเคลื่อน
     ไม่ทำให้ token หายหรือเพิ่ม
-  - ยังไม่มี quota ต่อ IP แบบ distributed สำหรับ WebSocket (จำกัดเฉพาะ HTTP) และไม่มี WAF
+  - **WebSocket มีเพดานแล้ว (รอบ 26)**: จำกัดจำนวน socket ที่เปิดพร้อมกันต่อผู้ใช้ (default 4)
+    และรวมทั้งระบบ (default 64) ใช้ store เดียวกับ rate limit → sqlite/redis = แชร์ข้ามโปรเซส
+    slot เป็น lease ที่หมดอายุเอง (default 45 วินาที) worker ที่ถูก SIGKILL จึงไม่ทำให้ slot
+    หายถาวร · พิสูจน์กับ redis จริง 2 โปรเซส: เปิดได้ 4 ตัว (A=3 + B=1) ตัวที่ 5-6 ถูกปฏิเสธ 4429
+    **ยังไม่มี**: WAF, quota ตามแบนด์วิดท์/ข้อความ, และยังไม่ได้จำกัด subprotocol/origin ของ socket
 - ตัว runtime เอง (simulator, scheduler, websocket hub) ออกแบบสำหรับ **โปรเซสเดียว**
   ดังนั้น `--workers N` ยังไม่ใช่โหมดที่รองรับ: store แบบ sqlite เป็นการวางพื้นฐานให้โควตาร่วม
   ไม่ใช่การประกาศว่า multi-worker พร้อมใช้
