@@ -21,7 +21,7 @@ if [ -x "${BIN_DIR}/redis-server" ]; then
   exit 0
 fi
 
-if [ -x .venv/bin/python ]; then PY="${PYTHON:-.venv/bin/python}"; else PY="${PYTHON:-python3}"; fi
+source scripts/python_bin.sh
 WORK="$(mktemp -d)"
 trap 'rm -rf "${WORK}"' EXIT
 

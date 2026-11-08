@@ -56,7 +56,8 @@ cd apps/web-dashboard && NO7_BACKEND=http://127.0.0.1:8000 npm run dev   # :5173
 
 # tests (fakeredis/ruff/pyarrow อยู่ใน requirements-dev.txt; ไม่ลงก็แค่ skip)
 python3 -m pip install -r requirements-dev.txt
-python3 -m pytest tests/ -q
+./scripts/test.sh                 # = pytest tests/ -q แต่เลือกล่ามจาก .venv ให้เอง
+./scripts/dev_check.sh            # เกตเต็ม (เหมือนที่ CI รันทุก PR)
 
 # ดู report ย้อนหลังใน DB
 sqlite3 storage/db/no7.sqlite3 "SELECT id,symbol,json_extract(payload,'$.metrics.trades') FROM backtests ORDER BY created_at DESC LIMIT 5;"

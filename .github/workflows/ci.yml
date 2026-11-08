@@ -1,0 +1,56 @@
+# The same gate a developer runs locally (./scripts/dev_check.sh), run again on every
+# pull request. With more than one team pushing to this repository, two branches that
+# each pass on their own can still break once they are both on main — this is what
+# catches that, before anyone pulls a broken main.
+name: gate
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+# A new push to the same branch makes the previous run pointless.
+concurrency:
+  group: gate-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  gate:
+    name: ruff + dashboard bundle + tests
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.11"          # the floor requirements.txt declares
+          cache: pip
+          cache-dependency-path: |
+            requirements.txt
+            requirements-dev.txt
+
+      - uses: actions/setup-node@v5
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: apps/web-dashboard/package-lock.json
+
+      - name: Install Python dependencies
+        run: python -m pip install --disable-pip-version-check -r requirements-dev.txt
+
+      - name: Build the dashboard
+        # tests/test_pwa.py serves real files out of apps/web-dashboard/dist
+        run: npm ci && npm run build
+        working-directory: apps/web-dashboard
+
+      - name: Gate
+        # PYTHON= is how scripts/python_bin.sh is told to use this runner's
+        # interpreter: CI installs dependencies globally, there is no .venv here.
+        env:
+          PYTHON: python
+        run: ./scripts/dev_check.sh
+
+      - name: Dashboard bundle size
+        if: always()
+        run: du -sh apps/web-dashboard/dist && find apps/web-dashboard/dist -type f | wc -l

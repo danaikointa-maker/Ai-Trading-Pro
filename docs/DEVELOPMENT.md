@@ -11,7 +11,7 @@
 ```bash
 ./scripts/dev_setup.sh      # venv + deps + .env + dashboard bundle (ครั้งแรก ~2 นาที)
 ./scripts/run.sh            # http://127.0.0.1:8000  →  demo@no7.ai / no7demo1234
-./scripts/dev_check.sh      # เกตก่อน commit: ruff + 410 tests (~3 นาที)
+./scripts/dev_check.sh      # เกตก่อน commit: ruff + 448 tests (~1–3 นาที)
 ```
 
 ทั้งสามคำสั่งรันซ้ำได้เสมอ ไม่พังของเดิม
@@ -63,6 +63,10 @@ curl -s -H "Authorization: Bearer $TOK" localhost:8000/api/system/health | pytho
 
 ข้อควรรู้สองข้อ:
 
+- **สคริปต์เลือกล่าม Python ให้เอง** — `run.sh` / `test.sh` / `dev_check.sh` / `train.sh`
+  source `scripts/python_bin.sh` ซึ่งไล่ลำดับ `$PYTHON` → `.venv/bin/python` → `$VIRTUAL_ENV`
+  → `python3` ใน PATH (ตอนรัน `run.sh` จะพิมพ์ `python: …` บอกว่าใช้ตัวไหน)
+  บังคับเองได้ด้วย `PYTHON=/path/to/python ./scripts/run.sh` — CI ใช้ช่องทางนี้
 - **`--no-proxy-headers` ต้องมีเสมอ** — ถ้าไม่ใส่ uvicorn จะเขียน client IP/scheme ทับตาม
   `X-Forwarded-*` ก่อนที่แอปจะได้ตัดสินใจ ทำให้ policy ใน `netutil.py` ถูกข้าม (`scripts/run.sh` ใส่ให้แล้ว)
 - **runtime เป็น single-writer** — โพรเซสที่สองจะขึ้นเป็น `replica` และรอ lease ของตัวแรก
@@ -79,16 +83,21 @@ curl -s -H "Authorization: Bearer $TOK" localhost:8000/api/system/health | pytho
 ./scripts/dev_check.sh tests/test_api.py -x
 ```
 
-ตัวเลขอ้างอิงบนเครื่องพัฒนา (Python 3.11, 2 cores):
+ตัวเลขอ้างอิงบนเครื่องพัฒนา (Python 3.11, 2 cores) — ช่วงเวลาคือ *รันแรกหลังล้างเครื่อง*
+(cache เย็น, ต้องโหลด sklearn/lightgbm จากดิสก์) ถึง *รันถัดไป* (cache อุ่น):
 
 | ชุด | จำนวน | เวลา |
 |---|---|---|
-| ทั้งหมด (`pytest -q`) | 410 | ~2 นาที 50 วินาที |
-| ตัดสองไฟล์ที่หนักที่สุด `--ignore=tests/test_backtest_engine.py --ignore=tests/test_model_validation.py` | 382 | ~55 วินาที |
-| `tests/test_backtest_engine.py` | 11 | ~40 วินาที |
-| `tests/test_model_validation.py` | 17 | ~35 วินาที |
+| ทั้งหมด (`pytest -q`) | 448 (442 pass + 6 skip) | ~2 นาที 30 วินาที → **~50 วินาที** |
+| ตัดสองไฟล์ที่หนักที่สุด `--ignore=tests/test_backtest_engine.py --ignore=tests/test_model_validation.py` | 420 | ~55 → **~27** วินาที |
+| `tests/test_backtest_engine.py` + `tests/test_model_validation.py` | 28 | ~75 → **~17** วินาที |
 
-ลูปที่แนะนำ: แก้ → ไฟล์เทสต์ที่เกี่ยวข้อง → ชุด 382 → ชุดเต็มก่อน commit
+(6 ที่ skip คือเทสต์สคริปต์ที่ต้องมี `bash`/`.venv` ซึ่งไม่มีในบางสภาพแวดล้อม)
+
+ลูปที่แนะนำ: แก้ → ไฟล์เทสต์ที่เกี่ยวข้อง → ชุดที่ตัดสองไฟล์หนัก → ชุดเต็มก่อน commit
+
+**CI รันเกตตัวเดียวกันนี้ให้อัตโนมัติทุก PR** (`.github/workflows/ci.yml` → `./scripts/dev_check.sh`)
+ถ้าเครื่องคุณลืมรัน CI จะจับให้ และถ้าอีกทีม merge อะไรที่ชนกับของเรา CI จะแดงตั้งแต่ใน PR
 
 **เทสต์ไม่เคยแตะข้อมูลจริง** — `tests/conftest.py` ชี้ `NO7_DB_PATH`/`NO7_DATA_DIR`/… ไปที่ temp dir
 และ fixture `settings` จะ assert ว่า path มีคำว่า `no7-tests-` อยู่ ถ้าเขียนเทสต์ใหม่ที่ต้องตั้ง env
@@ -123,6 +132,7 @@ curl -s -H "Authorization: Bearer $TOK" localhost:8000/api/system/health | pytho
 | EA bridge (MQL5 poll) | `services/bridge/`, `bridge/No7BridgeEA.mq5` | `tests/test_bridge.py` |
 | โบรกเกอร์ / spec / paper fill | `integrations/brokers/` | `tests/test_currency.py`, `tests/test_api.py` |
 | หน้าจอ dashboard | `apps/web-dashboard/src/views/*.vue`, `router.js` | `tests/test_pwa.py` (เสิร์ฟไฟล์จริงจาก `dist/`) |
+| สคริปต์ใน `scripts/` | `scripts/*.sh`, `scripts/python_bin.sh` | `tests/test_scripts.py` |
 | ค่าคอนฟิก / env | `config/*.yaml`, `packages/shared_schemas/settings.py` | `tests/test_api.py::…health`, `tests/test_security.py` |
 
 ---
@@ -203,6 +213,7 @@ curl -s -H "Authorization: Bearer $TOK" localhost:8000/api/system/health | pytho
 | ตั้ง redis แล้วกลายเป็น memory | ต่อ Redis ไม่ได้ → ถอยไป sqlite ถ้ามี `store_path` ไม่งั้น memory และบอกเหตุผลใน health |
 | service worker ไม่อัปเดตตอน dev | SW ทำงานเฉพาะ build โปรดักชัน (`npm run build`) ตั้งใจให้เป็นแบบนั้น |
 | `test_spa_deep_links_are_served` 404 | ยังไม่ได้ `npm run build` (ไม่มี `apps/web-dashboard/dist`) |
+| สคริปต์ใหม่ตาย `No module named uvicorn/pytest` | เขียน `python3 -m …` ตรง ๆ = ล่ามของระบบที่ไม่มี dependency — ต้อง `source scripts/python_bin.sh` แล้วใช้ `"${PY}"` (`tests/test_scripts.py` จับให้) |
 | ออร์เดอร์ถูกปฏิเสธ 400 | ถูกต้องแล้ว — อ่าน `detail.blockers` (คะแนนต่ำ/ข่าว/spread/เพดาน) |
 | pandas เตือน/พังเรื่องเวลา | pandas 3 ใช้ `datetime64[us]` และ `.ffill()` (ไม่ใช่ `fillna(method=...)`) |
 | ผลเทสต์เพี้ยนเมื่อรันหลายโพรเซส | multiprocessing แบบ spawn import โมดูลซ้ำ — โค้ดเริ่ม/หยุดต้องอยู่ใต้ `if __name__ == "__main__"` |
@@ -217,6 +228,27 @@ curl -s -H "Authorization: Bearer $TOK" localhost:8000/api/system/health | pytho
 - ก่อนเปิด PR: `./scripts/dev_check.sh` ต้องเขียว
 - หลัง PR ถูก merge บน GitHub: `git fetch origin main && git reset --mixed FETCH_HEAD` — **ห้าม force-push**
 - ห้าม commit: `.env`, `storage/*`, `dist/`, `node_modules/`, `.venv/`, `.tools/` (อยู่ใน `.gitignore` แล้ว)
+
+### 8.1 เมื่อมีมากกว่าหนึ่งทีมในรีโปเดียวกัน
+
+git รวมงานตาม *เนื้อหาไฟล์* ไม่ใช่ตามคน — คนละไฟล์/คนละบรรทัดจะรวมให้เอง บรรทัดเดียวกันจะขึ้น
+conflict ให้แก้ (ไม่มีการเขียนทับเงียบ ๆ) ที่ git **ไม่** เตือนคือ "ทำงานซ้ำกัน" และ
+"แยกกันผ่าน แต่รวมกันแล้วพัง" — สามอย่างนี้กันไว้แล้ว:
+
+| เครื่องมือ | ทำอะไร |
+|---|---|
+| `.github/workflows/ci.yml` | รัน `./scripts/dev_check.sh` ทุก PR และทุก push เข้า `main` → จับ "รวมแล้วพัง" ก่อนถึง main |
+| `.github/CODEOWNERS` | GitHub ขอรีวิวจากเจ้าของพาธอัตโนมัติ (แก้ไฟล์นี้เพื่อแบ่งอาณาเขตเมื่อทีมที่สองเริ่ม) |
+| `.github/pull_request_template.md` | บังคับให้บอก "พิสูจน์ยังไง" และ **ติ๊กไฟล์กลางที่แตะ** |
+
+ธรรมเนียมที่ลด conflict ได้มากที่สุด:
+
+1. **รอบสั้น 1 PR = 1 เรื่อง** — สาขาที่อยู่นานคือสาขาที่ชน
+2. **merge `main` ล่าสุดเข้าสาขาก่อนขอรีวิวเสมอ** (`git fetch origin main && git merge origin/main`)
+3. **เพิ่มไฟล์ใหม่ดีกว่าแก้ไฟล์กลาง** — route module ใหม่ + ไฟล์เทสต์ใหม่ แทนการยัดลงไฟล์เดิม
+4. บอกอีกทีมก่อนแตะ: `services/api_gateway/app.py` (ลำดับ middleware), `config/*.yaml`,
+   `tests/conftest.py`, `requirements*.txt`, schema ของ SQLite — พวกนี้ "merge ผ่านแต่พัง" ได้
+5. ตัวเลขในเอกสาร (จำนวนเทสต์ ฯลฯ) ล้าสมัยทันทีที่อีกทีม merge — อัปเดตเมื่อเห็นว่าไม่ตรง
 
 ---
 

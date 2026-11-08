@@ -1,5 +1,7 @@
 # No7 AI Trading Pro — V1
 
+[![gate](https://github.com/danaikointa-maker/TradeAi/actions/workflows/ci.yml/badge.svg)](https://github.com/danaikointa-maker/TradeAi/actions/workflows/ci.yml)
+
 แพลตฟอร์มเทรดส่วนตัวแบบ **Local-First + Hybrid Quant AI + Multi-Broker**
 รวมกราฟราคาแบบ TradingView, การวิเคราะห์โครงสร้างตลาด, แนวรับ–แนวต้านแบบ confluence,
 การพยากรณ์ราคาเป็นช่วงความน่าจะเป็น, สัญญาณ Buy/Sell พร้อม SL/TP, Risk Engine ที่ยับยั้งได้ทุกคำสั่ง
@@ -118,9 +120,11 @@ storage/                   db / datasets / models / backtests / logs (git-ignore
 ## ทดสอบ
 
 ```bash
-./scripts/dev_check.sh           # เกตเต็ม: ruff + dashboard bundle + 410 tests (~3 นาที)
-python3 -m pytest tests/ -q      # 410 tests: maths, risk gate, zones, forecast shape, HTTP contract
+./scripts/dev_check.sh           # เกตเต็ม: ruff + dashboard bundle + 448 tests (~1–3 นาที)
+./scripts/test.sh                # เฉพาะ pytest (เลือก .venv ให้เอง)
 ```
+
+เกตตัวเดียวกันนี้ถูกรันอัตโนมัติทุก pull request ผ่าน GitHub Actions (`.github/workflows/ci.yml`)
 
 ## ข้อจำกัดที่ต้องอ่านก่อนใช้เงินจริง
 
