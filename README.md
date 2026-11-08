@@ -120,7 +120,7 @@ storage/                   db / datasets / models / backtests / logs (git-ignore
 ## ทดสอบ
 
 ```bash
-./scripts/dev_check.sh           # เกตเต็ม: ruff + dashboard bundle + 468 tests (~1–3 นาที)
+./scripts/dev_check.sh           # เกตเต็ม: ruff + dashboard bundle + 485 tests (~2 นาที)
 ./scripts/test.sh                # เฉพาะ pytest (เลือก .venv ให้เอง)
 ```
 

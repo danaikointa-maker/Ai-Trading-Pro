@@ -11,7 +11,7 @@
 ```bash
 ./scripts/dev_setup.sh      # venv + deps + .env + dashboard bundle (ครั้งแรก ~2 นาที)
 ./scripts/run.sh            # http://127.0.0.1:8000  →  demo@no7.ai / no7demo1234
-./scripts/dev_check.sh      # เกตก่อน commit: ruff + 468 tests (~1–3 นาที)
+./scripts/dev_check.sh      # เกตก่อน commit: ruff + 485 tests (~2 นาที)
 ```
 
 ทั้งสามคำสั่งรันซ้ำได้เสมอ ไม่พังของเดิม
@@ -88,7 +88,7 @@ curl -s -H "Authorization: Bearer $TOK" localhost:8000/api/system/health | pytho
 
 | ชุด | จำนวน | เวลา |
 |---|---|---|
-| ทั้งหมด (`pytest -q`) | 468 (462 pass + 6 skip) | ~2 นาที 30 วินาที → **~50–70 วินาที** |
+| ทั้งหมด (`pytest -q`) | 485 (479 pass + 6 skip) | **~2 นาที** (รวม backtest ที่ใช้โมเดล 3 รัน ≈ 50 วินาที) |
 | ตัดสองไฟล์ที่หนักที่สุด `--ignore=tests/test_backtest_engine.py --ignore=tests/test_model_validation.py` | 420 | ~55 → **~27** วินาที |
 | `tests/test_backtest_engine.py` + `tests/test_model_validation.py` | 28 | ~75 → **~17** วินาที |
 
@@ -283,11 +283,40 @@ CI มี step ที่ **fail ถ้าเทสต์ชุดนี้ถู
 สิ่งที่ยังไม่มีคือ **ไฟล์จริง** — ใส่ CSV จาก MT5 เข้าไปแล้ววัดด้วย `scripts/evaluate_dataset.py`
 ตัวเลขทุกตัวในระบบตอนนี้มาจาก seed 7 จึงพิสูจน์ได้แค่ว่าไปป์ไลน์ถูก ไม่ได้บอกว่ามี edge
 
-### 9.3 ให้ backtest ใช้ edge ของโมเดลจริง
+### 9.3 ให้ backtest ใช้ edge ของโมเดลจริง ✅ เสร็จแล้ว (รอบ 25)
 
-วันนี้ backtest ใช้ rule proxy ไม่ได้เรียกโมเดล → วัด "กฎ + risk" ไม่ได้วัดโมเดล
-งานคือเสียบ forecast เข้า decision loop ของ `services/backtest_engine/` แบบไม่มี look-ahead
-(ใช้เฉพาะโมเดลที่ถูกฝึกจากข้อมูลก่อนหน้าจุดนั้น) แล้วรายงานเทียบกับ baseline เดิม
+```bash
+# เทียบ rule proxy กับโมเดลบนแท่งชุดเดียวกัน (เท่ากันทุกอย่างยกเว้น forecast)
+python scripts/model_edge_report.py --bars 20000 --json /tmp/edge.json
+python scripts/model_edge_report.py --symbol XAUUSD --dataset     # ข้อมูลที่ import แล้ว
+# หรือยิง API: POST /api/backtests {"symbol":"XAUUSD","bars":20000,"forecast_source":"model"}
+```
+
+`services/backtest_engine/model_edge.py` ตัดช่วงตัดสินใจเป็น segment แล้วฝึกโมเดลหนึ่งตัวต่อ
+segment ด้วย **expanding window ที่ purge แล้ว**: label ของแถว j อ่านราคาที่แท่ง j+hb
+ดังนั้นแถวที่ใช้ฝึกต้องจบก่อน segment เริ่มอย่างน้อย hb แท่ง (30 นาที = 6 แท่ง M5)
+ค่า NaN เติมด้วย median ของ *แถวที่ใช้ฝึก* ไม่ใช่ของทั้งเฟรม (median ทั้งเฟรมคือข้อมูลอนาคต)
+และ segment จะถูกทำเครื่องหมาย `calibrated` ก็ต่อเมื่อ fold ก่อนหน้า (ที่ label จบไปแล้วจริง ๆ)
+ผ่านเกณฑ์ directional accuracy — segment แรกจึงรันแบบ "ยังไม่ผ่านการตรวจ" เสมอ
+ความแม่นใน report เป็น hindsight สำหรับอ่านอย่างเดียว ไม่เคยป้อนกลับเข้าการตัดสินใจ
+
+**ผลที่ได้จริง (ฟีดจำลอง 8,000 แท่ง)**: โมเดล 0.530 vs rule proxy 0.578 → *ไม่มี edge*
+นี่คือคำตอบที่ถูกต้องสำหรับข้อมูลสังเคราะห์ (random walk + trend persistence เข้าทาง proxy)
+คำถามจริงต้องวัดบนข้อมูลจริงใน §9.2
+
+**บั๊กที่เจอเพราะทำข้อนี้** (แก้แล้วทั้งหมด + มีเทสต์กันถอยหลัง ใน `tests/test_model_edge.py`):
+1. `trades_this_week` ถูกป้อนด้วยจำนวนไม้ *ของวัน* → เพดานไม้รายสัปดาห์ไม่เคยทำงานใน backtest
+   (ตัวแปร `trades_week` มีอยู่แต่ไม่เคยถูกใช้และไม่เคยรีเซ็ต)
+2. `weekly_pnl` = กำไรทั้งรัน ไม่ใช่กำไรของสัปดาห์ → เกต weekly loss วัดหน้าต่างผิด
+   และยิ่งรันยาวยิ่งผิดมาก
+3. backtest ตัดวันที่เที่ยงคืน **UTC** แต่ระบบจริงตัดตาม `daily_reset_timezone`
+   (default Asia/Bangkok) → ลิมิตรายวันคนละหน้าต่างกับโปรดักชัน 7 ชั่วโมง
+4. `evaluate_gate` ไม่ได้ส่ง `now` → cooldown หลังขาดทุนติดกันถูกเทียบกับ **นาฬิกาจริง**
+   แทนเวลาในแท่ง: backtest ข้อมูลย้อนหลังจึงไม่เคยติด cooldown เลย
+
+ยังไม่ครอบคลุม: โมเดลยังไม่ถูกใช้เลือก *ทิศทาง* (ทิศทางยังมาจากโครงสร้างราคา) — โมเดลมีผ่าน
+`p_up` → `p_tp_before_sl` → คะแนน + เพดานความน่าจะเป็นเท่านั้น; ยังไม่มี Monte-Carlo slippage
+และยังไม่ได้วัดบนข้อมูลจริง
 
 ### 9.4 EA จริงบน MT5
 
