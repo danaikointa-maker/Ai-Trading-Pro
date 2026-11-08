@@ -87,6 +87,17 @@ class Settings:
             self.root = (REPO_ROOT / self.root).resolve()
         self.app = self._read("app.yaml")
         self.brokers = self._read("brokers.yaml")
+        if _as_bool(os.environ.get("NO7_LOCAL_SIMULATION", "false")):
+            # Local development must never initialise terminal or bridge adapters.
+            self.brokers["brokers"] = [
+                p for p in self.brokers.get("brokers", [])
+                if p.get("adapter", "simulated_mt5") in ("paper", "simulated_mt5")
+            ]
+            profiles = self.brokers["brokers"]
+            if not profiles:
+                raise ValueError("local simulation requires at least one paper broker")
+            if self.brokers.get("default_broker") not in {p["id"] for p in profiles}:
+                self.brokers["default_broker"] = profiles[0]["id"]
         self.risk = self._read("risk.yaml")
         self.strategies = self._read("strategies.yaml")
         self.paths = self._resolve_paths()

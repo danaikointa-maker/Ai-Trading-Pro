@@ -172,6 +172,10 @@ def build_bridge_relay(settings: Settings, audit=None, db=None) -> BridgeRelay:
         poll_interval_ms=int(cfg.get("poll_interval_ms", 1000)),
         order_timeout_seconds=float(cfg.get("order_timeout_seconds", 20)),
         enabled=bool(cfg.get("enabled", False)),
+        read_only=bool(cfg.get("read_only", True)),
+        demo_identities={str(row["id"]): {"login": row.get("expected_login"),
+                                          "server": row.get("expected_server")}
+                         for row in (cfg.get("accounts") or []) if row.get("id")},
         db=db,
     )
     if audit is not None:
@@ -224,7 +228,8 @@ class TradingRuntime:
         self.gateway = ExecutionGateway(self.settings, self.db)
         self.notifier = Notifier(self.db, min_score=float(self.settings.strategy_cfg()
                                                           .get("scoring", {}).get("thresholds", {}).get("weak", 50)),
-                                 cfg=self.settings.alerts)
+                                 cfg=self.settings.alerts, background=True,
+                                 queue_size=int(self.settings.alerts.get("queue_size", 100)))
         self.trainer = ForecastTrainer(self.settings)
 
         # --- runtime state
@@ -393,6 +398,9 @@ class TradingRuntime:
             self._thread.join(timeout=3)
         if self._standby:
             self._standby.join(timeout=2)
+        if not self.notifier.close(timeout=3.0):
+            self._log_error("notify:shutdown", RuntimeError(
+                "notification worker is still draining; outbound delivery is not confirmed"))
         try:
             self.shared.close()
         except Exception:  # noqa: BLE001 - shutdown must not raise
@@ -524,8 +532,9 @@ class TradingRuntime:
             self._log_error("account", exc)
         try:
             risk_state = self.risk.state(self.adapter, now=now)
-        except Exception:  # noqa: BLE001
-            risk_state = default_risk_state(equity)
+        except Exception as exc:  # noqa: BLE001
+            self._log_error("risk_state", exc)
+            risk_state = self._unavailable_risk_state(equity)
 
         for symbol in symbols:
             try:
@@ -741,6 +750,12 @@ class TradingRuntime:
 
         try:
             risk_state = self.risk.state(self.adapter, now=now)
+        except Exception as exc:  # noqa: BLE001 - no order without authoritative risk state
+            self._log_error("risk_state:execute", exc)
+            return {"ok": False, "error": "risk state unavailable — new orders are blocked",
+                    "blockers": ["risk state unavailable"]}
+
+        try:
             tick = self.market.ticker(signal.symbol)
             spec = self.adapter.symbol_spec(signal.symbol)
             with self.lock:
@@ -937,11 +952,20 @@ class TradingRuntime:
         except Exception as exc:  # noqa: BLE001
             return {"error": str(exc), "broker_id": self.adapter.id}
 
+    @staticmethod
+    def _unavailable_risk_state(equity: float = 0.0) -> Any:
+        # Transient fail-closed view, not a persistent kill-switch reset or write.
+        return default_risk_state(equity).model_copy(update={
+            "kill_switch_active": True,
+            "kill_switch_reason": "risk state unavailable — new orders are blocked",
+        })
+
     def risk_state(self) -> Any:
         try:
             return self.risk.state(self.adapter, now=self.market.now())
-        except Exception:  # noqa: BLE001
-            return default_risk_state(0.0)
+        except Exception as exc:  # noqa: BLE001
+            self._log_error("risk_state", exc)
+            return self._unavailable_risk_state()
 
     def live_payload(self, light: bool = False) -> dict[str, Any]:
         if self.replica:

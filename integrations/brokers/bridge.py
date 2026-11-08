@@ -232,7 +232,9 @@ class BridgeBroker(BrokerAdapter):
 
     def positions(self) -> list[Position]:
         """The EA's snapshot *is* the position list — replaced, never merged."""
-        rows = self._snapshot().get("positions") or []
+        rows = self._snapshot().get("positions")
+        if not isinstance(rows, list):
+            raise BrokerError("bridge snapshot has no valid positions list")
         out: list[Position] = []
         for row in rows:
             direction = Direction.up if str(row.get("direction", "buy")).lower() in (

@@ -59,9 +59,14 @@ class BridgeRelay:
                  command_ttl_seconds: float = 30.0, ack_grace_seconds: float = 20.0,
                  max_pending: int = 50, poll_interval_ms: int = 1000,
                  order_timeout_seconds: float = 20.0, enabled: bool = True,
-                 clock: Callable[[], float] | None = None) -> None:
+                 clock: Callable[[], float] | None = None,
+                 read_only: bool = True, require_demo_identity: bool = True,
+                 demo_identities: dict[str, dict[str, Any]] | None = None) -> None:
         # account_id -> token. An empty token means "not configured" and is refused.
         self.accounts = {k: v for k, v in (accounts or {}).items() if v}
+        self.read_only = read_only
+        self.require_demo_identity = require_demo_identity
+        self.demo_identities = demo_identities or {}
         self.store: BridgeStore = store or build_store(db)
         self.fresh_seconds = float(fresh_seconds)
         self.stale_seconds = float(stale_seconds)
@@ -99,6 +104,16 @@ class BridgeRelay:
             raise BridgeTokenError("bridge account or token is not configured")
         if not hmac.compare_digest(str(token), str(expected)):
             raise BridgeTokenError("invalid bridge token")
+
+    def _check_identity(self, account_id: str, identity: dict[str, Any]) -> None:
+        if not self.require_demo_identity:
+            return
+        expected = self.demo_identities.get(account_id, {})
+        login, server = str(expected.get("login") or ""), str(expected.get("server") or "")
+        if (not login or not server or str(identity.get("login") or "") != login
+                or identity.get("server") != server or identity.get("trade_mode") != "demo"
+                or identity.get("connected") is not True):
+            raise BridgeError("Demo account identity is missing, disconnected or mismatched")
 
     # ------------------------------------------------------------ read-side
     def get(self, account_id: str) -> SessionState | None:
@@ -158,6 +173,7 @@ class BridgeRelay:
         if not account_id:
             raise BridgeError("account_id is required")
         self.check_token(account_id, token)
+        self._check_identity(account_id, terminal or {})
         ts = self._now(now)
         session_id = session_id or f"EA-{uuid.uuid4().hex[:10].upper()}"
         session, restarted, orphaned = self.store.start_session(
@@ -168,6 +184,7 @@ class BridgeRelay:
         return {
             "session_id": session.session_id,
             "generation": session.generation,
+            "read_only": self.read_only,
             "restarted": restarted,
             "server_time": ts,
             "poll_interval_ms": self.poll_interval_ms,
@@ -193,6 +210,14 @@ class BridgeRelay:
         if token is not None:
             self.check_token(session.account_id, token)
 
+        try:
+            self._check_identity(session.account_id,
+                                 (snapshot or {}).get("account") or {})
+        except BridgeError:
+            self.store.save_snapshot(session.account_id, session.session_id, {}, 0.0)
+            self.store.orphan_pending(session.account_id, "account identity rejected")
+            raise
+
         seen: list[dict[str, Any]] = []
         for raw in results or []:
             seen.append(self._apply_result(session.account_id, raw, ts))
@@ -207,7 +232,11 @@ class BridgeRelay:
         session.polls += 1
         self.store.save(session)
 
-        claimed = self.store.claim(session.account_id, ts, self.max_pending, self.ack_grace_seconds)
+        if self.read_only:
+            self.store.orphan_pending(session.account_id, "read-only bridge policy")
+            claimed = []
+        else:
+            claimed = self.store.claim(session.account_id, ts, self.max_pending, self.ack_grace_seconds)
         self.store.prune(ts)
         expired = self.store.expire_unacked(session.account_id)
         return {
@@ -243,6 +272,8 @@ class BridgeRelay:
                 ttl: float | None = None, now: float | None = None) -> CommandState:
         """Queue a command for the EA. Refuses when no fresh session is listening."""
         self.require_enabled()
+        if self.read_only:
+            raise BridgeError("read-only bridge refuses all commands")
         session = self.store.load(account_id)
         if session is None:
             raise BridgeError(f"no EA is connected for account {account_id!r}")
@@ -331,6 +362,8 @@ class BridgeRelay:
                    for c in self.store.orphaned(account)]
         return {
             "enabled": self.enabled,
+            "read_only": self.read_only,
+            "require_demo_identity": self.require_demo_identity,
             "store": self.store.kind,
             "configured_accounts": sorted(self.accounts),
             "connected_accounts": sorted(r["account"] for r in rows if r["health"] == "connected"),

@@ -7,13 +7,14 @@ of a vague "AI says wait".
 from __future__ import annotations
 
 import json
+import math
 import time
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta
 from typing import Any
 from zoneinfo import ZoneInfo
 
-from integrations.brokers.base import BrokerAdapter
+from integrations.brokers.base import BrokerAdapter, BrokerError
 from packages.persistence.db import Database
 from packages.shared_schemas.models import (
     AccountInfo,
@@ -113,24 +114,32 @@ class RiskEngine:
 
         `contract_size x price` is denominated in the pair's quote currency, so a
         JPY-quoted position would be counted ~157x too large and inflate
-        exposure_pct. A symbol whose quote->account rate is unresolved is skipped:
-        the planner refuses to size it (`spec.sizing_blocked`), so valuing it at an
-        assumed 1.0 would be a fabricated number rather than a measurement.
+        exposure_pct. Missing specs or conversion rates invalidate the entire
+        exposure measurement; unknown exposure must never be reported as zero.
         """
         total = 0.0
         for pos in positions:
             try:
                 spec = adapter.symbol_spec(pos.symbol)
-            except Exception:  # noqa: BLE001 - never break risk state on a missing spec
-                continue
-            if spec.sizing_blocked:
-                continue
-            total += spec.pnl_in_account_currency(float(pos.current_price or pos.entry), pos.volume)
+                values = (float(pos.current_price), float(pos.volume),
+                          float(spec.contract_size), float(spec.quote_to_account_rate))
+                if spec.sizing_blocked or any(not math.isfinite(v) or v <= 0 for v in values):
+                    raise ValueError("invalid price, volume, contract or conversion rate")
+                total += spec.pnl_in_account_currency(values[0], values[1])
+                if not math.isfinite(total):
+                    raise ValueError("notional overflow")
+            except Exception as exc:  # noqa: BLE001 - invalidate, never skip unknown exposure
+                raise BrokerError(f"exposure unavailable for {pos.symbol}") from exc
         return total
 
     def state(self, adapter: BrokerAdapter, now: float | None = None) -> RiskState:
         now = now or time.time()
         info: AccountInfo = adapter.account_info()
+        positions = adapter.positions()
+        notional = self._notional(adapter, positions)
+        floating = [float(p.unrealized) for p in positions]
+        if any(not math.isfinite(v) for v in (info.balance, info.equity, *floating)):
+            raise BrokerError("exposure unavailable: invalid account or floating P&L")
         day_start, week_start = self._day_start(now), self._week_start(now)
         rows = self.db.query(
             "SELECT closed_at, pnl, exit_reason, opened_at FROM trades WHERE closed_at >= ? ORDER BY closed_at",
@@ -139,7 +148,7 @@ class RiskEngine:
         daily = [r for r in rows if r["closed_at"] >= day_start]
         daily_pnl = sum(float(r["pnl"] or 0) for r in daily)
         weekly_pnl = sum(float(r["pnl"] or 0) for r in rows)
-        base_equity = info.equity - daily_pnl - sum(self._open_floating(adapter))
+        base_equity = info.equity - daily_pnl - sum(floating)
         daily_pct = (daily_pnl / base_equity * 100) if base_equity else 0.0
         weekly_pct = (weekly_pnl / base_equity * 100) if base_equity else 0.0
 
@@ -160,11 +169,9 @@ class RiskEngine:
                 and consecutive >= self.limits().max_consecutive_losses):
             cooldown_until = int(closed[0]["closed_at"] + self.limits().cooldown_minutes * 60)
 
-        positions = adapter.positions()
         open_lots = sum(p.volume for p in positions)
         # Notional exposure must use each symbol's own contract size (100 oz for
         # gold, 100,000 for FX), not a single hard-coded constant.
-        notional = self._notional(adapter, positions)
         kill = self.db.kv_get("kill_switch", {"active": False, "reason": "", "since": 0})
         mode = TradeMode(self.db.kv_get("trade_mode", TradeMode.manual.value))
 
@@ -206,10 +213,7 @@ class RiskEngine:
         return state
 
     def _open_floating(self, adapter: BrokerAdapter) -> list[float]:
-        try:
-            return [p.unrealized for p in adapter.positions()]
-        except Exception:  # noqa: BLE001
-            return []
+        return [p.unrealized for p in adapter.positions()]
 
     # ------------------------------------------------------------ kill switch
     def engage_kill_switch(self, reason: str, now: float | None = None) -> None:

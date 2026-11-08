@@ -28,6 +28,8 @@ from __future__ import annotations
 
 import json
 import os
+import queue
+import threading
 import time
 import urllib.error
 import urllib.request
@@ -145,12 +147,21 @@ class Notifier:
     def __init__(self, db: Database, min_score: float = 70.0,
                  cfg: dict[str, Any] | None = None,
                  transport: Transport | None = None,
-                 env: dict[str, str] | None = None) -> None:
+                 env: dict[str, str] | None = None, *,
+                 background: bool = False, queue_size: int = 100) -> None:
         self.db = db
         self.min_score = min_score
         self.cfg = cfg or {}
         self.env = os.environ if env is None else env
         self.transport: Transport = transport or _http_post_json
+        self.background = background
+        self._queue: queue.Queue = queue.Queue(maxsize=max(1, int(queue_size)))
+        self._lifecycle = threading.RLock()
+        self._send_lock = threading.RLock()
+        self._closing = threading.Event()
+        self._worker: threading.Thread | None = None
+        self._queue_dropped = 0
+        self._worker_errors = 0
         self.timeout = float(self.cfg.get("timeout_seconds", 5) or 5)
         self.dedupe_seconds = int(self.cfg.get("dedupe_seconds", 60) or 0)
         self.attempts = max(1, int(self.cfg.get("retry_attempts", 3) or 1))
@@ -253,6 +264,10 @@ class Notifier:
             "dropped": self.dropped,
             "min_interval_seconds": self.min_interval,
             "base_warnings": list(self.base_warnings),
+            "queue": {"enabled": self.background, "pending": self._queue.qsize(),
+                      "capacity": self._queue.maxsize, "dropped": self._queue_dropped,
+                      "errors": self._worker_errors, "closed": self._closing.is_set(),
+                      "running": bool(self._worker and self._worker.is_alive())},
             "disabled_reason": "" if self.external_channels else (
                 "ไม่มีช่องทางภายนอกที่เปิดใช้ — in-app เท่านั้น "
                 "(ต้องมี token + เปิดใช้ใน config หรือ env: TELEGRAM_BOT_TOKEN + chat id, "
@@ -301,6 +316,10 @@ class Notifier:
         return True
 
     def _send(self, channel: str, title: str, message: str) -> dict[str, Any]:
+        with self._send_lock:
+            return self._send_serial(channel, title, message)
+
+    def _send_serial(self, channel: str, title: str, message: str) -> dict[str, Any]:
         try:
             url, payload, headers = self._payload(channel, title, message)
             if not url:
@@ -320,8 +339,8 @@ class Notifier:
                 self.retries += 1
                 delay = result.get("retry_after")
                 delay = min(float(delay), 30.0) if delay else self.backoff * attempt
-                if delay > 0:
-                    time.sleep(delay)
+                if delay > 0 and self._closing.wait(delay):
+                    break
             return {"channel": channel, "ok": bool(result.get("ok")),
                     "status": int(result.get("status") or 0),
                     "error": self._redact(result.get("error") or ""),
@@ -331,6 +350,12 @@ class Notifier:
                     "error": self._redact(f"{type(exc).__name__}: {exc}")}
 
     def _record_status(self, deliveries: list[dict[str, Any]]) -> None:
+        if not deliveries:
+            return
+        with self._send_lock:
+            self._record_status_serial(deliveries)
+
+    def _record_status_serial(self, deliveries: list[dict[str, Any]]) -> None:
         if not deliveries:
             return
         persisted = self.db.kv_get(STATUS_KEY, {}) or {}
@@ -365,7 +390,8 @@ class Notifier:
                          meta={**(meta or {}), "deduped": True})  # type: ignore[arg-type]
 
         self._last[key] = now
-        deliveries = [self._send(ch, title, message) for ch in self.external_channels]
+        deliveries = ([] if self.background else
+                      [self._send(ch, title, message) for ch in self.external_channels])
         self.last_delivery = deliveries
         self._record_status(deliveries)
 
@@ -378,6 +404,8 @@ class Notifier:
             payload["level_coerced_from"] = level
         if deliveries:
             payload["delivery"] = deliveries
+        if self.background and self.external_channels:
+            payload["delivery_state"] = "queued"
         alert = Alert(
             id=f"A{uuid.uuid4().hex[:8]}",
             t=int(now),
@@ -394,10 +422,63 @@ class Notifier:
             (alert.id, alert.t, alert.level.value if hasattr(alert.level, "value") else alert.level,
              title, message, alert.channel, json.dumps(payload, default=str)),
         )
+        if self.background and self.external_channels:
+            with self._lifecycle:
+                state = "queued"
+                if self._closing.is_set():
+                    state = "stopped"
+                else:
+                    try:
+                        self._queue.put_nowait((alert.id, title, message, dict(payload)))
+                    except queue.Full:
+                        self._queue_dropped += 1
+                        state = "queue_full"
+                    if self._worker is None:
+                        self._worker = threading.Thread(target=self._deliver_loop,
+                                                        name="no7-notify", daemon=True)
+                        self._worker.start()
+                if state != "queued":
+                    alert.meta["delivery_state"] = state
+                    self.db.execute("UPDATE alerts SET payload=? WHERE id=?",
+                                    (json.dumps(alert.meta, default=str), alert.id))
         return alert
+
+    def _deliver_loop(self) -> None:
+        while not self._closing.is_set() or not self._queue.empty():
+            try:
+                alert_id, title, message, payload = self._queue.get(timeout=0.1)
+            except queue.Empty:
+                continue
+            try:
+                deliveries = [self._send(ch, title, message) for ch in self.external_channels]
+                with self._send_lock:
+                    self.last_delivery = deliveries
+                    self._record_status(deliveries)
+                payload.update(delivery=deliveries, delivery_state="completed")
+                self.db.execute("UPDATE alerts SET payload=? WHERE id=?",
+                                (json.dumps(payload, default=str), alert_id))
+            except Exception:  # noqa: BLE001 - preserve the queued in-app alert on DB failure
+                self._worker_errors += 1
+            finally:
+                self._queue.task_done()
+
+    def close(self, timeout: float = 3.0) -> bool:
+        """Stop accepting outbound work; drain within the caller's shutdown budget.
+
+        False means a bounded HTTP request/remaining queue is still finishing.
+        The daemon is not killed and no delivery is claimed for unfinished work.
+        """
+        with self._lifecycle:
+            self._closing.set()
+            worker = self._worker
+        if worker is not None:
+            worker.join(timeout=max(0.0, timeout))
+        return not bool(worker and worker.is_alive())
 
     def send_test(self) -> dict[str, Any]:
         """Prove the configured channels work, from the UI, with the real transport."""
+        if self._closing.is_set():
+            return {"ok": False, "deliveries": [], "reason": "notification worker is stopped"}
         if not self.external_channels:
             return {"ok": False, "deliveries": [], "reason":
                     "ยังไม่มีช่องทางภายนอกที่เปิดใช้ — in-app ใช้ได้เสมอ แต่ต้องตั้ง token "

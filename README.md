@@ -39,6 +39,92 @@
 
 ## Quickstart (Linux/macOS/Windows, ไม่ต้องมี MT5)
 
+### Windows PowerShell: isolated local development
+
+Install Python 3.11+ and Node.js/npm first. From the repository root:
+
+```powershell
+powershell -NoProfile -ExecutionPolicy Bypass -File .\scripts\setup-windows.ps1
+powershell -NoProfile -ExecutionPolicy Bypass -File .\scripts\check-windows.ps1
+powershell -NoProfile -ExecutionPolicy Bypass -File .\scripts\run-local.ps1
+```
+
+`Bypass` applies only to that child process; these commands do not change the
+machine's execution policy. Review the scripts before running them. Setup uses
+the committed npm lockfile (`npm ci`), creates `.venv`, installs the development
+requirements, and creates `.env` with a random JWT secret only if it does not
+already exist. Dependency failures stop setup rather than silently changing
+the required package versions. Existing `.env` files are never overwritten.
+
+The local launcher binds to `127.0.0.1:8000` (override with `-Port 8001`), uses
+simulated prices and paper-only broker profiles, disables Full Auto, EA bridge,
+external alerts and automatic model training, and isolates runtime files in
+ignored `storage/local-dev/`. The standard demo login from `.env.example` applies
+unless you changed it in `.env`; never expose this development login publicly.
+Stop the process with Ctrl+C. No main-server address or production credential
+is needed. Do not use this launcher for live trading or server deployment.
+
+The check script runs `pip check`, Ruff (`F,E9`), pytest and the dashboard build.
+In VS Code, use **Terminal > Run Task** and choose `TradeAi: Run local simulation`
+or `TradeAi: Check tests and build`. The setup task installs dependencies, so do
+not run setup while a build/check task is using `node_modules`. If port 8000 is
+already occupied by your local simulation, use that running instance rather than
+starting a second one. Stop the foreground local task with Ctrl+C before restarting.
+It is intended to run in its own PowerShell process, as shown above, because it
+clears inherited `NO7_*`/`MT5_*` variables before tests use temporary storage.
+Check results do not certify MT5 operation or profitability.
+
+### Local MT5 Demo read-only diagnostics (no VM required)
+
+This is separate from the paper-only launcher. It does not change broker profiles,
+start the trading runtime, log into accounts, or send orders. Install the optional
+Windows dependency into the existing virtual environment:
+
+```powershell
+.\.venv\Scripts\python.exe -m pip install -r requirements-mt5.txt
+```
+
+Open `C:\Program Files\MetaTrader 5\terminal64.exe` yourself and log into the
+intended **Demo** account. Check the exact login number, server and symbol in MT5.
+Disable unrelated EAs/automation yourself before testing. Then run, substituting
+your actual Demo identity (the following values are examples, not credentials):
+
+```powershell
+powershell -NoProfile -ExecutionPolicy Bypass -File .\scripts\check-mt5-demo.ps1 -ExpectedLogin 123456 -ExpectedServer 'YourBroker-Demo' -Symbol 'XAUUSD'
+```
+
+Use `-TerminalPath` if installed elsewhere. No password is accepted or printed.
+The check refuses a stopped terminal, non-Demo account, mismatched identity,
+disconnection or missing/invalid quote. It rechecks identity after reading the
+quote, masks the login by omitting it from output, and closes only its Python IPC
+connection. Quote time is the last available tick, not proof the market is open.
+Read-only applies to this diagnostic code, not other terminal EAs or clients.
+
+Neither vm100 nor vm200 is required for this local path. Remote terminal ownership
+and bridge authentication must be agreed separately before using a VM. This does
+not activate the MT5 adapter in the dashboard or authorize trading.
+
+### Development sequence while the main server is unavailable
+
+For the Blueprint v3 machine responsibilities, connection directions and staged
+operator handoffs, see [แผนหน้าที่เครื่องและการเชื่อมต่อ](docs/MACHINE-ROLES-AND-CONNECTION-PLAN.th.md).
+VM addresses and deployment status remain unverified until an actual host audit.
+
+The complete original Blueprint v3 snapshot is included under
+[`docs/blueprint-v3/`](docs/blueprint-v3/IMPORT-NOTES.md), including the master
+document, detailed plans, example configs, check scripts and templates.
+These are reference materials, not an installed deployment or executable defaults.
+For the local safety changes and operator-only MT5/VM setup gates, see
+[ขั้นตอนส่งต่องานด้านความปลอดภัย](docs/SAFETY-HANDOFF.th.md).
+
+1. Establish a repeatable Windows setup and record backend tests/frontend build.
+2. Add regression coverage for risk-state failures and WebSocket account changes;
+   move outbound alert delivery off the trading loop.
+3. Agree the main server's role, URL, TLS, authentication and state ownership before
+   connecting. Do not run two independent trading leaders against one account.
+4. Test real data and MT5 Demo, including disconnect/restart/reconciliation,
+   before considering any live-account enablement.
+
 ```bash
 python3 -m pip install -r requirements.txt   # เวอร์ชันที่ใช้จริงตอนพัฒนา
 

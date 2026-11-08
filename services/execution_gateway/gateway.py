@@ -1,15 +1,19 @@
 """Execution gateway: idempotent order submission, verification, reconciliation.
 
-Guarantees
-----------
-* one idempotency key -> at most one broker order, even after a timeout;
-* every fill is verified against the adapter before it is reported as filled;
+Local safety boundaries
+-----------------------
+* one retained idempotency key -> at most one adapter send attempt in this database;
+* fills are checked against positions when verify_after_send is enabled;
 * a broker that is not connected can never receive an order;
 * every state transition is written to the audit log.
+
+This is not broker-side exactly-once execution. A new key, a restored/deleted
+database, or ambiguous broker history still needs separate operator reconciliation.
 """
 from __future__ import annotations
 
 import json
+import math
 import time
 import uuid
 from typing import Any
@@ -52,37 +56,64 @@ class ExecutionGateway:
         if not row:
             return None
         try:
-            payload = json.loads(row["payload"] or "{}")
-        except json.JSONDecodeError:
-            payload = {}
-        return {"state": row["state"], "result": payload.get("result"), "payload": payload}
+            payload = json.loads(row["payload"])
+            stored = OrderRequest(**payload["request"])
+            if stored.broker_id != row["broker_id"] or stored.idempotency_key != key:
+                raise ValueError("record identity mismatch")
+        except (ValueError, TypeError, KeyError) as exc:
+            raise BrokerError("idempotency record invalid; manual reconciliation required") from exc
+        return {"id": row["id"], "state": row["state"], "result": payload.get("result"),
+                "request": stored}
+
+    def _replay(self, adapter: BrokerAdapter, request: OrderRequest,
+                existing: dict[str, Any], actor: str) -> OrderResult:
+        if existing["request"].model_dump() != request.model_dump():
+            raise BrokerError("idempotency key already belongs to a different request")
+        result = None
+        if existing["result"] is not None:
+            try:
+                result = OrderResult(**existing["result"])
+                if (result.order_id != existing["id"] or result.idempotency_key != request.idempotency_key
+                        or result.status.value != existing["state"]):
+                    raise ValueError("result identity mismatch")
+            except (ValueError, TypeError) as exc:
+                raise BrokerError("idempotency result invalid; manual reconciliation required") from exc
+        if existing["state"] not in (OrderState.filled.value, OrderState.closed.value,
+                                     OrderState.cancelled.value, OrderState.rejected.value):
+            recovered = self._verify_existing(adapter, request.idempotency_key)
+            if recovered is not None:
+                return recovered
+        self.db.audit(actor, "order.idempotent_hit", {"key": request.idempotency_key})
+        return result or OrderResult(
+            order_id=existing["id"], idempotency_key=request.idempotency_key,
+            status=OrderState.pending, message="order unresolved; not resent — manual reconciliation required",
+        )
 
     # ---------------------------------------------------------------- submit
     def submit(self, adapter: BrokerAdapter, request: OrderRequest, actor: str = "system") -> OrderResult:
         health = adapter.health()
         if health not in (Health.connected, Health.degraded):
             raise BrokerError(f"refusing to send: broker {adapter.id} is {health.value}")
+        request = request.model_copy(update={"broker_id": adapter.id})
         key = self.make_key(request)
-        request = request.model_copy(update={"idempotency_key": key, "broker_id": adapter.id})
+        request = request.model_copy(update={"idempotency_key": key})
 
         existing = self._existing(key)
         if existing:
-            result_payload = existing.get("result") or {}
-            if existing.get("state") in (OrderState.filled.value, OrderState.closed.value):
-                self.db.audit(actor, "order.idempotent_hit", {"key": key})
-                return OrderResult(**result_payload)
-            # A previous attempt is unresolved; verify with the broker instead of resending.
-            verified = self._verify_existing(adapter, key)
-            if verified is not None:
-                return verified
+            return self._replay(adapter, request, existing, actor)
 
         order_id = f"ORD-{uuid.uuid4().hex[:8].upper()}"
-        self.db.execute(
-            "INSERT OR REPLACE INTO orders(id, created_at, idempotency_key, state, broker_id, symbol, payload) "
-            "VALUES(?,?,?,?,?,?,?)",
+        claimed = self.db.execute(
+            "INSERT INTO orders(id, created_at, idempotency_key, state, broker_id, symbol, payload) "
+            "VALUES(?,?,?,?,?,?,?) ON CONFLICT(idempotency_key) DO NOTHING",
             (order_id, time.time(), key, OrderState.pending.value, adapter.id, request.symbol,
              json.dumps({"request": request.model_dump(), "actor": actor}, default=str)),
         )
+        if not claimed:
+            existing = self._existing(key)
+            if existing is None:
+                raise BrokerError("idempotency claim disappeared; refusing to send")
+            return self._replay(adapter, request, existing, actor)
         self.db.audit(actor, "order.submit", request.model_dump())
 
         # One attempt only. A transport error does not prove the order was not
@@ -91,6 +122,7 @@ class ExecutionGateway:
         try:
             result = adapter.order_send(request, ticket_hint="")
             result.order_id = order_id
+            result.idempotency_key = key
             if self.verify_after_send and result.status == OrderState.filled:
                 result.verified = self._verify_fill(adapter, result)
                 if not result.verified:
@@ -112,9 +144,9 @@ class ExecutionGateway:
             return recovered
 
         result = OrderResult(
-            order_id=order_id, idempotency_key=key, status=OrderState.rejected,
+            order_id=order_id, idempotency_key=key, status=OrderState.pending,
             message=(f"order not confirmed: {last_error} | not resent automatically — "
-                     f"check the terminal before retrying"),
+                     f"manual reconciliation required; do not retry with a new key"),
             created_at=time.time(),
         )
         self._persist_result(order_id, result, request)
@@ -151,16 +183,23 @@ class ExecutionGateway:
             return None
         request = payload.get("request") or {}
         signal_id = request.get("signal_id")
-        for pos in positions:
-            if signal_id and pos.signal_id == signal_id:
-                result = OrderResult(
-                    order_id=row["id"], idempotency_key=key, status=OrderState.filled,
-                    message="recovered by reconciliation (order was already live at the broker)",
-                    ticket=pos.ticket, filled_volume=pos.volume, fill_price=pos.entry,
-                    verified=True, created_at=time.time(),
-                )
-                self._persist_result(row["id"], result, OrderRequest(**request))
-                return result
+        matches = [pos for pos in positions
+                   if signal_id and pos.signal_id == signal_id
+                   and pos.broker_id == adapter.id == row["broker_id"]
+                   and pos.symbol == request.get("symbol")
+                   and pos.direction == (Direction.up if request.get("side") == "buy" else Direction.down)
+                   and math.isclose(pos.volume, float(request.get("volume", 0)), rel_tol=1e-9, abs_tol=1e-9)
+                   and pos.volume > 0 and math.isfinite(pos.entry) and pos.entry > 0]
+        if len(matches) == 1:
+            pos = matches[0]
+            result = OrderResult(
+                order_id=row["id"], idempotency_key=key, status=OrderState.filled,
+                message="recovered by reconciliation (order was already live at the broker)",
+                ticket=pos.ticket, filled_volume=pos.volume, fill_price=pos.entry,
+                verified=True, created_at=time.time(),
+            )
+            self._persist_result(row["id"], result, OrderRequest(**request))
+            return result
         return None
 
     # ------------------------------------------------------------ management

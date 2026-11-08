@@ -46,7 +46,7 @@ ai:
   enabled: true
   horizons_minutes: [5, 15, 30, 60, 240]
   training:
-    auto_train_on_boot: true
+    auto_train_on_boot: ${NO7_AUTO_TRAIN_ON_BOOT:true}
     max_rows: 26000
     train_fraction: 0.70
     calibration_fraction: 0.15
@@ -108,6 +108,7 @@ execution:
 # ---------------------------------------------------------------------------
 bridge:
   enabled: ${NO7_BRIDGE_ENABLED:false}
+  read_only: ${NO7_BRIDGE_READ_ONLY:true}
   fresh_seconds: ${NO7_BRIDGE_FRESH_SECONDS:5}
   stale_seconds: ${NO7_BRIDGE_STALE_SECONDS:15}
   command_ttl_seconds: ${NO7_BRIDGE_COMMAND_TTL:30}
@@ -119,8 +120,11 @@ bridge:
     - id: mt5-bridge-demo
       label: MT5 (EA bridge, demo)
       token: ${NO7_BRIDGE_TOKEN:}
+      expected_login: ${NO7_BRIDGE_EXPECTED_LOGIN:}
+      expected_server: ${NO7_BRIDGE_EXPECTED_SERVER:}
 
 alerts:
+  queue_size: 100                          # runtime outbound queue; never blocks on HTTP
   # In-app alerts are always on. External channels are opt-in: an outbound
   # message leaves this machine, so it needs a token *and* an explicit enable.
   # Tokens are read from env only and never written to config or API responses.

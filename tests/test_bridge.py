@@ -17,13 +17,19 @@ import pytest
 from integrations.brokers.base import BrokerError
 from packages.persistence.db import Database
 from packages.shared_schemas.models import OrderRequest, OrderSide, OrderState
-from services.bridge.relay import ACKED, EXPIRED, ORPHANED, BridgeError, BridgeRelay
+from services.bridge.relay import ACKED, EXPIRED, ORPHANED, BridgeError
+from services.bridge.relay import BridgeRelay as _BridgeRelay
 from services.bridge.store import MemoryStore
 
 ACCOUNT = "mt5-bridge-demo"
 TOKEN = "test-bridge-token-0123456789"
 SID = "EA-TEST-0001"
 AUTH = {"Authorization": f"Bearer {TOKEN}"}
+
+
+def BridgeRelay(*args, **kwargs):
+    """Legacy execution protocol simulator only; production defaults stay closed."""
+    return _BridgeRelay(*args, read_only=False, require_demo_identity=False, **kwargs)
 
 
 def snapshot(symbol: str = "XAUUSD", bid: float = 2000.0, ask: float = 2000.25,
@@ -257,9 +263,11 @@ def test_enqueue_without_any_session_is_refused():
 
 # ------------------------------------------------------------------- HTTP wire
 @pytest.fixture()
-def bridge(client, runtime):
+def bridge(client, runtime, monkeypatch):
     """A registered, freshly polled EA session against the shared test runtime."""
     relay = runtime.bridge
+    monkeypatch.setattr(relay, "read_only", False)
+    monkeypatch.setattr(relay, "require_demo_identity", False)
     token = relay.accounts[ACCOUNT]
     res = client.post("/api/bridge/register",
                       json={"account_id": ACCOUNT, "session_id": SID,

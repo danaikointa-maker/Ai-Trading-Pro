@@ -282,7 +282,9 @@ class MT5Broker(BrokerAdapter):
     # --------------------------------------------------------------- trading
     def positions(self) -> list[Position]:
         self._require()
-        raw = mt5.positions_get() or []
+        raw = mt5.positions_get()
+        if raw is None:
+            raise BrokerError(f"positions_get failed: {mt5.last_error()}")
         out: list[Position] = []
         for p in raw:
             spec = self.symbol_spec(p.symbol)

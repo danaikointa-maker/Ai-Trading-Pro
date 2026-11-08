@@ -195,11 +195,15 @@ def test_stored_approval_from_an_older_rule_is_demoted(runtime):
     assert predictor.approved is True
 
 
-def test_predictor_loads_the_newest_run_not_the_newest_approval(runtime):
+def test_predictor_loads_the_newest_run_not_the_newest_approval(settings, tmp_path):
     """A fresher rejected run must replace the metrics of an older approved model."""
     from services.ai_forecast.predictor import ForecastPredictor
+    from services.ai_forecast.registry import ModelRegistry
+    from packages.persistence.db import Database
 
-    registry = runtime.model_registry
+    # A session runtime may finish training concurrently; this assertion needs
+    # its own registry so the two timestamps below are the entire test history.
+    registry = ModelRegistry(tmp_path / "models", Database(tmp_path / "models.sqlite3"))
     for version, created, approved in (("m-old-approved", 100, 1),
                                        ("m-new-rejected", 200, 0)):
         registry.db.execute(
@@ -217,7 +221,7 @@ def test_predictor_loads_the_newest_run_not_the_newest_approval(runtime):
                  "metrics": {"horizons": {}, "approval_rule": 2}, "symbol": "XAUUSD",
                  "trained_at": 200, "notes": "rejected on evidence"}, target / "models.joblib")
 
-    predictor = ForecastPredictor(runtime.settings, registry)
+    predictor = ForecastPredictor(settings, registry)
     predictor.load_latest()
     assert predictor.version == "m-new-rejected"
     assert predictor.approved is False

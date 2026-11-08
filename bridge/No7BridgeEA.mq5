@@ -30,7 +30,7 @@
 #property copyright "No7 AI Trading Pro"
 #property version   "1.00"
 #property strict
-#property description "Polls the No7 API, executes orders/close/modify, reports back."
+#property description "Demo identity-bound bridge; read-only by default."
 
 //--- inputs -------------------------------------------------------------
 input string InpServerUrl   = "http://127.0.0.1:8000";  // API base (no trailing slash)
@@ -42,6 +42,9 @@ input int    InpRatesBars   = 60;                        // M1 bars to push (0 =
 input int    InpMagic       = 70707;                     // magic number for our orders
 input int    InpSlippage    = 20;                        // deviation, in points
 input bool   InpVerbose     = true;
+input bool   InpReadOnly     = true;                    // no order/close/modify
+input long   InpExpectedLogin = 0;                      // mandatory Demo login
+input string InpExpectedServer = "";                   // exact broker server
 
 //--- state --------------------------------------------------------------
 string   g_session = "";
@@ -52,17 +55,32 @@ string   g_pending_json[];     // the json body for each pending result
 string   g_executed_ids[];     // ids ever executed here — never run twice
 int      g_generation = 0;
 
+bool DemoIdentityValid()
+  {
+   return(InpExpectedLogin > 0 && StringLen(InpExpectedServer) > 0 &&
+          TerminalInfoInteger(TERMINAL_CONNECTED) &&
+          AccountInfoInteger(ACCOUNT_TRADE_MODE) == ACCOUNT_TRADE_MODE_DEMO &&
+          AccountInfoInteger(ACCOUNT_LOGIN) == InpExpectedLogin &&
+          AccountInfoString(ACCOUNT_SERVER) == InpExpectedServer);
+  }
+
 //+------------------------------------------------------------------+
 int OnInit()
   {
+   if(!DemoIdentityValid())
+     {
+      Print("No7BridgeEA: connected Demo identity must match expected login/server. Aborting.");
+      return(INIT_PARAMETERS_INCORRECT);
+     }
    if(StringLen(InpToken) == 0)
      {
       Print("No7BridgeEA: InpToken is empty — the server will refuse the bridge. Aborting.");
       return(INIT_PARAMETERS_INCORRECT);
      }
-   if(StringLen(InpServerUrl) == 0 || StringFind(InpServerUrl, "http") != 0)
+   if(StringFind(InpServerUrl, "https://") != 0 &&
+      StringFind(InpServerUrl, "http://127.0.0.1:") != 0)
      {
-      Print("No7BridgeEA: InpServerUrl must start with http:// or https://");
+      Print("No7BridgeEA: HTTPS required except explicit loopback http://127.0.0.1:port");
       return(INIT_PARAMETERS_INCORRECT);
      }
    SplitSymbols(InpSymbols);
@@ -87,6 +105,11 @@ void OnDeinit(const int reason)
 
 void OnTimer()
   {
+   if(!DemoIdentityValid())
+     {
+      g_session = "";
+      return;
+     }
    if(StringLen(g_session) == 0)
      {
       Register();
@@ -145,6 +168,8 @@ void RememberExecuted(const string id)
 //+------------------------------------------------------------------+
 bool HttpPost(const string path, const string body, string &response, int &status_code)
   {
+   if(!DemoIdentityValid())
+      return(false);
    string url = InpServerUrl + path;
    // Every bridge call carries the token: register checks it, and poll checks it again
    // because a poll can inject quotes and acknowledge orders.
@@ -159,6 +184,11 @@ bool HttpPost(const string path, const string body, string &response, int &statu
    // WebRequest must be allowed for this URL: Tools -> Options -> Expert Advisors ->
    // "Allow WebRequest for listed URL" and add InpServerUrl.
    int code = WebRequest("POST", url, headers, 5000, data, result, result_headers);
+   if(!DemoIdentityValid())
+     {
+      g_session = "";
+      return(false);
+     }
    if(code == -1)
      {
       PrintFormat("No7BridgeEA: WebRequest failed (%d). Add %s to the allowed URLs "
@@ -186,10 +216,12 @@ bool Register()
 
    string body = StringFormat(
                     "{\"account_id\":\"%s\",\"session_id\":\"%s\","
-                    "\"terminal\":{\"build\":%d,\"company\":\"%s\",\"name\":\"No7BridgeEA\"},"
+                     "\"terminal\":{\"build\":%d,\"company\":\"%s\",\"name\":\"No7BridgeEA\","
+                     "\"login\":\"%I64d\",\"server\":\"%s\",\"trade_mode\":\"demo\",\"connected\":true},"
                     "\"symbols\":%s}",
                     InpAccountId, g_session, TerminalInfoInteger(TERMINAL_BUILD),
-                    TerminalInfoString(TERMINAL_COMPANY), symbols_json);
+                     TerminalInfoString(TERMINAL_COMPANY), AccountInfoInteger(ACCOUNT_LOGIN),
+                     AccountInfoString(ACCOUNT_SERVER), symbols_json);
 
    string response;
    int status = 0;
@@ -271,7 +303,7 @@ string BuildSnapshot()
    string account = StringFormat(
                        "\"account\":{\"login\":\"%I64d\",\"balance\":%.2f,\"equity\":%.2f,"
                        "\"margin\":%.2f,\"free_margin\":%.2f,\"currency\":\"%s\",\"leverage\":%d,"
-                       "\"server\":\"%s\"}",
+                       "\"server\":\"%s\",\"trade_mode\":\"demo\",\"connected\":true}",
                        AccountInfoInteger(ACCOUNT_LOGIN),
                        AccountInfoDouble(ACCOUNT_BALANCE), AccountInfoDouble(ACCOUNT_EQUITY),
                        AccountInfoDouble(ACCOUNT_MARGIN), AccountInfoDouble(ACCOUNT_MARGIN_FREE),
@@ -282,6 +314,7 @@ string BuildSnapshot()
    //--- quotes + specs
    string quotes = "\"quotes\":{";
    string specs = "\"symbols\":{";
+   bool first_quote = true;
    for(int i = 0; i < ArraySize(g_symbols); i++)
      {
       string sym = g_symbols[i];
@@ -291,11 +324,15 @@ string BuildSnapshot()
       if(!SymbolInfoTick(sym, tick))
          continue;
       double point = SymbolInfoDouble(sym, SYMBOL_POINT);
-      if(i > 0)
+      if(!MathIsValidNumber(tick.bid) || !MathIsValidNumber(tick.ask) ||
+         tick.bid <= 0 || tick.ask < tick.bid || point <= 0)
+         continue;
+      if(!first_quote)
         {
          quotes += ",";
          specs += ",";
         }
+      first_quote = false;
       quotes += StringFormat(
                    "\"%s\":{\"t\":%I64d,\"bid\":%.*f,\"ask\":%.*f,\"last\":%.*f}",
                    sym, (long)tick.time, (int)SymbolInfoInteger(sym, SYMBOL_DIGITS), tick.bid,
@@ -331,7 +368,7 @@ string BuildSnapshot()
       long magic = PositionGetInteger(POSITION_MAGIC);
       string comment = PositionGetString(POSITION_COMMENT);
       // Only our own trades: another EA's positions must never be adopted or closed.
-      if(magic != InpMagic && StringFind(comment, "no7") < 0)
+      if(!InpReadOnly && magic != InpMagic)
          continue;
       long type = PositionGetInteger(POSITION_TYPE);
       if(!first)
@@ -470,6 +507,8 @@ void AppendResult(const string id, const string outcome_json)
 
 string ExecuteCommand(const string kind, const string command)
   {
+   if(InpReadOnly || !DemoIdentityValid())
+      return("\"ok\":false,\"error\":\"read-only or invalid Demo identity\"");
    if(kind == "ping")
       return("\"ok\":true,\"status\":\"pong\"");
    if(kind == "order")
@@ -483,6 +522,8 @@ string ExecuteCommand(const string kind, const string command)
 
 string DoOrder(const string command)
   {
+   if(InpReadOnly || !DemoIdentityValid())
+      return("\"ok\":false,\"error\":\"read-only or invalid Demo identity\"");
    string symbol = JsonString(command, "symbol");
    string side = JsonString(command, "side");
    double volume = JsonNumber(command, "volume");
@@ -513,7 +554,9 @@ string DoOrder(const string command)
    request.comment = "no7 bridge";
    request.type_filling = FillingMode(symbol);
 
-   if(!OrderSend(request, result))
+    if(InpReadOnly || !DemoIdentityValid())
+       return("\"ok\":false,\"error\":\"read-only or invalid Demo identity\"");
+    if(!OrderSend(request, result))
       return(StringFormat("\"ok\":false,\"error\":\"OrderSend failed %d: %s\",\"retcode\":%d",
                           GetLastError(), result.comment, (int)result.retcode));
    if(result.retcode != TRADE_RETCODE_DONE && result.retcode != TRADE_RETCODE_PLACED)
@@ -531,11 +574,15 @@ string DoOrder(const string command)
 
 string DoClose(const string command)
   {
+   if(InpReadOnly || !DemoIdentityValid())
+      return("\"ok\":false,\"error\":\"read-only or invalid Demo identity\"");
    string ticket_text = JsonString(command, "ticket");
    ulong ticket = (ulong)StringToInteger(ticket_text);
    if(ticket == 0 || !PositionSelectByTicket(ticket))
       return("\"ok\":false,\"error\":\"no such position " + ticket_text + "\"");
    string symbol = PositionGetString(POSITION_SYMBOL);
+   if(PositionGetInteger(POSITION_MAGIC) != InpMagic)
+      return("\"ok\":false,\"error\":\"position ownership mismatch\"");
    double volume = PositionGetDouble(POSITION_VOLUME);
    double requested = JsonNumber(command, "volume");
    if(requested > 0 && requested < volume)
@@ -559,6 +606,8 @@ string DoClose(const string command)
    request.comment = "no7 bridge close";
    request.type_filling = FillingMode(symbol);
 
+   if(InpReadOnly || !DemoIdentityValid())
+      return("\"ok\":false,\"error\":\"read-only or invalid Demo identity\"");
    if(!OrderSend(request, result) || result.retcode != TRADE_RETCODE_DONE)
       return(StringFormat("\"ok\":false,\"error\":\"close failed %d %s\",\"retcode\":%d",
                           GetLastError(), result.comment, (int)result.retcode));
@@ -572,10 +621,14 @@ string DoClose(const string command)
 
 string DoModify(const string command)
   {
+   if(InpReadOnly || !DemoIdentityValid())
+      return("\"ok\":false,\"error\":\"read-only or invalid Demo identity\"");
    string ticket_text = JsonString(command, "ticket");
    ulong ticket = (ulong)StringToInteger(ticket_text);
    if(ticket == 0 || !PositionSelectByTicket(ticket))
       return("\"ok\":false,\"error\":\"no such position " + ticket_text + "\"");
+   if(PositionGetInteger(POSITION_MAGIC) != InpMagic)
+      return("\"ok\":false,\"error\":\"position ownership mismatch\"");
    double sl = JsonNumber(command, "sl");
    double tp = JsonNumber(command, "tp");
    if(sl <= 0)
@@ -594,7 +647,9 @@ string DoModify(const string command)
    request.tp = tp;
    request.magic = InpMagic;
 
-   if(!OrderSend(request, result) || result.retcode != TRADE_RETCODE_DONE)
+    if(InpReadOnly || !DemoIdentityValid())
+       return("\"ok\":false,\"error\":\"read-only or invalid Demo identity\"");
+    if(!OrderSend(request, result) || result.retcode != TRADE_RETCODE_DONE)
       return(StringFormat("\"ok\":false,\"error\":\"modify failed %d %s\",\"retcode\":%d",
                           GetLastError(), result.comment, (int)result.retcode));
    return StringFormat("\"ok\":true,\"status\":\"modified\",\"ticket\":\"%I64u\"", ticket);

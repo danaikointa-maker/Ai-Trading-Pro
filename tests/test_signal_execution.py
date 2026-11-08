@@ -86,10 +86,51 @@ def test_unknown_signal_is_refused(runtime):
     assert "not found" in result["error"]
 
 
+@pytest.mark.parametrize("failure", [RuntimeError, ValueError])
+def test_risk_state_failure_refuses_before_gateway(runtime, registered, monkeypatch, failure):
+    from unittest.mock import Mock
+
+    sig = registered(_signal(runtime, id=f"TEST-RISK-FAIL-{failure.__name__}", score=75.0))
+    monkeypatch.setattr(runtime.risk, "state", Mock(side_effect=failure("risk storage unavailable")))
+    submit = Mock()
+    monkeypatch.setattr(runtime.gateway, "submit", submit)
+    result = runtime.execute_signal(sig.id)
+    assert result["ok"] is False
+    assert "risk state unavailable" in result["error"].lower()
+    submit.assert_not_called()
+
+
 def test_signal_without_a_plan_is_refused(runtime, registered):
     result = runtime.execute_signal(registered(_signal(runtime, plan=None)).id)
     assert result["ok"] is False
     assert "no trade plan" in result["error"]
+
+
+@pytest.mark.parametrize("failure", ["positions", "spec", "rate"])
+def test_exposure_failure_refuses_before_gateway(runtime, registered, monkeypatch, failure):
+    from types import SimpleNamespace
+    from unittest.mock import Mock
+
+    sig = registered(_signal(runtime, id=f"TEST-EXPOSURE-{failure}", score=75.0))
+    if failure == "positions":
+        monkeypatch.setattr(runtime.adapter, "positions", Mock(side_effect=RuntimeError("unavailable")))
+    else:
+        monkeypatch.setattr(runtime.adapter, "positions", lambda: [SimpleNamespace(
+            symbol="XAUUSD", volume=0.1, current_price=2000.0, unrealized=0.0)])
+        if failure == "spec":
+            monkeypatch.setattr(runtime.adapter, "symbol_spec", Mock(side_effect=RuntimeError("unavailable")))
+        else:
+            spec = runtime.adapter.symbol_spec("XAUUSD").model_copy(update={
+                "profit_currency": "JPY", "rate_source": "unknown"})
+            monkeypatch.setattr(runtime.adapter, "symbol_spec", lambda _: spec)
+    submit = Mock()
+    monkeypatch.setattr(runtime.gateway, "submit", submit)
+    kill_before = runtime.db.kv_get("kill_switch", None)
+    result = runtime.execute_signal(sig.id)
+    assert result["ok"] is False
+    assert "risk state unavailable" in result["error"]
+    submit.assert_not_called()
+    assert runtime.db.kv_get("kill_switch", None) == kill_before
 
 
 def test_non_actionable_signal_is_refused(runtime, registered):
@@ -151,7 +192,9 @@ def test_broken_plan_never_becomes_a_position(runtime, registered):
     result = runtime.execute_signal(sig.id, actor="demo@no7.ai")
     assert result["ok"] is False
     assert "wrong side" in result["error"] or "rejected" in str(result.get("order", {})), result
-    assert result["order"]["status"] == OrderState.rejected, result
+    # An adapter exception is not a broker rejection receipt. Keep the attempt
+    # unresolved/reserved even when this paper adapter reports invalid geometry.
+    assert result["order"]["status"] == OrderState.pending, result
     assert len(runtime.gateway.open_positions()) == before
 
 
