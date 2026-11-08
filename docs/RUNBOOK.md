@@ -38,7 +38,16 @@ python3 -m uvicorn services.api_gateway.app:app --host 0.0.0.0 --port 8000
 
 ## 3. คำสั่งที่ใช้บ่อย
 
+> จะ **แก้โค้ด** ไม่ใช่แค่ดูแลระบบ: `./scripts/dev_setup.sh` ติดตั้งทุกอย่างให้ในคำสั่งเดียว
+> และ [`DEVELOPMENT.md`](DEVELOPMENT.md) อธิบายแผนที่โค้ด/เกต/งานถัดไป
+
 ```bash
+# ติดตั้งหรือกู้สภาพแวดล้อมพัฒนา (venv + deps + .env + dashboard bundle)
+./scripts/dev_setup.sh
+
+# เกตก่อน commit: ruff + ตรวจ bundle + pytest ทั้งชุด
+./scripts/dev_check.sh
+
 # rebuild dashboard หลังแก้ frontend
 cd apps/web-dashboard && npm run build
 

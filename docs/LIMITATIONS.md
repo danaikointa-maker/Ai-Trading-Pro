@@ -55,16 +55,24 @@
 ## 5. ระบบโดยรวม
 
 - SQLite เหมาะกับคนเดียว/เครื่องเดียว ยังไม่รองรับ multi-user จริง
-- ยังไม่มี role/permission ละเอียด (มี JWT + `owner` role เดียว)
-- Telegram/LINE/Web Push ยังไม่ต่อ (มี in-app alert แล้ว)
-- Mobile PWA ยังว่าง
+- สิทธิ์เป็นแบบ 3 ระดับ (`viewer` / `trader` / `admin`, บทบาทมาจากฐานข้อมูลไม่ใช่จากโทเคน)
+  ยังไม่ใช่ permission รายรายการ และยังไม่มี SSO/2FA
+- Telegram / LINE / webhook ส่งจริงผ่าน HTTP แล้ว (retry/pacing/redact + บันทึกผลส่ง)
+  แต่ **ยังไม่เคยยิงไปปลายทางจริง** จากเครื่องนี้; **Web Push ยังไม่มี** (ตั้งใจ)
+- Mobile PWA ติดตั้งเป็นแอปได้และมีแถบอัปเดต/ออฟไลน์แล้ว แต่ยังไม่มี screenshots/splash
+  สำหรับ install prompt และไม่มี push/background sync
 - มี rate limiting ในตัวแล้ว (token bucket ต่อผู้ใช้/IP: order 10/นาที, explain 20/นาที,
   backtest 6/นาที, train 2/ชั่วโมง, อื่น ๆ 300/นาที) — **รอบ 19** เพิ่ม store ที่แชร์ได้:
   `memory` (ต่อโปรเซส, ค่าเริ่มต้น) / `sqlite` (worker บนเครื่องเดียว, write ต่อคำขอที่ถูกจำกัด) /
   `redis` (ข้ามเครื่อง, Lua atomic, key มี TTL)
   - วัดจริง: 2 worker + memory → limit 6/นาที ปล่อยผ่าน **7**; 2 worker + sqlite → **6 เท่าพอดี**
-  - Redis: **ยังไม่ได้ทดสอบกับ redis-server จริง** ในเครื่องนี้ (ไม่มี binary) — ทดสอบผ่าน
-    fakeredis ที่รัน Lua เดียวกัน; เมื่อมี `NO7_REDIS_URL` จริง เทสต์ชุดเดียวกันจะยิงของจริง
+  - Redis: **ชุดเทสต์อัตโนมัติยังรันบน fakeredis** (Lua เดียวกัน แต่คนละ implementation)
+    สิ่งที่ยืนยันกับ `redis-server` 6.2.14 ของจริงแล้วคือ *การบูตและสถานะ*: ตั้ง
+    `NO7_RATELIMIT_STORE=redis` + `NO7_CLUSTER_BACKEND=redis` แล้ว `/api/system/health` รายงาน
+    `ratelimit {store: redis, shared: true}` และ `cluster {backend: redis, role: leader}`
+    (binary ดึงได้ด้วย `scripts/fetch_redis_server.sh` โดยไม่ต้อง root)
+    ยังไม่มีเทสต์ที่ยิงของจริงในชุดเกต และยังไม่ได้ทดสอบ TLS (`rediss://`), `requirepass`,
+    Sentinel/Cluster หรือกรณี Redis ช้าแต่ไม่ตาย
   - ถ้า Redis ล่มกลางทาง ระบบ **จำกัดด้วย bucket ในโปรเซสต่อไป** + `degraded++` +
     header `x-ratelimit-degraded` (เลือกทางนี้แทนการปล่อยผ่านโล่ง ๆ หรือทำให้ระบบล่ม)
   - ตัวนับใช้เวลาของแอป (ไม่ใช่ Redis TIME) → ต้องมี NTP; clock skew ทำให้ refill คลาดเคลื่อน
