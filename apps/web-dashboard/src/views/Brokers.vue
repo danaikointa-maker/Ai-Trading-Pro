@@ -81,6 +81,8 @@
           <div class="kv"><dt>Positions at broker</dt><dd>{{ reconcile?.positions ?? '—' }}</dd></div>
           <div class="kv"><dt>Missing at broker</dt><dd>{{ (reconcile?.missing_at_broker || []).join(', ') || '—' }}</dd></div>
           <div class="kv"><dt>Unknown locally</dt><dd>{{ (reconcile?.unknown_locally || []).join(', ') || '—' }}</dd></div>
+          <div class="kv"><dt>Changed at broker</dt><dd>{{ (reconcile?.changed_at_broker || []).join(', ') || '—' }}</dd></div>
+          <div v-if="reconcile?.reconciliation_required" class="mt-2 text-amber-300" role="alert">ต้องตรวจสอบบัญชีและประวัติ fill ก่อนดำเนินการต่อ ห้ามส่งคำสั่งซ้ำ</div>
         </dl>
         <p class="border-t border-ink-700/60 px-4 py-2 text-[10px] leading-relaxed text-muted">
           ระบบใช้ idempotency key ทุกคำสั่ง ตรวจสอบออร์เดอร์กับโบรกเกอร์หลังส่ง และหยุดรับคำสั่งเมื่อการเชื่อมต่อผิดปกติ

@@ -130,6 +130,7 @@ def _dataset(tmp_path, bars: int = 1000) -> None:
 
 def test_build_feed_uses_the_imported_data_when_asked(tmp_path, settings, monkeypatch):
     _dataset(tmp_path)
+    monkeypatch.setitem(settings.paths, "datasets", tmp_path / "datasets")
     monkeypatch.setitem(settings.market_data, "feed_mode", "replay")
     monkeypatch.setitem(settings.market_data, "replay",
                         {"dataset_dir": str(tmp_path / "datasets"), "warmup_bars": 300})
@@ -140,6 +141,7 @@ def test_build_feed_uses_the_imported_data_when_asked(tmp_path, settings, monkey
 
 
 def test_build_feed_falls_back_loudly_when_replay_cannot_start(tmp_path, settings, monkeypatch):
+    monkeypatch.setitem(settings.paths, "datasets", tmp_path / "empty")
     monkeypatch.setitem(settings.market_data, "feed_mode", "replay")
     monkeypatch.setitem(settings.market_data, "replay",
                         {"dataset_dir": str(tmp_path / "empty"), "warmup_bars": 300})

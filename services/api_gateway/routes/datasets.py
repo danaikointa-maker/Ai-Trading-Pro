@@ -13,7 +13,7 @@ from services.api_gateway.state import TradingRuntime
 from services.market_data.snapshots import (SnapshotError, describe_source, list_snapshots,
                                            load_snapshot, save_snapshot)
 from services.market_data.tick_store import (TickStoreError, available_days, coverage,
-                                             prune_days)
+                                             prune_days, symbol_dir)
 from services.market_data.ticks import tick_layout, tick_summary
 
 router = APIRouter(prefix="/api/datasets", tags=["datasets"])
@@ -58,8 +58,11 @@ def pin(payload: SnapshotRequest, runtime: TradingRuntime = Depends(get_runtime)
 def _tick_symbols(datasets: Path, symbol: str) -> list[str]:
     """Every symbol with stored ticks, in either layout — not just the legacy one."""
     if symbol:
+        symbol_dir(datasets, symbol)
         return [symbol.upper()]
-    names = {p.name.split("_")[0] for p in (datasets / "ticks").glob("*_ticks.json")} \
+    # Validate the root and ancestors before enumerating any foreign directory.
+    symbol_dir(datasets, "INVENTORY")
+    names = {p.name[:-len("_ticks.json")] for p in (datasets / "ticks").glob("*_ticks.json")} \
         if (datasets / "ticks").exists() else set()
     folder = datasets / "ticks"
     if folder.is_dir():
@@ -80,12 +83,17 @@ def tick_status(symbol: str = Query("", description="empty = every symbol with t
     datasets = runtime.settings.paths["datasets"]
     out = []
     for name in _tick_symbols(datasets, symbol):
-        layout = tick_layout(datasets, name)
-        manifest = tick_summary(datasets, name)
+        try:
+            layout = tick_layout(datasets, name)
+            manifest = tick_summary(datasets, name)
+            cov = coverage(datasets, name)
+        except TickStoreError:
+            out.append({"symbol": name.upper(), "available": False, "layout": None,
+                        "status": "quarantined", "reason": "tick artifact validation failed"})
+            continue
         if manifest is None or layout is None:
             out.append({"symbol": name.upper(), "available": False, "layout": None})
             continue
-        cov = coverage(datasets, name)
         days = [d["day"] for d in cov["days"]]
         gaps: list[str] = []
         if len(days) > 1:

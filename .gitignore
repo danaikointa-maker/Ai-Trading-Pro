@@ -32,3 +32,4 @@ storage/db/*
 # OS
 .DS_Store
 Thumbs.db
+bridge/*.ex5

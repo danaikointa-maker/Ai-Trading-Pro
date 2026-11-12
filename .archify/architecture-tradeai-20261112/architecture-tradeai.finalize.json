@@ -1,0 +1,121 @@
+{
+  "schemaVersion": 1,
+  "ok": false,
+  "command": "finalize",
+  "status": "fail",
+  "type": "architecture",
+  "quality": "showcase",
+  "startedAt": "2026-11-12T08:50:57.685Z",
+  "specification": {
+    "path": "C:\\workspace\\Ai-Trading-Pro\\.archify\\architecture-tradeai-20261112\\candidate.json",
+    "sha256": "adc9675db76b69e35bfa12938a88bf14965c0f1a3f8c4a9bf31e042bedd52566",
+    "bytes": 6234
+  },
+  "artifact": {
+    "path": "C:\\workspace\\Ai-Trading-Pro\\.archify\\architecture-tradeai-20261112\\architecture-tradeai.html",
+    "sha256": "98061547468bde15a1a09f6b919405efaad64f98af9bd82fbda879198b3dcebf",
+    "bytes": 860819
+  },
+  "stages": {
+    "validate": {
+      "status": "fail",
+      "exitCode": 1,
+      "durationMs": null,
+      "command": [
+        "C:\\Users\\danai\\AppData\\Local\\Programs\\TradeAi\\node-v26.13.0-win-x64\\node.exe",
+        "C:\\Users\\danai\\.cline\\skills\\archify\\bin\\archify.mjs",
+        "deliver",
+        "architecture",
+        "C:\\workspace\\Ai-Trading-Pro\\.archify\\architecture-tradeai-20261112\\candidate.json",
+        "C:\\workspace\\Ai-Trading-Pro\\.archify\\architecture-tradeai-20261112\\architecture-tradeai.html",
+        "--quality",
+        "showcase",
+        "--repo-root",
+        "C:\\workspace\\Ai-Trading-Pro",
+        "--json"
+      ],
+      "receipt": {
+        "schemaVersion": 1,
+        "ok": false,
+        "command": "deliver",
+        "receiptId": "9e0ce011-d123-4d35-a0c8-d87cc03a297e",
+        "stage": "render",
+        "type": "architecture",
+        "input": "C:\\workspace\\Ai-Trading-Pro\\.archify\\architecture-tradeai-20261112\\candidate.json",
+        "output": "C:\\workspace\\Ai-Trading-Pro\\.archify\\architecture-tradeai-20261112\\architecture-tradeai.html",
+        "error": "Could not run Git: spawnSync git ENOENT",
+        "diagnostics": [
+          {
+            "code": "repository-evidence/git-unavailable",
+            "severity": "error",
+            "message": "Could not run Git: spawnSync git ENOENT",
+            "subject": {
+              "surface": "repository-evidence"
+            },
+            "evidence": {
+              "reason": "spawnSync git ENOENT"
+            },
+            "supportedFixes": [
+              "install Git and ensure it is available on PATH"
+            ]
+          }
+        ],
+        "provenance": "failed",
+        "update": {
+          "status": "unavailable",
+          "installedVersion": null,
+          "availableVersion": null,
+          "releaseNotes": null,
+          "checkedAt": null,
+          "source": null,
+          "noticeRequired": false,
+          "noticeText": null,
+          "reason": "disabled"
+        }
+      },
+      "execution": "embedded-in-deliver"
+    },
+    "deliver": {
+      "status": "not-run",
+      "execution": "blocked-by-validate"
+    }
+  },
+  "browserCheck": {
+    "requested": true,
+    "ran": false
+  },
+  "diagnostics": [
+    {
+      "code": "repository-evidence/git-unavailable",
+      "severity": "error",
+      "message": "Could not run Git: spawnSync git ENOENT",
+      "subject": {
+        "surface": "repository-evidence"
+      },
+      "evidence": {
+        "reason": "spawnSync git ENOENT"
+      },
+      "supportedFixes": [
+        "install Git and ensure it is available on PATH"
+      ]
+    }
+  ],
+  "evidence": {
+    "receipt": "C:\\workspace\\Ai-Trading-Pro\\.archify\\architecture-tradeai-20261112\\architecture-tradeai.finalize.json",
+    "summaryReceipt": "C:\\workspace\\Ai-Trading-Pro\\.archify\\architecture-tradeai-20261112\\architecture-tradeai.finalize-summary.json"
+  },
+  "visualReview": "not-requested",
+  "failedStage": "validate",
+  "finishedAt": "2026-11-12T08:51:01.193Z",
+  "durationMs": 3507,
+  "update": {
+    "status": "current",
+    "installedVersion": "3.2.0",
+    "availableVersion": "3.2.0",
+    "releaseNotes": null,
+    "checkedAt": "2026-11-12T06:40:25.633Z",
+    "source": "cache",
+    "noticeRequired": false,
+    "noticeText": null
+  }
+}

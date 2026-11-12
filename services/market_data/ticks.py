@@ -18,6 +18,7 @@ from __future__ import annotations
 
 import gzip
 import hashlib
+import io
 import json
 from pathlib import Path
 from typing import Any, Iterable, Iterator
@@ -25,8 +26,8 @@ from typing import Any, Iterable, Iterator
 import numpy as np
 import pandas as pd
 
-from services.market_data.tick_store import (TickStore, Touch, available_days, day_key,
-                                             manifest_path, symbol_dir, write_days,
+from services.market_data.tick_store import (TickStore, TickStoreError, Touch, available_days, day_key,
+                                             legacy_tick_path, manifest_path, read_manifest, symbol_dir, write_days,
                                              write_manifest)
 
 __all__ = ["TickBook", "TickDataError", "Touch", "import_ticks", "load_tick_csv",
@@ -169,7 +170,30 @@ def load_tick_csv(path: str | Path, tz: str = "UTC") -> tuple[pd.DataFrame, dict
 
 def tick_path(out_dir: str | Path, symbol: str) -> Path:
     """Legacy single-file layout (kept so an older import still loads)."""
-    return Path(out_dir) / TICK_SUBDIR / f"{symbol.upper()}_ticks.csv.gz"
+    return legacy_tick_path(out_dir, symbol)
+
+
+def _legacy_verified(out_dir: str | Path, symbol: str) -> tuple[dict[str, Any], bytes] | None:
+    """Local sidecar integrity only, not authenticated broker provenance."""
+    path = tick_path(out_dir, symbol)
+    meta = legacy_tick_path(out_dir, symbol, metadata=True)
+    if not path.exists() and not meta.exists():
+        return None
+    try:
+        payload = json.loads(meta.read_text('utf-8'))
+        if (not isinstance(payload, dict) or type(payload.get('schema')) is not int
+                or payload['schema'] != 1 or payload.get('layout') != 'file'
+                or payload.get('symbol') != symbol.upper()
+                or payload.get('dataset_root') != str(Path(out_dir).resolve())
+                or payload.get('path') != str(path)):
+            raise ValueError('identity mismatch')
+        raw = path.read_bytes()
+        if (len(raw) != payload.get('bytes')
+                or hashlib.sha256(raw).hexdigest() != payload.get('stored_sha256')):
+            raise ValueError('digest mismatch')
+        return payload, raw
+    except (OSError, ValueError, TypeError, KeyError):
+        raise TickStoreError('legacy tick provenance/integrity invalid; refusing artifact') from None
 
 
 def import_ticks(csv_path: str | Path, symbol: str, out_dir: str | Path, tz: str = "UTC", *,
@@ -183,6 +207,11 @@ def import_ticks(csv_path: str | Path, symbol: str, out_dir: str | Path, tz: str
     """
     if layout not in ("daily", "file"):
         raise TickDataError(f"unknown layout {layout!r}; use 'daily' or 'file'")
+    # Validate both destinations before reading the export or publishing any data.
+    if layout == "file":
+        _legacy_verified(out_dir, symbol)
+    else:
+        read_manifest(out_dir, symbol)
     src = Path(csv_path).expanduser()
     buckets: dict[str, list[pd.DataFrame]] = {}
     drops: dict[str, int] = {}
@@ -222,6 +251,9 @@ def import_ticks(csv_path: str | Path, symbol: str, out_dir: str | Path, tz: str
         rows_used = len(merged)
         spread_samples = (merged["ask"] - merged["bid"]).tolist()
         manifest = {
+            "schema": 1, "dataset_root": str(Path(out_dir).resolve()),
+            "bytes": path.stat().st_size,
+            "stored_sha256": hashlib.sha256(path.read_bytes()).hexdigest(),
             **{k: v for k, v in {
                 "source": str(src), "rows_read": total, "rows_used": rows_used,
                 "dropped": {k: v for k, v in drops.items() if v},
@@ -234,7 +266,7 @@ def import_ticks(csv_path: str | Path, symbol: str, out_dir: str | Path, tz: str
             "stored_rows": rows_used,
             "spread_points_median": round(float(np.median(spread_samples)), 5),
         }
-        (path.parent / f"{symbol.upper()}_ticks.json").write_text(
+        legacy_tick_path(out_dir, symbol, metadata=True).write_text(
             json.dumps(manifest, indent=2), "utf-8")
         return manifest
 
@@ -268,18 +300,12 @@ def tick_summary(out_dir: str | Path, symbol: str) -> dict[str, Any] | None:
     """Manifest for either layout (daily first, then the legacy single-file one)."""
     daily = manifest_path(out_dir, symbol)
     if daily.exists():
-        try:
-            payload = json.loads(daily.read_text("utf-8"))
-            return {**payload, "path": str(symbol_dir(out_dir, symbol))}
-        except json.JSONDecodeError:
-            pass
-    legacy = Path(out_dir) / TICK_SUBDIR / f"{symbol.upper()}_ticks.json"
-    if not legacy.exists():
-        return None
-    try:
-        return json.loads(legacy.read_text("utf-8"))
-    except json.JSONDecodeError:
-        return None
+        payload = read_manifest(out_dir, symbol)
+        return {**payload, "path": str(symbol_dir(out_dir, symbol))}
+    if available_days(out_dir, symbol):
+        raise TickStoreError('daily tick manifest missing; refusing unregistered index')
+    verified = _legacy_verified(out_dir, symbol)
+    return verified[0] if verified else None
 
 
 def tick_layout(out_dir: str | Path, symbol: str) -> str | None:
@@ -333,10 +359,20 @@ class TickBook:
         """Daily layout first; falls back to a legacy single file if that is all there is."""
         if available_days(out_dir, symbol):
             return cls(store=TickStore(out_dir, symbol, cache_days=cache_days), symbol=symbol.upper())
-        path = tick_path(out_dir, symbol)
-        if not path.exists():
+        verified = _legacy_verified(out_dir, symbol)
+        if verified is None:
             return None
-        frame = pd.read_csv(path)
+        payload, raw = verified
+        try:
+            frame = pd.read_csv(io.BytesIO(gzip.decompress(raw)))
+            canonical = frame[COLUMNS].to_csv(index=False, float_format='%.5f', lineterminator='\n').encode()
+            if (hashlib.sha256(canonical).hexdigest() != payload.get('sha256')
+                    or len(frame) != payload.get('stored_rows')
+                    or int(frame['t'].iloc[0]) != payload.get('first_t')
+                    or int(frame['t'].iloc[-1]) != payload.get('last_t')):
+                raise ValueError('content mismatch')
+        except (OSError, ValueError, EOFError, KeyError, IndexError):
+            raise TickStoreError('legacy tick content integrity invalid') from None
         return cls(frame, symbol)
 
     # ------------------------------------------------------------- geometry

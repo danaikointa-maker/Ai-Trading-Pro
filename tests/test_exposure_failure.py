@@ -41,7 +41,7 @@ def test_incomplete_notional_is_rejected(failure):
 def test_state_reads_positions_once(settings, tmp_path):
     db = Database(str(tmp_path / "risk.sqlite3"))
     adapter = Mock()
-    adapter.account_info.return_value = SimpleNamespace(balance=10000.0, equity=10000.0)
+    adapter.account_info.return_value = SimpleNamespace(balance=10000.0, equity=10000.0, currency="USD")
     adapter.positions.side_effect = [[position()], RuntimeError("second read is inconsistent")]
     adapter.symbol_spec.return_value = SymbolSpec(symbol="XAUUSD")
     try:
@@ -56,7 +56,7 @@ def test_invalid_persisted_peak_cannot_be_written_back(settings, tmp_path):
     db = Database(str(tmp_path / "risk.sqlite3"))
     db.kv_set("peak_equity", "Infinity")
     adapter = Mock()
-    adapter.account_info.return_value = SimpleNamespace(balance=10000.0, equity=10000.0)
+    adapter.account_info.return_value = SimpleNamespace(balance=10000.0, equity=10000.0, currency="USD")
     adapter.positions.return_value = []
     try:
         with pytest.raises(BrokerError, match="exposure"):
@@ -69,7 +69,7 @@ def test_invalid_persisted_peak_cannot_be_written_back(settings, tmp_path):
 def test_failed_positions_read_never_updates_peak(settings, tmp_path):
     db = Database(str(tmp_path / "risk.sqlite3"))
     adapter = Mock()
-    adapter.account_info.return_value = SimpleNamespace(balance=10000.0, equity=10000.0)
+    adapter.account_info.return_value = SimpleNamespace(balance=10000.0, equity=10000.0, currency="USD")
     adapter.positions.side_effect = RuntimeError("positions unavailable")
     try:
         with pytest.raises(RuntimeError, match="positions unavailable"):
@@ -83,8 +83,9 @@ def test_mt5_positions_none_is_failure_not_empty(monkeypatch):
     import integrations.brokers.mt5_live as module
 
     monkeypatch.setattr(module, "mt5", SimpleNamespace(positions_get=lambda: None,
+                                                      account_info=lambda: SimpleNamespace(login=123, server="Demo", currency="USD"),
                                                       last_error=lambda: (-1, "unavailable")))
-    broker = MT5Broker({"id": "fake"})
+    broker = MT5Broker({"id": "fake"}, login=123, server="Demo")
     broker._connected = True
     with pytest.raises(BrokerError, match="positions_get"):
         broker.positions()
@@ -113,8 +114,9 @@ def test_empty_positions_are_valid_for_both_adapters(monkeypatch):
     import integrations.brokers.mt5_live as module
     from integrations.brokers.bridge import BridgeBroker
 
-    monkeypatch.setattr(module, "mt5", SimpleNamespace(positions_get=lambda: ()))
-    mt5 = MT5Broker({"id": "fake"})
+    monkeypatch.setattr(module, "mt5", SimpleNamespace(positions_get=lambda: (),
+        account_info=lambda: SimpleNamespace(login=123, server="Demo", currency="USD")))
+    mt5 = MT5Broker({"id": "fake"}, login=123, server="Demo")
     mt5._connected = True
     assert mt5.positions() == []
     bridge = BridgeBroker({"id": "fake"}, Mock(), order_timeout=1)
@@ -126,7 +128,7 @@ def test_empty_positions_are_valid_for_both_adapters(monkeypatch):
 def test_nonfinite_account_or_floating_cannot_mutate_peak(settings, tmp_path, field):
     db = Database(str(tmp_path / "risk.sqlite3"))
     adapter = Mock()
-    account = SimpleNamespace(balance=10000.0, equity=10000.0)
+    account = SimpleNamespace(balance=10000.0, equity=10000.0, currency="USD")
     pos = position()
     setattr(pos if field == "unrealized" else account, field, float("nan"))
     adapter.account_info.return_value = account

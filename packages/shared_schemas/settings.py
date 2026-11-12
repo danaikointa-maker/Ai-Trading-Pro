@@ -86,6 +86,9 @@ class Settings:
         if not self.root.is_absolute():
             self.root = (REPO_ROOT / self.root).resolve()
         self.app = self._read("app.yaml")
+        workspace = self.security["workspace_id"]
+        if not isinstance(workspace, str) or not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9_-]{0,63}", workspace):
+            raise ValueError("invalid workspace identity")
         self.brokers = self._read("brokers.yaml")
         if _as_bool(os.environ.get("NO7_LOCAL_SIMULATION", "false")):
             # Local development must never initialise terminal or bridge adapters.
@@ -125,6 +128,10 @@ class Settings:
         out.setdefault("models", self.root / "storage/models")
         out.setdefault("backtests", self.root / "storage/backtests")
         out.setdefault("logs", self.root / "storage/logs")
+        # Private artifacts are never adopted from an unscoped legacy directory.
+        # Keep the configured database path unchanged: its singleton is the guard.
+        for key in ("datasets", "models", "backtests", "logs"):
+            out[key] = out[key] / "workspaces" / self.security["workspace_id"]
         return out
 
     # -------------------------------------------------------------- access
@@ -135,6 +142,7 @@ class Settings:
     @property
     def security(self) -> dict[str, Any]:
         sec = dict(self.app.get("security", {}))
+        sec["workspace_id"] = os.environ.get("NO7_WORKSPACE_ID", sec.get("workspace_id", "local"))
         sec["jwt_secret"] = os.environ.get(sec.get("jwt_secret_env", "NO7_JWT_SECRET"), "") or "no7-local-development-secret-key-change-me-48chars"
         sec["allow_full_auto"] = _as_bool(os.environ.get("NO7_ALLOW_FULL_AUTO", sec.get("allow_full_auto", False)))
         sec["demo_user"] = os.environ.get("NO7_DEMO_USER", sec.get("demo_user", "demo@no7.ai"))
@@ -192,7 +200,9 @@ class Settings:
 
     @property
     def cluster(self) -> dict[str, Any]:
-        return self.app.get("cluster", {})
+        cfg = dict(self.app.get("cluster", {}))
+        cfg["key_prefix"] = f"{cfg.get('key_prefix') or 'no7'}:workspace:{self.security['workspace_id']}"
+        return cfg
 
     # ------------------------------------------------------------- brokers
     def broker(self, broker_id: str) -> dict[str, Any]:

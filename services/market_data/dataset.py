@@ -13,7 +13,9 @@ and reported rather than silently discarded.
 from __future__ import annotations
 
 import hashlib
+import io
 import json
+import re
 import time
 from pathlib import Path
 from typing import Any
@@ -50,12 +52,12 @@ def _clean_header(name: str) -> str:
     return _ALIASES.get(raw, raw)
 
 
-def _read_any(path: Path) -> pd.DataFrame:
+def _read_any(path: Path, content: bytes | None = None) -> pd.DataFrame:
     """Read a CSV with whichever separator the file actually uses."""
     last: Exception | None = None
     for sep in _SEPARATORS:
         try:
-            df = pd.read_csv(path, sep=sep, engine="python")
+            df = pd.read_csv(io.BytesIO(content) if content is not None else path, sep=sep, engine="python")
         except Exception as exc:  # noqa: BLE001 - try the next separator
             last = exc
             continue
@@ -108,6 +110,10 @@ def load_candles(path: str | Path, tz: str = "UTC", digits: int | None = None) -
     if not path.exists():
         raise DatasetError(f"file not found: {path}")
     raw = _read_any(path)
+    return _normalise(raw, tz, digits)
+
+
+def _normalise(raw: pd.DataFrame, tz: str, digits: int | None = None) -> pd.DataFrame:
     raw.columns = [_clean_header(c) for c in raw.columns]
     missing = [c for c in ("o", "h", "l", "c") if c not in raw.columns]
     if missing:
@@ -176,6 +182,34 @@ def describe(df: pd.DataFrame, expected_seconds: int | None = None) -> dict[str,
     }
 
 
+def workspace_dataset_dir(configured: str | Path, selected: str | Path | None = None) -> Path:
+    """Resolve a CLI selection without granting access to a foreign dataset root."""
+    configured = Path(configured).expanduser()
+    candidate = Path(selected).expanduser() if selected is not None else configured
+    if (any(p.is_symlink() for p in (configured, *configured.parents, candidate, *candidate.parents))
+            or not candidate.resolve().is_relative_to(configured.resolve())):
+        raise DatasetError("dataset selection outside configured workspace")
+    return candidate.resolve()
+
+
+def _dataset_paths(out_dir: str | Path, symbol: str, timeframe: str) -> tuple[Path, Path, Path]:
+    if (not isinstance(symbol, str) or not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9_.-]{0,63}", symbol)
+            or symbol.endswith(".") or symbol.upper().split(".")[0] in
+            {"CON", "PRN", "AUX", "NUL", *(f"COM{i}" for i in range(1, 10)), *(f"LPT{i}" for i in range(1, 10))}
+            or not isinstance(timeframe, str) or timeframe.upper() not in TIMEFRAME_SECONDS):
+        raise DatasetError("invalid dataset identifier")
+    selected = Path(out_dir)
+    if any(p.is_symlink() for p in (selected, *selected.parents)):
+        raise DatasetError("dataset artifact path is linked")
+    root = selected.resolve()
+    csv = root / f"{symbol.upper()}_{timeframe.upper()}.csv"
+    sidecar = csv.with_suffix(".meta.json")
+    for path in (csv, sidecar):
+        if path.is_symlink() or not path.resolve().is_relative_to(root):
+            raise DatasetError("dataset artifact path outside root")
+    return root, csv, sidecar
+
+
 def import_candles(src: str | Path, symbol: str, out_dir: str | Path,
                    tz: str = "UTC", digits: int | None = None,
                    timeframe: str = "M1") -> dict[str, Any]:
@@ -185,33 +219,60 @@ def import_candles(src: str | Path, symbol: str, out_dir: str | Path,
     importer dropped, so a later "why is this run different" question has an answer.
     """
     src = Path(src)
-    out_dir = Path(out_dir)
+    out_dir, dest, sidecar = _dataset_paths(out_dir, symbol, timeframe)
+    if dest.exists() or sidecar.exists():
+        raise DatasetError("dataset artifact exists; refusing overwrite or silent adoption")
     out_dir.mkdir(parents=True, exist_ok=True)
-    df = load_candles(src, tz=tz, digits=digits)
+    try:
+        source_bytes = src.read_bytes()
+    except OSError:
+        raise DatasetError("dataset source is unavailable") from None
+    df = _normalise(_read_any(src, source_bytes), tz, digits)
     facts = describe(df, expected_seconds=TIMEFRAME_SECONDS.get(timeframe.upper(), 60))
-    dest = out_dir / f"{symbol.upper()}_{timeframe.upper()}.csv"
-    df.to_csv(dest, index=False)
+    csv_bytes = df.to_csv(index=False).encode("utf-8")
 
-    digest = hashlib.sha256(src.read_bytes()).hexdigest()[:16]
+    digest = hashlib.sha256(source_bytes).hexdigest()
     meta = {
+        "schema": 1,
+        "dataset_root": str(out_dir),
+        "source_sha256": digest,
+        "csv_sha256": hashlib.sha256(csv_bytes).hexdigest(),
         "symbol": symbol.upper(),
         "timeframe": timeframe.upper(),
         "source_file": src.name,
-        "source_sha256_16": digest,
+        "source_sha256_16": digest[:16],
         "source_timezone": tz,
         "imported_at": int(time.time()),
         "csv": dest.name,
         **facts,
     }
-    (out_dir / f"{symbol.upper()}_{timeframe.upper()}.meta.json").write_text(
-        json.dumps(meta, indent=2, ensure_ascii=False), encoding="utf-8")
+    # Exclusive creation never replaces legacy evidence. Partial writes are left
+    # untrusted: a missing/mismatched sidecar cannot be loaded.
+    try:
+        with dest.open("xb") as output:
+            output.write(csv_bytes)
+        with sidecar.open("x", encoding="utf-8") as output:
+            output.write(json.dumps(meta, indent=2, ensure_ascii=False))
+    except OSError:
+        raise DatasetError("dataset artifact write failed; incomplete artifacts quarantined") from None
     return meta
 
 
 def load_dataset(out_dir: str | Path, symbol: str, timeframe: str = "M1") -> pd.DataFrame:
     """Read back an imported dataset, re-validated like a fresh import."""
-    path = Path(out_dir) / f"{symbol.upper()}_{timeframe.upper()}.csv"
+    root, path, sidecar = _dataset_paths(out_dir, symbol, timeframe)
     if not path.exists():
         raise DatasetError(f"no imported {timeframe.upper()} data for {symbol.upper()} "
                            f"({path}) — run scripts/import_candles.py first")
-    return load_candles(path, tz="UTC")
+    try:
+        meta = json.loads(sidecar.read_text(encoding="utf-8"))
+        if (not isinstance(meta, dict) or meta.get("schema") != 1 or meta.get("dataset_root") != str(root)
+                or meta.get("symbol") != symbol.upper() or meta.get("timeframe") != timeframe.upper()
+                or meta.get("csv") != path.name):
+            raise DatasetError("dataset provenance invalid; artifact quarantined")
+        content = path.read_bytes()
+    except (OSError, ValueError, UnicodeError):
+        raise DatasetError("dataset provenance unavailable or invalid; artifact quarantined") from None
+    if hashlib.sha256(content).hexdigest() != meta.get("csv_sha256"):
+        raise DatasetError("dataset digest mismatch; artifact quarantined")
+    return _normalise(_read_any(path, content), "UTC")

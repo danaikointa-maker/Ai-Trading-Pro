@@ -10,12 +10,14 @@ trading and vice versa.
 from __future__ import annotations
 
 import json
+import math
 import os
 import socket
 import threading
 import time
 import traceback
 from collections import deque
+from contextlib import contextmanager
 from typing import Any
 
 from integrations.brokers.base import BrokerAdapter, BrokerError
@@ -186,7 +188,7 @@ def build_bridge_relay(settings: Settings, audit=None, db=None) -> BridgeRelay:
 class TradingRuntime:
     def __init__(self, settings: Settings | None = None) -> None:
         self.settings = settings or get_settings()
-        self.db = Database(self.settings.database_path)
+        self.db = Database(self.settings.database_path, workspace_id=self.settings.security.get("workspace_id", "local"))
         # --- market data: union of symbols from every simulated broker profile
         symbols: dict[str, dict[str, Any]] = {}
         for profile in self.settings.brokers.get("brokers", []):
@@ -213,7 +215,7 @@ class TradingRuntime:
                 adapter.clock = lambda: self.feed.end_time  # type: ignore[attr-defined]
 
         self.news = NewsService(self.db, high_impact_currencies=["USD"], now=self.feed.end_time)
-        self.market = MarketDataService(self.settings, self.registry, self.news)
+        self.market = MarketDataService(self.settings, self.registry, self.news, db=self.db)
         self.market.set_virtual_now(self.feed.end_time)
         self.market.feed_mode = self.feed_mode
 
@@ -241,6 +243,12 @@ class TradingRuntime:
         self.plans: dict[str, Signal] = {}
         self.gates: dict[str, dict[str, Any]] = {}
         self.positions_cache: list[Position] = []
+        self._positions_identity: dict[str, str] | None = None
+        self._positions_read_at = 0.0
+        self._positions_adapter: BrokerAdapter | None = None
+        self._positions_available = False
+        self._positions_mutations = 0
+        self._positions_epoch = 0
         self.ticks: dict[str, Tick] = {}
         self.version = 0
         self.started_at = time.time()
@@ -302,7 +310,7 @@ class TradingRuntime:
                     "NO7_ALLOW_MULTI_RUNTIME is set: more than one runtime is driving this "
                     "database. Signals and orders may be duplicated."))
             return True
-        frame = replica_payload(self.shared)
+        frame = self._owned_replica_payload()
         self.replica = bool(frame) and self.shared_status.get("backend") != "local"
         self._log_error("runtime-lease", RuntimeError(
             f"another No7 runtime already owns this database ({record.get('owner')}, "
@@ -370,17 +378,22 @@ class TradingRuntime:
             return
         self._last_publish = now
         try:
-            self.shared.publish(LIVE_KEY, {"owner": self._owner, "published_at": now,
-                                           "payload": self.live_payload()})
+            adapter = self.adapter
+            identity = self.gateway._account(adapter)
+            payload = self.live_payload()
+            if (self.adapter is not adapter or self.gateway._account(adapter) != identity
+                    or self.db.kv_get("account-owner:" + adapter.id) != identity):
+                return
+            self.shared.publish(LIVE_KEY, {"owner": self._owner, "published_at": time.time(),
+                                           "account_identity": identity, "payload": payload})
         except Exception as exc:  # noqa: BLE001 - the shared backend must not stop trading
             self._log_error("cluster", exc)
 
     def role(self) -> str:
-        frame = self._replica_frame if self.replica else None
         try:
-            has_frame = bool(frame) or bool(replica_payload(self.shared))
+            has_frame = bool(self._owned_replica_payload())
         except Exception:  # noqa: BLE001 - a broken backend must not 500 the health page
-            has_frame = bool(frame)
+            has_frame = False
         return decide_role(self.lease.get("state", "unclaimed"),
                            str(self.shared_status.get("backend", "local")), has_frame)
 
@@ -632,7 +645,7 @@ class TradingRuntime:
                  f"lot {plan.lot}. Net R:R {plan.reward_risk_net:.2f}." if plan else ""),
                 symbol=signal.symbol, meta={"signal_id": signal.id, "score": signal.score}, dedupe_seconds=0)
         # forecast invalidation watchdog
-        forecast = self.forecasts.get(signal.symbol)
+        forecast = self.cached_forecast(signal.symbol)
         primary = signal.forecast
         if forecast and primary:
             invalid = ctx.snapshot.price > primary.invalidate_above or ctx.snapshot.price < primary.invalidate_below
@@ -647,48 +660,96 @@ class TradingRuntime:
 
     # --------------------------------------------------------- manage cycle
     def _manage_cycle(self, now: float) -> None:
+        with self.lock:
+            if getattr(self, "_positions_mutations", 0):
+                self._positions_available = False
+                return
+            read_epoch = getattr(self, "_positions_epoch", 0)
         try:
-            positions = self.adapter.positions()
+            # Pin one adapter for the whole read; registry selection may change.
+            adapter = self.adapter
+            identity = self.gateway._assert_account(adapter)
+            positions = adapter.positions()
+            self.gateway._assert_account(adapter)
+            specs = {p.symbol: adapter.symbol_spec(p.symbol) for p in positions}
+            self.gateway._assert_account(adapter)
+            if self.adapter is not adapter:
+                raise BrokerError("active account changed during management read")
+            # Validate row scope/collisions before replacing the accepted cache.
+            # Sync before actions so a successful close cannot be resurrected by
+            # a stale pre-action position list at the end of this cycle.
+            with self.lock:
+                if (getattr(self, "_positions_mutations", 0)
+                        or getattr(self, "_positions_epoch", 0) != read_epoch):
+                    self._positions_available = False
+                    return
+                # Keep the epoch check, local transaction and cache acceptance
+                # together; mutation entry must not slip between these steps.
+                self.gateway.open_position_snapshot(positions, broker_id=adapter.id)
+                self.positions_cache = positions
+                self._positions_identity = dict(identity)
+                self._positions_adapter = adapter
+                self._positions_read_at = time.monotonic()
+                self._positions_available = True
+                plans = dict(self.plans)
+                ctx = self.contexts.get(self.active_symbol)
+                forecast = self.cached_forecast(self.active_symbol)
         except Exception as exc:  # noqa: BLE001
+            with self.lock:
+                self._positions_available = False
             self._log_error("positions", exc)
             return
-        with self.lock:
-            self.positions_cache = positions
-            plans = dict(self.plans)
-            ctx = self.contexts.get(self.active_symbol)
-            forecast = self.forecasts.get(self.active_symbol)
-        specs = {p.symbol: self.adapter.symbol_spec(p.symbol) for p in positions}
         atr_points = 0.0
         if ctx is not None:
             atr_points = ctx.snapshot.indicators.atr_points
         actions: list[PositionAction] = self.manager.evaluate(
             positions, specs, plans, forecast, ctx.snapshot if ctx else None, now, atr_points)
         for action in actions:
+            with self.lock:
+                self._positions_available = False
             try:
-                self._apply_action(action, specs)
+                if self.adapter is not adapter:
+                    raise BrokerError("active account changed before management action")
+                self.gateway._assert_account(adapter)
+            except Exception as exc:  # noqa: BLE001
+                self._log_error("management_account", exc)
+                return
+            try:
+                self._apply_action(action, specs, adapter=adapter)
             except Exception as exc:  # noqa: BLE001
                 self._log_error(f"action:{action.kind}", exc)
-        # Always sync (including the empty list) so a closed trade cannot linger
-        # in the local mirror and trip the reconciler.
-        self.gateway.open_position_snapshot(positions)
 
-    def _apply_action(self, action: PositionAction, specs: dict[str, Any]) -> None:
-        if action.kind == "modify" and action.new_sl is not None:
-            ok = self.gateway.modify(self.adapter, action.ticket, sl=action.new_sl, reason=action.reason)
-            if ok:
-                self.notifier.emit("info", f"Stop moved ({action.reason.replace('_', ' ')})",
-                                   f"Ticket {action.ticket}: {action.note}", dedupe_seconds=20)
-        elif action.kind == "partial_close":
-            result = self.gateway.close(self.adapter, action.ticket, volume=action.volume,
-                                        reason=action.reason, actor="position-manager")
-            self.notifier.emit("success", f"Partial close {action.reason.replace('_', ' ')}",
-                               f"Ticket {action.ticket} closed {action.volume} lot — {action.note}",
-                               dedupe_seconds=0)
-            del result
-        elif action.kind == "close":
-            self.gateway.close(self.adapter, action.ticket, reason=action.reason, actor="position-manager")
-            self.notifier.emit("warning", "Position closed by management rule",
-                               f"Ticket {action.ticket}: {action.note}", dedupe_seconds=0)
+    def _apply_action(self, action: PositionAction, specs: dict[str, Any],
+                      adapter: BrokerAdapter | None = None) -> None:
+        adapter = self.adapter if adapter is None else adapter
+        if action.kind not in ("modify", "partial_close", "close"):
+            return
+        if action.kind == "modify" and action.new_sl is None:
+            return
+        outcome = "unknown"
+        try:
+            with self._position_mutation():
+                if action.kind == "modify":
+                    ok = self.gateway.modify(adapter, action.ticket, sl=action.new_sl, reason=action.reason)
+                    # False also covers BrokerError; it is not a broker rejection receipt.
+                    outcome = "accepted" if ok is True else "unknown / not accepted"
+                else:
+                    result = self.gateway.close(
+                        adapter, action.ticket,
+                        volume=action.volume if action.kind == "partial_close" else None,
+                        reason=action.reason, actor="position-manager")
+                    if isinstance(result, dict):
+                        outcome = ("accepted" if result.get("ok") is True else
+                                   "rejected" if result.get("ok") is False else "unknown")
+        finally:
+            try:
+                self.notifier.emit("info" if outcome == "accepted" else "warning",
+                                   f"Management {action.kind} request: {outcome}",
+                                   f"Ticket {action.ticket}. Execution and remaining exposure have not been verified; "
+                                   "reconcile before further action or resending.", dedupe_seconds=0)
+            except Exception:
+                # Do not mask an action exception or suggest that resending is safe.
+                self._log_error("management_notification", RuntimeError("management request notification failed"))
 
     # ------------------------------------------------------------- execution
     def build_manual_plan(self, symbol: str, direction: Direction) -> tuple[Signal | None, str]:
@@ -748,6 +809,8 @@ class TradingRuntime:
                     self.plans[signal_id] = signal
         if signal is None:
             return {"ok": False, "error": "signal not found"}
+        if signal.broker_id != self.adapter.id:
+            return {"ok": False, "error": "signal broker does not match active account"}
         if signal.plan is None:
             return {"ok": False, "error": "signal has no trade plan"}
         if signal.executed_order_id:
@@ -767,6 +830,10 @@ class TradingRuntime:
                               "execution threshold — it cannot be approved by hand"),
                     "blockers": [f"score {signal.score:.0f} < {min_score:.0f}"]}
 
+        unresolved = self.gateway.unresolved_orders(self.adapter.id)
+        if unresolved:
+            return {"ok": False, "error": "unresolved orders block new execution; do not resend — manual reconciliation required",
+                    "reconciliation_required": True, "unresolved_orders": unresolved}
         try:
             risk_state = self.risk.state(self.adapter, now=now)
         except Exception as exc:  # noqa: BLE001 - no order without authoritative risk state
@@ -798,14 +865,16 @@ class TradingRuntime:
                 mode=self.mode,
                 broker_id=self.adapter.id,
             )
-            result: OrderResult = self.gateway.submit(self.adapter, request, actor=actor)
+            with self._position_mutation():
+                result: OrderResult = self.gateway.submit(self.adapter, request, actor=actor)
         except BrokerError as exc:
             return {"ok": False, "error": str(exc)}
         if result.status == OrderState.filled:
             # Slippage moves the fill away from the plan's entry while SL stays
             # where the structure put it, so the money at risk at the fill is not
             # necessarily the money the lot size was computed for. Say so loudly.
-            fill_check = self._check_fill_risk(signal, result, spec)
+            fill_check = (self._check_fill_risk(signal, result, spec) if result.verified else
+                          {"ok": False, "note": "fill evidence unverified; risk cannot be certified"})
             signal.executed_order_id = result.order_id
             signal.approved_by = actor
             signal.approved_at = int(now)
@@ -814,14 +883,20 @@ class TradingRuntime:
                 (signal.id, signal.t, signal.symbol, signal.action.value, signal.score,
                  json.dumps(signal.model_dump(), default=str)))
             self.notifier.emit(
-                "success", f"Order filled: {signal.action.value} {signal.symbol}",
+                "success" if result.verified else "warning",
+                f"Order {'filled' if result.verified else 'filled but UNVERIFIED'}: {signal.action.value} {signal.symbol}",
                 f"{signal.plan.lot} lot at {result.fill_price} | SL {signal.plan.sl:.2f} | "
                 f"TP3 {signal.plan.tp3:.2f} | order {result.order_id}", symbol=signal.symbol,
                 meta={"ticket": result.ticket, "signal_id": signal.id}, dedupe_seconds=0)
             with self.lock:
                 self.version += 1
-            return {"ok": True, "order": result.model_dump(), "signal": signal.id,
-                    "risk_check": fill_check}
+            response = {"ok": result.verified, "order": result.model_dump(), "signal": signal.id,
+                        "risk_check": fill_check,
+                        "execution_state": "verified" if result.verified else "filled_unverified",
+                        "reconciliation_required": not result.verified}
+            if not result.verified:
+                response["error"] = "broker reported a fill but evidence is unverified; do not resend — manual reconciliation required"
+            return response
         return {"ok": False, "error": result.message or "order not filled", "order": result.model_dump()}
 
     def _check_fill_risk(self, signal: Signal, result: OrderResult, spec: Any) -> dict[str, Any]:
@@ -877,18 +952,83 @@ class TradingRuntime:
         return self.execute_signal(signal.id, actor=actor)
 
     def close_ticket(self, ticket: str, volume: float | None = None) -> dict[str, Any]:
-        return self.gateway.close(self.adapter, ticket, volume=volume, reason="manual close", actor="user")
+        attempted = 0
+        with self._position_mutation():
+            try:
+                adapter = self.adapter
+                self.gateway._assert_account(adapter)
+                if self.adapter is not adapter:
+                    raise BrokerError("active account changed before close action")
+                attempted = 1
+                result = self.gateway.close(adapter, ticket, volume=volume, reason="manual close", actor="user")
+                self.gateway._assert_account(adapter)
+                if self.adapter is not adapter:
+                    raise BrokerError("active account changed after close action")
+                if not isinstance(result, dict) or type(result.get("ok")) is not bool:
+                    raise BrokerError("close acknowledgement missing or invalid")
+                return {**result, "outcome": "accepted" if result["ok"] else "rejected",
+                        "attempted": attempted, "unknown": 0,
+                        "exposure_verified": False, "reconciliation_required": True}
+            except Exception:  # A failed call or post-check cannot prove that no action occurred.
+                return {"ok": False, "outcome": "unknown", "attempted": attempted, "unknown": 1,
+                        "exposure_verified": False, "reconciliation_required": True,
+                        "error": "Close outcome unknown; reconcile before further action or resending."}
 
     def close_all(self) -> dict[str, Any]:
         closed = []
-        for pos in self.adapter.positions():
-            result = self.gateway.close(self.adapter, pos.ticket, reason="emergency close", actor="user")
-            closed.append({"ticket": pos.ticket, "ok": bool(result.get("ok")),
-                           "trade": result.get("trade"), "order": result.get("order")})
-        if closed:
-            self.notifier.emit("critical", "Emergency close executed",
-                               f"{len(closed)} position(s) flattened on request.", dedupe_seconds=0)
-        return {"ok": True, "closed": closed}
+        attempted = 0
+        stopped = False
+        with self._position_mutation():
+            adapter = self.adapter
+            self.gateway._assert_account(adapter)
+            positions = adapter.positions()
+            self.gateway._assert_account(adapter)
+            if self.adapter is not adapter:
+                raise BrokerError("active account changed during close-all read")
+            if (any(pos.broker_id != adapter.id for pos in positions)
+                    or len({pos.ticket for pos in positions}) != len(positions)):
+                raise BrokerError("close-all position scope invalid or duplicate tickets")
+            for pos in positions:
+                try:
+                    if self.adapter is not adapter:
+                        raise BrokerError("active account changed before close-all action")
+                    self.gateway._assert_account(adapter)
+                    attempted += 1
+                    result = self.gateway.close(adapter, pos.ticket, reason="emergency close", actor="user")
+                    if not isinstance(result, dict) or type(result.get("ok")) is not bool:
+                        raise BrokerError("close acknowledgement missing or invalid")
+                    row = {"ticket": pos.ticket, "ok": result.get("ok") is True,
+                           "trade": result.get("trade"), "order": result.get("order")}
+                    self.gateway._assert_account(adapter)
+                    if self.adapter is not adapter:
+                        raise BrokerError("active account changed after close-all action")
+                    closed.append(row)
+                except Exception:  # The gateway may have sent before any failure, including post-checks.
+                    if attempted > len(closed):
+                        closed.append({"ticket": pos.ticket, "ok": None, "outcome": "unknown"})
+                    stopped = True
+                    break
+        unknown = sum(row["ok"] is None for row in closed)
+        accepted = sum(row["ok"] is True for row in closed)
+        rejected = sum(row["ok"] is False for row in closed)
+        not_attempted = len(positions) - attempted
+        notification_failed = False
+        if closed or stopped:
+            try:
+                self.notifier.emit("critical", "Close-all request results",
+                                   f"{accepted} accepted, {rejected} rejected, {unknown} unknown; "
+                                   f"{not_attempted} not attempted of {len(positions)} close request(s). "
+                                   "Remaining exposure has not been verified; reconcile before further action.",
+                                   dedupe_seconds=0)
+            except Exception:  # Preserve action outcomes even if alert persistence/delivery fails.
+                notification_failed = True
+        # `closed` is retained for API compatibility: entries are acknowledgements,
+        # not proof of a flat account. Exceptions stop the batch without resending.
+        return {"ok": not stopped and rejected == 0, "closed": closed, "attempted": attempted,
+                "accepted": accepted, "rejected": rejected, "unknown": unknown,
+                "not_attempted": not_attempted, "stopped": stopped,
+                "notification_failed": notification_failed,
+                "reconciliation_required": True, "exposure_verified": False}
 
     def set_mode(self, mode: TradeMode, actor: str = "user") -> dict[str, Any]:
         try:
@@ -939,15 +1079,10 @@ class TradingRuntime:
                                      "version": version}
 
                 result = self.trainer.train(m1, version, progress)
-                self.model_registry.save(result, symbol, activate=result.approved)
-                # Install regardless: the predictor only uses horizons that passed their
-                # own out-of-sample gate, and labels the rest as baseline.
-                self.predictor.install_payload({
-                    "version": result.version, "symbol": symbol, "models": result.models,
-                    "feature_columns": result.feature_columns, "trained_at": result.trained_at,
-                    "metrics": result.metrics, "approved": result.approved, "notes": result.notes,
-                }, result.path_table.arrays())
-                self.model_approved = bool(result.approved)
+                with self.lock:
+                    self.forecasts.clear()
+                    self.predictor.install(result, symbol)
+                    self.model_approved = self.predictor.approved
                 self.training = {
                     "state": "done", "message": result.notes, "pct": 100.0, "version": version,
                     "approved": result.approved, "metrics": result.metrics,
@@ -986,23 +1121,132 @@ class TradingRuntime:
             self._log_error("risk_state", exc)
             return self._unavailable_risk_state()
 
+    @contextmanager
+    def _position_mutation(self):
+        """Invalidate before/after I/O, including failures and overlapping reads.
+
+        This guards local presentation only; it is not a broker execution lock.
+        """
+        with self.lock:
+            self._positions_mutations = getattr(self, "_positions_mutations", 0) + 1
+            self._positions_epoch = getattr(self, "_positions_epoch", 0) + 1
+            self._positions_available = False
+        try:
+            yield
+        finally:
+            with self.lock:
+                self._positions_mutations -= 1
+                self._positions_epoch += 1
+                self._positions_available = False
+
+    def position_view(self) -> dict[str, Any]:
+        """Read-only disclosure guard; never bind an owner from a GET request.
+
+        Ten seconds bounds local cache age, not broker-side atomic continuity.
+        Unavailable means unknown exposure, not an authoritative empty account.
+        """
+        unavailable = {"positions": [], "positions_status": {
+            "available": False, "reason": "position evidence unavailable or stale"}}
+        with self.lock:
+            identity = getattr(self, "_positions_identity", None)
+            read_at = getattr(self, "_positions_read_at", 0.0)
+            if not getattr(self, "_positions_available", False) or identity is None:
+                return unavailable
+            positions = list(self.positions_cache)
+        try:
+            adapter = self.adapter
+            if (adapter is not getattr(self, "_positions_adapter", None)
+                    or self.gateway._account(adapter) != identity
+                    or self.gateway.db.kv_get("account-owner:" + adapter.id) != identity):
+                return unavailable
+            rows = [p.model_dump() for p in positions]
+            if any(p.broker_id != adapter.id for p in positions):
+                return unavailable
+            if (self.gateway._account(adapter) != identity or self.adapter is not adapter
+                    or self.gateway.db.kv_get("account-owner:" + adapter.id) != identity):
+                return unavailable
+            age = time.monotonic() - read_at
+            with self.lock:
+                if (not self._positions_available or self._positions_read_at != read_at
+                        or self._positions_identity != identity or not 0 <= age <= 10):
+                    return unavailable
+            return {"positions": rows, "positions_status": {
+                "available": True, "age_seconds": round(age, 3)}}
+        except Exception:  # noqa: BLE001 - presentation must fail closed without mutating evidence
+            return unavailable
+
+    def _owned_replica_payload(self) -> dict[str, Any] | None:
+        """Validate the shared frame against local persisted ownership without adoption."""
+        try:
+            adapter = self.adapter
+            identity = self.gateway._account(adapter)
+            frame = replica_payload(self.shared)
+            if (not frame or frame.pop("_account_identity", None) != identity
+                    or self.db.kv_get("account-owner:" + adapter.id) != identity):
+                return None
+            account = frame.get("account")
+            if not isinstance(account, dict) or any(
+                    account.get(k) != v for k, v in identity.items() if k != "workspace_id"):
+                return None
+            status = frame.get("positions_status")
+            if not isinstance(status, dict) or status.get("available") is not True:
+                return None
+            age = status.get("age_seconds")
+            if type(age) not in (int, float) or not math.isfinite(age) or age < 0:
+                return None
+            age += frame["frame_age_seconds"]
+            positions = frame.get("positions")
+            if (age > 10 or not isinstance(positions, list)
+                    or any(not isinstance(p, dict) or p.get("broker_id") != adapter.id for p in positions)):
+                return None
+            if (self.adapter is not adapter or self.gateway._account(adapter) != identity
+                    or self.db.kv_get("account-owner:" + adapter.id) != identity):
+                return None
+            frame["positions_status"] = {**status, "age_seconds": age}
+            # Account-valid frames can still contain revoked research evidence.
+            model = frame.get("model")
+            forecast = frame.get("forecast")
+            if isinstance(model, dict) and model.get("approved"):
+                try:
+                    allowed = self.model_registry.inference_allowed(model.get("version"))
+                except Exception:
+                    allowed = False
+                if not allowed:
+                    frame["model"] = {**model, "approved": False}
+                    frame["forecast"] = None
+            if isinstance(forecast, dict) and forecast.get("model_approved"):
+                current = frame.get("model")
+                if (not isinstance(current, dict) or current.get("approved") is not True
+                        or forecast.get("model_version") != current.get("version")):
+                    frame["forecast"] = None
+            return frame
+        except Exception:  # noqa: BLE001 - malformed/unavailable shared state is not authority
+            return None
+
     def live_payload(self, light: bool = False) -> dict[str, Any]:
         if self.replica:
-            frame = replica_payload(self.shared)
+            frame = self._owned_replica_payload()
             if frame is not None:
                 self._replica_frame = frame
                 return frame
+            self._replica_frame = None
+            return {"replica": True, "account": None, "positions": [],
+                    "positions_status": {"available": False, "reason": "owned replica frame unavailable"},
+                    "risk_state": self._unavailable_risk_state().model_dump(), "errors": []}
         symbol = self.active_symbol
         with self.lock:
             snapshot = self.contexts.get(symbol)
-            forecast = self.forecasts.get(symbol)
+            forecast = self.cached_forecast(symbol)
             signal = self.signals.get(symbol)
             gate = self.gates.get(symbol)
-            positions = list(self.positions_cache)
-            ticks = dict(self.ticks)
             version = self.version
             errors = list(self.errors)[-3:]
             training = dict(self.training)
+        try:
+            quote = self.market.latest_quote(symbol)
+        except Exception as exc:  # noqa: BLE001 - live snapshot remains available without a quote
+            quote = None
+            self._log_error(f"ticker:{symbol}", exc)
         payload: dict[str, Any] = {
             "server_time": time.time(),
             "virtual_time": self.market.now(),
@@ -1012,9 +1256,8 @@ class TradingRuntime:
             "account": self.account(),
             "risk_state": self.risk_state().model_dump(),
             "limits": self.risk.limits().model_dump(),
-            "ticker": (ticks.get(symbol).model_dump() if ticks.get(symbol) else
-                       self.market.ticker(symbol).model_dump()),
-            "positions": [p.model_dump() for p in positions],
+            "ticker": quote.get("tick") if quote else None,
+            "ticker_stale": bool(quote and quote.get("stale")),
             "signal": signal.model_dump() if signal else None,
             "gate": gate,
             "model": {
@@ -1033,6 +1276,7 @@ class TradingRuntime:
             },
             "training": training,
             "reconcile": self.last_reconcile,
+            "unresolved_orders": self.gateway.unresolved_orders(self.adapter.id),
             "errors": errors,
             "feed": getattr(self, "feed_mode", None)
             or ("simulated" if self.adapter.adapter_type == "simulated_mt5" else "mt5"),
@@ -1041,6 +1285,7 @@ class TradingRuntime:
         if not light:
             payload["analysis"] = snapshot.snapshot.model_dump() if snapshot else None
             payload["forecast"] = forecast.model_dump() if forecast else None
+        payload.update(self.position_view())
         return payload
 
     def health(self) -> dict[str, Any]:
@@ -1176,15 +1421,27 @@ class TradingRuntime:
             ctx = self.contexts.get(symbol)
         return ctx.snapshot if ctx else None
 
-    def forecast_for(self, symbol: str) -> ForecastBundle | None:
+    def cached_forecast(self, symbol: str) -> ForecastBundle | None:
+        """Read cache without generating data or accepting obsolete approval."""
         with self.lock:
             cached = self.forecasts.get(symbol)
-        if cached:
+            if cached:
+                if cached.model_approved:
+                    self.predictor.revalidate()
+                if (cached.model_version == self.predictor.version
+                        and (not cached.model_approved or self.predictor.approved)):
+                    return cached
+                self.forecasts.pop(symbol, None)
+            return None
+
+    def forecast_for(self, symbol: str) -> ForecastBundle | None:
+        cached = TradingRuntime.cached_forecast(self, symbol)
+        if cached is not None:
             return cached
         try:
             ctx = self.analysis.snapshot(symbol)
-            bundle = self.predictor.forecast(ctx.frames["M5"], ctx.snapshot.spec, symbol)
             with self.lock:
+                bundle = self.predictor.forecast(ctx.frames["M5"], ctx.snapshot.spec, symbol)
                 self.contexts[symbol] = ctx
                 self.forecasts[symbol] = bundle
             return bundle

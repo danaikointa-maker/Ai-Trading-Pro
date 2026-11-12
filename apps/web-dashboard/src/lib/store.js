@@ -18,18 +18,29 @@ export const state = reactive({
   lastError: '',
   serverUnreachable: false,   // shell served, API not answering — say so, do not pretend
   lastLiveAt: 0,              // epoch ms of the newest data actually received
+  positionReceivedAt: 0,
+  positionNow: Date.now(),
   riskSettings: null,
 })
 
 let socket = null
 let pollTimer = null
+let positionTimer = null
 let retry = 0
 
 export const signal = computed(() => state.live?.signal || null)
 export const analysis = computed(() => state.live?.analysis || null)
 export const forecast = computed(() => state.live?.forecast || null)
 export const riskState = computed(() => state.live?.risk_state || null)
-export const positions = computed(() => state.live?.positions || [])
+export const positionsAvailable = computed(() => {
+  const status = state.live?.positions_status
+  const elapsed = (state.positionNow - state.positionReceivedAt) / 1000
+  return !state.serverUnreachable && status?.available === true
+    && Array.isArray(state.live?.positions)
+    && typeof status.age_seconds === 'number' && Number.isFinite(status.age_seconds)
+    && status.age_seconds >= 0 && elapsed >= 0 && status.age_seconds + elapsed <= 10
+})
+export const positions = computed(() => positionsAvailable.value ? state.live.positions : [])
 export const account = computed(() => state.live?.account || null)
 export const mode = computed(() => state.live?.mode || 'manual')
 
@@ -108,9 +119,23 @@ export function applyLive(payload, transport = 'ws') {
   // used to blank every analysis panel one second after load.
   const previous = state.live || {}
   const merged = { ...previous, ...payload }
+  // Unlike analysis, position authority must be supplied together in every frame.
+  merged.positions_status = Array.isArray(payload.positions) && payload.positions_status
+    ? payload.positions_status : { available: false }
   if (merged.analysis == null) merged.analysis = previous.analysis ?? null
-  if (merged.forecast == null) merged.forecast = previous.forecast ?? null
+  // Omitted forecast in a light frame may inherit; an explicit null revokes it.
+  // Never carry a model opinion across symbol/version/approval changes.
+  if (!Object.prototype.hasOwnProperty.call(payload, 'forecast')) {
+    merged.forecast = previous.forecast ?? null
+  }
+  if (merged.forecast && (
+    merged.forecast.symbol !== merged.symbol
+    || (merged.model && merged.forecast.model_version !== merged.model.version)
+    || (merged.forecast.model_approved && merged.model?.approved !== true)
+  )) merged.forecast = null
   state.live = merged
+  state.positionNow = Date.now()
+  state.positionReceivedAt = state.positionNow
   if (payload.symbol && payload.symbol !== state.symbol) state.symbol = payload.symbol
   state.connected = true
   state.serverUnreachable = false
@@ -122,6 +147,7 @@ export function startLive() {
   stopLive()
   if (!state.token) return
   connectSocket()
+  positionTimer = setInterval(() => { state.positionNow = Date.now() }, 250)
   pollTimer = setInterval(async () => {
     if (!state.token) return
     if (state.transport !== 'ws') {
@@ -170,7 +196,10 @@ export function stopLive() {
     socket = null
   }
   if (pollTimer) clearInterval(pollTimer)
+  if (positionTimer) clearInterval(positionTimer)
+  positionTimer = null
   pollTimer = null
+  if (state.live) state.live.positions_status = { available: false }
   state.connected = false
 }
 

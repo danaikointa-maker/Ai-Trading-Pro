@@ -7,6 +7,7 @@ for is not usable — say so instead of pretending the cluster is fine.
 from __future__ import annotations
 
 import time
+import pytest
 
 
 from services.api_gateway.cluster import (LIVE_KEY, LocalSharedState, RedisSharedState,
@@ -153,6 +154,15 @@ def test_replica_payload_is_none_when_the_leader_has_not_published():
     assert replica_payload(store) is None
 
 
+@pytest.mark.parametrize("published", [None, "bad", True, float("nan"), float("inf"),
+                                       time.time() - 11, time.time() + 100])
+def test_replica_rejects_invalid_or_stale_publication_even_with_long_ttl(published):
+    store = LocalSharedState(default_ttl=120)
+    store.publish(LIVE_KEY, {"payload": {"positions": []}, "owner": "host#1",
+                             "published_at": published})
+    assert replica_payload(store) is None
+
+
 def test_role_table():
     assert decide_role("held", "local", False) == "leader"
     assert decide_role("shared", "redis", True) == "leader"
@@ -166,6 +176,7 @@ def test_role_table():
 
 # ------------------------------------------------------------ runtime wiring
 def test_the_running_runtime_publishes_a_frame_readable_by_a_replica(runtime):
+    runtime._manage_cycle(runtime.market.now())
     runtime._maybe_publish(now=time.time() + 5)
     frame = runtime.shared.read(LIVE_KEY)
     assert frame is not None, "the leader must publish for replicas to exist"
@@ -175,6 +186,7 @@ def test_the_running_runtime_publishes_a_frame_readable_by_a_replica(runtime):
     served = replica_payload(runtime.shared)
     assert served["replica"] is True
     assert served["served_by"] == runtime._owner
+    assert frame["account_identity"] == runtime.gateway._account(runtime.adapter)
 
 
 def test_health_reports_the_cluster_role(runtime):

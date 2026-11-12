@@ -66,15 +66,18 @@ def ensure_demo_user(db: Database, settings: Settings) -> str:
 def create_token(settings: Settings, email: str, role: str = "trader") -> tuple[str, int]:
     ttl = int(settings.security.get("jwt_ttl_minutes", 720)) * 60
     payload = {"sub": email, "role": role, "iat": int(time.time()), "exp": int(time.time()) + ttl,
-               "iss": "no7-ai-trading-pro"}
+               "iss": "no7-ai-trading-pro", "workspace": settings.security.get("workspace_id", "local")}
     token = jwt.encode(payload, settings.security["jwt_secret"], algorithm="HS256")
     return token, ttl
 
 
 def decode_token(settings: Settings, token: str) -> dict[str, Any] | None:
     try:
-        return jwt.decode(token, settings.security["jwt_secret"], algorithms=["HS256"],
-                          issuer="no7-ai-trading-pro")
+        payload = jwt.decode(token, settings.security["jwt_secret"], algorithms=["HS256"],
+                             issuer="no7-ai-trading-pro")
+        if payload.get("workspace") != settings.security.get("workspace_id", "local"):
+            return None
+        return payload
     except jwt.PyJWTError:
         return None
 

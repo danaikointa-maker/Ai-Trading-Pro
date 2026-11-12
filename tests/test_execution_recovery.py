@@ -26,9 +26,11 @@ def execution(tmp_path):
     settings = SimpleNamespace(execution={"verify_after_send": True})
     adapter = Mock()
     adapter.id = "isolated-demo"
+    adapter.account_info.return_value = SimpleNamespace(broker_id=adapter.id, login="123", server="Demo", currency="USD")
     adapter.health.return_value = Health.connected
     adapter.positions.return_value = []
     adapter.order_send.side_effect = BrokerError("transport timeout")
+    ExecutionGateway(settings, db)._assert_account(adapter)
     request = OrderRequest(symbol="XAUUSD", side="buy", volume=0.1, sl=1990, tp=2020,
                            signal_id="signal-1", idempotency_key="key-1", broker_id=adapter.id)
     yield settings, db, adapter, request, path
@@ -59,6 +61,22 @@ def test_timeout_is_pending_not_confirmed_rejection(execution):
     assert "not resent" in result.message
 
 
+def test_direct_gateway_refuses_mismatched_broker(execution):
+    settings, db, adapter, request, _ = execution
+    with pytest.raises(BrokerError, match="broker identity"):
+        ExecutionGateway(settings, db).submit(adapter, request.model_copy(update={"broker_id": "other"}))
+    adapter.order_send.assert_not_called()
+
+
+def test_direct_gateway_blocks_new_key_while_outcome_unknown(execution):
+    settings, db, adapter, request, _ = execution
+    gateway = ExecutionGateway(settings, db)
+    gateway.submit(adapter, request)
+    with pytest.raises(BrokerError, match="unresolved"):
+        gateway.submit(adapter, request.model_copy(update={"idempotency_key": "new-key"}))
+    assert adapter.order_send.call_count == 1
+
+
 @pytest.mark.parametrize("patch", [{"volume": 0.2}, {"symbol": "EURUSD"},
                                   {"side": "sell"}, {"sl": 1980}, {"broker_id": "other-demo"}])
 def test_key_cannot_be_reused_for_different_intent(execution, patch):
@@ -67,6 +85,7 @@ def test_key_cannot_be_reused_for_different_intent(execution, patch):
     gateway.submit(adapter, request)
     if "broker_id" in patch:
         adapter.id = patch["broker_id"]
+        adapter.account_info.return_value.broker_id = adapter.id
     with pytest.raises(BrokerError, match="idempotency"):
         gateway.submit(adapter, OrderRequest(**(request.model_dump() | patch)))
     assert adapter.order_send.call_count == 1
@@ -157,7 +176,8 @@ def test_crash_after_claim_before_send_stays_reserved(execution):
     settings, db, adapter, request, _ = execution
     db.execute("INSERT INTO orders VALUES(?,?,?,?,?,?,?)",
                ("claimed", 1, request.idempotency_key, "pending", adapter.id, request.symbol,
-                json.dumps({"request": request.model_dump(mode="json")})))
+                json.dumps({"request": request.model_dump(mode="json"),
+                            "account_identity": ExecutionGateway(settings, db)._account(adapter)})))
     result = ExecutionGateway(settings, db).submit(adapter, request)
     assert result.order_id == "claimed"
     assert result.status == OrderState.pending
@@ -185,3 +205,121 @@ def test_corrupt_result_cannot_be_replayed_or_resent(execution):
     with pytest.raises(BrokerError, match="idempotency"):
         gateway.submit(adapter, request)
     assert adapter.order_send.call_count == 1
+
+
+@pytest.mark.parametrize("position_patch,result_patch,duplicate", [
+    ({"symbol": "EURUSD"}, {}, False),
+    ({"direction": Direction.down}, {}, False),
+    ({"broker_id": "other-demo"}, {}, False),
+    ({"signal_id": "other-signal"}, {}, False),
+    ({"volume": 0.2}, {}, False),
+    ({"volume": float("nan")}, {}, False),
+    ({"entry": float("inf")}, {}, False),
+    ({"entry": 0}, {}, False),
+    ({"entry": 2001}, {}, False),
+    ({}, {"filled_volume": 0.05}, False),
+    ({"volume": 0.05}, {"filled_volume": 0.05}, False),
+    ({}, {"filled_volume": float("inf")}, False),
+    ({}, {"fill_price": None}, False),
+    ({}, {"fill_price": float("nan")}, False),
+    ({}, {"ticket": None}, False),
+    ({}, {}, True),
+])
+def test_immediate_fill_requires_matching_evidence(execution, position_patch, result_patch, duplicate):
+    settings, db, adapter, request, _ = execution
+    adapter.order_send.side_effect = None
+    adapter.order_send.return_value = OrderResult(**({
+        "order_id": "adapter-id", "idempotency_key": "key-1", "status": OrderState.filled,
+        "ticket": "ticket-1", "filled_volume": 0.1, "fill_price": 2000, "verified": True,
+    } | result_patch))
+    position = recovered_position(adapter, **position_patch)
+    adapter.positions.return_value = [position, position] if duplicate else [position]
+    gateway = ExecutionGateway(settings, db)
+    first = gateway.submit(adapter, request)
+    assert not first.verified
+    assert not gateway.submit(adapter, request).verified
+    assert adapter.order_send.call_count == 1
+    stored = json.loads(db.query_one("SELECT payload FROM orders")["payload"])
+    assert stored["result"]["verified"] is False
+
+
+def test_immediate_matching_fill_is_verified(execution):
+    settings, db, adapter, request, _ = execution
+    adapter.order_send.side_effect = None
+    adapter.order_send.return_value = OrderResult(
+        order_id="adapter-id", idempotency_key="key-1", status=OrderState.filled,
+        ticket="ticket-1", filled_volume=0.1, fill_price=2000,
+    )
+    adapter.positions.return_value = [recovered_position(adapter)]
+    assert ExecutionGateway(settings, db).submit(adapter, request).verified
+
+
+@pytest.mark.parametrize("patch", [{"volume": 0.05}, {"entry": 2001},
+                                  {"direction": Direction.down}, {"symbol": "EURUSD"}])
+def test_reconcile_reports_changed_position_fields(execution, patch):
+    from packages.shared_schemas.models import Position
+
+    settings, db, adapter, _, _ = execution
+    position = Position(**(vars(recovered_position(adapter)) |
+                           {"open_time": 1, "sl": 1990, "tp": 2020, "current_price": 2000}))
+    gateway = ExecutionGateway(settings, db)
+    gateway.open_position_snapshot([position])
+    adapter.positions.return_value = [position.model_copy(update=patch)]
+    status = gateway.reconcile(adapter)
+    assert status["ok"] is False
+    assert status["changed_at_broker"] == [position.ticket]
+    assert status["reconciliation_required"] is True
+
+
+def test_reconcile_does_not_delete_another_broker_snapshot(execution):
+    from packages.shared_schemas.models import Position
+
+    settings, db, adapter, _, _ = execution
+    position = Position(**(vars(recovered_position(adapter, broker_id="other-demo")) |
+                           {"open_time": 1, "sl": 1990, "tp": 2020, "current_price": 2000}))
+    gateway = ExecutionGateway(settings, db)
+    gateway.open_position_snapshot([position])
+    adapter.positions.return_value = []
+    gateway.reconcile(adapter)
+    assert db.query_one("SELECT * FROM open_positions WHERE ticket=?", (position.ticket,)) is not None
+
+
+def test_scoped_snapshot_preserves_other_brokers(execution):
+    from packages.shared_schemas.models import Position
+
+    settings, db, adapter, _, _ = execution
+    position = Position(**(vars(recovered_position(adapter, broker_id="other-demo")) |
+                           {"open_time": 1, "sl": 1990, "tp": 2020, "current_price": 2000}))
+    gateway = ExecutionGateway(settings, db)
+    gateway.open_position_snapshot([position])
+    gateway.open_position_snapshot([], broker_id=adapter.id)
+    assert db.query_one("SELECT * FROM open_positions WHERE ticket=?", (position.ticket,)) is not None
+
+
+def test_snapshot_rejects_cross_account_ticket_collision(execution):
+    from packages.shared_schemas.models import Position
+
+    settings, db, adapter, _, _ = execution
+    position = Position(**(vars(recovered_position(adapter, broker_id="other-demo")) |
+                           {"open_time": 1, "sl": 1990, "tp": 2020, "current_price": 2000}))
+    gateway = ExecutionGateway(settings, db)
+    gateway.open_position_snapshot([position])
+    with pytest.raises(BrokerError, match="collision"):
+        gateway.open_position_snapshot([position.model_copy(update={"broker_id": adapter.id})])
+    assert json.loads(db.query_one("SELECT payload FROM open_positions")["payload"])["broker_id"] == "other-demo"
+
+
+def test_unresolved_orders_include_pending_and_unverified_but_not_other_brokers(execution):
+    settings, db, adapter, request, _ = execution
+    gateway = ExecutionGateway(settings, db)
+    gateway.submit(adapter, request)
+    assert len(gateway.unresolved_orders(adapter.id)) == 1
+    assert gateway.unresolved_orders("other-demo") == []
+    row = db.query_one("SELECT * FROM orders")
+    result = OrderResult(order_id=row["id"], idempotency_key=request.idempotency_key,
+                         status=OrderState.filled, ticket="ticket-1", verified=False)
+    gateway._persist_result(row["id"], result, request)
+    assert len(gateway.unresolved_orders(adapter.id)) == 1
+    result.verified = True
+    gateway._persist_result(row["id"], result, request)
+    assert gateway.unresolved_orders(adapter.id) == []

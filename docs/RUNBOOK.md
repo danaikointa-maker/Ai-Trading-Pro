@@ -1,5 +1,11 @@
 # Runbook — ตั้งค่าและดูแลระบบ
 
+> **Safety baseline:** อ่าน [`BASELINE-P1.th.md`](BASELINE-P1.th.md) และ
+> [`SAFETY-HANDOFF.th.md`](SAFETY-HANDOFF.th.md) ก่อนดำเนินการ ขั้นตอนเปิด terminal/Algo Trading,
+> เชื่อม MT5/Redis, restart หรือ deploy ใน runbook เป็นคำแนะนำสำหรับการอนุมัติแยก
+> ไม่ใช่สิทธิ์จากการผ่าน local QA; งานเฟส 1 ไม่ได้ทำขั้นตอนเหล่านั้น
+> Local Windows QA ที่ไม่เริ่ม service ใช้ [`LOCAL-VERIFICATION.th.md`](LOCAL-VERIFICATION.th.md)
+
 ## 1. Linux / macOS (โหมด demo, ไม่ต้องมี MT5)
 
 ```bash

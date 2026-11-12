@@ -14,6 +14,7 @@ Safety notes
 """
 from __future__ import annotations
 
+import math
 import time
 from typing import Any
 
@@ -71,6 +72,10 @@ class MT5Broker(BrokerAdapter):
 
     # ------------------------------------------------------------- connection
     def connect(self) -> bool:
+        if not self.login or not self.server:
+            self._connected = False
+            self._last_error = "explicit account identity required"
+            return False
         if not MT5_AVAILABLE:
             self._last_error = ("MetaTrader5 package is not installed on this host "
                                 "(expected on Linux/CI). Use a demo simulated profile.")
@@ -85,11 +90,7 @@ class MT5Broker(BrokerAdapter):
                 self._last_error = f"initialize failed: {mt5.last_error()}"
                 self._connected = False
                 return False
-            info = mt5.account_info()
-            if info is None:
-                self._last_error = "account_info() returned None (terminal not logged in)"
-                self._connected = False
-                return False
+            self._account_identity()
             self._connected = True
             self._last_error = ""
             return True
@@ -103,6 +104,10 @@ class MT5Broker(BrokerAdapter):
             return Health.disconnected
         if not MT5_AVAILABLE:
             return Health.disconnected
+        try:
+            self._account_identity()
+        except BrokerError:
+            return Health.stale
         info = mt5.terminal_info() if MT5_AVAILABLE else None
         if info is None:
             return Health.stale
@@ -111,6 +116,17 @@ class MT5Broker(BrokerAdapter):
     def _require(self) -> None:
         if not self._connected:
             raise BrokerError(self._last_error or "MT5 terminal is not connected", retcode=-1)
+
+    def _account_identity(self):
+        """Configured account is authority; a connected process-global API is not."""
+        if not self.login or not self.server:
+            raise BrokerError("explicit account identity required")
+        info = mt5.account_info()
+        if (info is None or getattr(info, "login", None) != self.login
+                or getattr(info, "server", None) != self.server
+                or not getattr(info, "currency", None)):
+            raise BrokerError("account identity mismatch")
+        return info
 
     def _broker_symbol(self, symbol: str) -> str:
         return self.symbol_mapping.get(symbol, symbol)
@@ -128,9 +144,7 @@ class MT5Broker(BrokerAdapter):
                 message=self._last_error or "MT5 terminal not connected",
                 regulated_note=self.regulated_note, last_sync=time.time(),
             )
-        info = mt5.account_info()
-        if info is None:
-            raise BrokerError(f"account_info failed: {mt5.last_error()}")
+        info = self._account_identity()
         return AccountInfo(
             broker_id=self.id, label=self.label, server=self.server, account_type=self.account_type,
             login=str(info.login), currency=info.currency, balance=float(info.balance), equity=float(info.equity),
@@ -144,15 +158,23 @@ class MT5Broker(BrokerAdapter):
             raw = self.declared.get(symbol)
             if not raw:
                 raise BrokerError(f"symbol {symbol} unknown and MT5 is offline")
-            return SymbolSpec(symbol=symbol, source="declared", **raw)
+            required = {"digits", "point", "tick_size", "contract_size", "min_lot",
+                        "max_lot", "lot_step", "profit_currency"}
+            return SymbolSpec(**{**raw, "symbol": symbol, "source": "declared",
+                                 "spec_complete": required.issubset(raw)})
         broker_symbol = self._broker_symbol(symbol)
         info = mt5.symbol_info(broker_symbol)
         if info is None:
             raise BrokerError(f"symbol_info({broker_symbol}) failed: {mt5.last_error()}")
         if not info.visible:
             mt5.symbol_select(broker_symbol, True)
-        rate, rate_source = self._quote_rate(str(info.currency_profit))
-        base_rate, base_source = self._quote_rate(str(getattr(info, "currency_base", "") or ""))
+        try:
+            account = mt5.account_info()
+            account_currency = str(getattr(account, "currency", "") or "").strip().upper()
+        except Exception:  # noqa: BLE001 - unresolved account must block sizing
+            account_currency = ""
+        rate, rate_source = self._quote_rate(str(info.currency_profit), account_currency)
+        base_rate, base_source = self._quote_rate(str(getattr(info, "currency_base", "") or ""), account_currency)
         return SymbolSpec(
             **self._swap_fields(info, rate, base_rate if base_source != "unknown" else None),
             symbol=symbol,
@@ -171,6 +193,7 @@ class MT5Broker(BrokerAdapter):
             spread_typical_points=float(info.spread),
             commission_per_lot_round_turn=0.0,
             profit_currency=info.currency_profit,
+            account_currency=account_currency,
             source="broker",
         )
 
@@ -239,21 +262,24 @@ class MT5Broker(BrokerAdapter):
         # 7/8 reopen and anything newer than we know: zero, never face value
         return dict(zero)
 
-    def _quote_rate(self, profit_currency: str) -> tuple[float, str]:
+    def _quote_rate(self, profit_currency: str, account_currency: str | None = None) -> tuple[float, str]:
         """Resolve profit currency -> account currency using visible MT5 quotes."""
-        account_currency = "USD"
-        try:
-            account = mt5.account_info()
-            if account is not None and getattr(account, "currency", None):
-                account_currency = str(account.currency)
-        except Exception:  # noqa: BLE001 - account_info is best effort
-            pass
+        if account_currency is None:
+            try:
+                account = mt5.account_info()
+                account_currency = str(getattr(account, "currency", "") or "")
+            except Exception:  # noqa: BLE001 - unresolved account must block sizing
+                return 1.0, "unknown"
+        if not account_currency.strip():
+            return 1.0, "unknown"
 
         def price_of(name: str) -> float | None:
             for candidate in (name, self._broker_symbol(name)):
                 tick = mt5.symbol_info_tick(candidate)
                 if tick is not None and tick.bid and tick.ask:
-                    return (float(tick.bid) + float(tick.ask)) / 2.0
+                    bid, ask = float(tick.bid), float(tick.ask)
+                    if math.isfinite(bid) and math.isfinite(ask) and 0 < bid <= ask:
+                        return bid / 2.0 + ask / 2.0
             return None
 
         return resolve_quote_rate(profit_currency, account_currency, price_of)
@@ -282,7 +308,12 @@ class MT5Broker(BrokerAdapter):
     # --------------------------------------------------------------- trading
     def positions(self) -> list[Position]:
         self._require()
+        before = self._account_identity()
+        identity = (before.login, before.server, before.currency)
         raw = mt5.positions_get()
+        after = self._account_identity()
+        if (after.login, after.server, after.currency) != identity:
+            raise BrokerError("account identity changed during positions read")
         if raw is None:
             raise BrokerError(f"positions_get failed: {mt5.last_error()}")
         out: list[Position] = []
@@ -299,6 +330,9 @@ class MT5Broker(BrokerAdapter):
                 unrealized=float(p.profit), comment=p.comment, broker_id=self.id,
                 signal_id=(p.comment.split("|")[1] if "|" in p.comment else None),
             ))
+        after = self._account_identity()
+        if (after.login, after.server, after.currency) != identity:
+            raise BrokerError("account identity changed during positions read")
         return out
 
     def _filling_mode(self, broker_symbol: str) -> int | None:
@@ -314,6 +348,7 @@ class MT5Broker(BrokerAdapter):
 
     def order_send(self, request: OrderRequest, ticket_hint: str = "") -> OrderResult:
         self._require()
+        self._account_identity()
         started = time.perf_counter()
         broker_symbol = self._broker_symbol(request.symbol)
         spec = self.symbol_spec(request.symbol)
@@ -337,6 +372,7 @@ class MT5Broker(BrokerAdapter):
             payload["sl"] = spec.round_price(request.sl)
         if request.tp:
             payload["tp"] = spec.round_price(request.tp)
+        self._account_identity()
         result = mt5.order_send(payload)
         if result is None:
             raise BrokerError(f"order_send returned None: {mt5.last_error()}", retcode=-1)
@@ -358,6 +394,7 @@ class MT5Broker(BrokerAdapter):
 
     def modify_position(self, ticket: str, sl: float | None = None, tp: float | None = None) -> bool:
         self._require()
+        self._account_identity()
         positions = mt5.positions_get(ticket=int(ticket)) or []
         if not positions:
             raise BrokerError(f"position {ticket} not found")
@@ -369,16 +406,29 @@ class MT5Broker(BrokerAdapter):
             "sl": float(sl if sl is not None else pos.sl),
             "tp": float(tp if tp is not None else pos.tp),
         }
+        self._account_identity()
         result = mt5.order_send(payload)
         return bool(result and result.retcode == mt5.TRADE_RETCODE_DONE)
 
     def close_position(self, ticket: str, volume: float | None = None, comment: str = "") -> OrderResult:
+        if volume is not None and (type(volume) not in (int, float)
+                                   or not math.isfinite(volume) or volume <= 0):
+            raise BrokerError("invalid close volume; no order sent")
         self._require()
+        self._account_identity()
         positions = mt5.positions_get(ticket=int(ticket)) or []
         if not positions:
             raise BrokerError(f"position {ticket} not found")
         pos = positions[0]
+        requested = pos.volume if volume is None else volume
+        if (type(requested) not in (int, float) or not math.isfinite(requested)
+                or requested <= 0 or requested > pos.volume + 1e-9):
+            raise BrokerError("invalid close volume; no order sent")
         spec = self.symbol_spec(pos.symbol)
+        normalized = spec.normalize_lot(requested)
+        if (type(normalized) not in (int, float) or not math.isfinite(normalized)
+                or normalized <= 0 or normalized > requested + 1e-9):
+            raise BrokerError("invalid normalized close volume; no order sent")
         tick = mt5.symbol_info_tick(pos.symbol)
         direction = OrderSide.sell if pos.type == 0 else OrderSide.buy
         price = tick.bid if direction == OrderSide.sell else tick.ask
@@ -386,7 +436,7 @@ class MT5Broker(BrokerAdapter):
             "action": mt5.TRADE_ACTION_DEAL,
             "position": int(ticket),
             "symbol": pos.symbol,
-            "volume": spec.normalize_lot(volume or pos.volume),
+            "volume": normalized,
             "type": mt5.ORDER_TYPE_SELL if direction == OrderSide.sell else mt5.ORDER_TYPE_BUY,
             "price": float(price),
             "deviation": 20,
@@ -395,13 +445,34 @@ class MT5Broker(BrokerAdapter):
             "type_time": mt5.ORDER_TIME_GTC,
             "type_filling": self._filling_mode(pos.symbol) or mt5.ORDER_FILLING_IOC,
         }
+        self._account_identity()
         result = mt5.order_send(payload)
-        ok = bool(result and result.retcode == mt5.TRADE_RETCODE_DONE)
+        self._account_identity()
+        retcode = getattr(result, "retcode", None)
+        states = {mt5.TRADE_RETCODE_DONE: OrderState.closed,
+                  mt5.TRADE_RETCODE_DONE_PARTIAL: OrderState.partially_filled,
+                  mt5.TRADE_RETCODE_REJECT: OrderState.rejected,
+                  mt5.TRADE_RETCODE_CANCEL: OrderState.cancelled}
+        if type(retcode) is not int or retcode not in states:
+            raise BrokerError("close outcome unknown; reconcile before resending")
+        state = states[retcode]
+        filled_volume = getattr(result, "volume", None)
+        fill_price = getattr(result, "price", None)
+        if state in (OrderState.closed, OrderState.partially_filled):
+            if (type(filled_volume) not in (int, float) or not math.isfinite(filled_volume)
+                    or filled_volume <= 0 or filled_volume > payload["volume"] + 1e-9
+                    or type(fill_price) not in (int, float) or not math.isfinite(fill_price)
+                    or fill_price <= 0):
+                raise BrokerError("close receipt invalid; outcome unknown, reconcile before resending")
+        else:
+            if type(filled_volume) not in (int, float) or filled_volume != 0:
+                raise BrokerError("close receipt inconsistent; outcome unknown, reconcile before resending")
+            fill_price = None
         return OrderResult(
-            order_id=f"close-{ticket}-{int(time.time())}", idempotency_key="", status=OrderState.closed if ok else OrderState.rejected,
-            retcode=int(result.retcode) if result else -1, message=result.comment if result else "send failed",
-            ticket=ticket, filled_volume=float(volume or pos.volume), fill_price=float(price),
-            verified=ok, created_at=time.time(),
+            order_id=f"close-{ticket}-{int(time.time())}", idempotency_key="", status=state,
+            retcode=retcode, message="Close acknowledgement received; remaining exposure not verified",
+            ticket=ticket, filled_volume=float(filled_volume), fill_price=fill_price,
+            verified=False, created_at=time.time(),
         )
 
     def calc_profit(self, symbol: str, direction: Direction, volume: float, entry: float, exit_price: float) -> float:
@@ -411,7 +482,7 @@ class MT5Broker(BrokerAdapter):
             if spec.sizing_blocked:
                 raise BrokerError(
                     f"cannot value {symbol} profit in account currency: "
-                    f"{spec.profit_currency}->USD rate unresolved (MT5 offline)"
+                    f"{spec.profit_currency}->{spec.account_currency} rate unresolved (MT5 offline)"
                 )
             sign = 1 if direction == Direction.up else -1
             return spec.pnl_in_account_currency((exit_price - entry) * sign, volume)
@@ -422,6 +493,51 @@ class MT5Broker(BrokerAdapter):
     def closed_trades(self) -> list[TradeRecord]:
         """History deals are reconciled by the execution gateway, not here."""
         return []
+
+    def deal_history(self, date_from: float, date_to: float) -> dict[str, Any]:
+        """Read-only deal evidence, pinned to explicitly configured login/server.
+
+        Non-trade balance/credit records are not fill evidence. A None response
+        is a transport failure, never an authoritative empty history.
+        """
+        self._require()
+        if (not self.login or not self.server or not math.isfinite(date_from)
+                or not math.isfinite(date_to) or date_from < 0 or date_to < date_from):
+            raise BrokerError("history identity or interval invalid")
+
+        def identity():
+            info = mt5.account_info()
+            if info is None or info.login != self.login or info.server != self.server or not info.currency:
+                raise BrokerError("history account identity mismatch")
+            return info.login, info.server, info.currency
+
+        before = identity()
+        records = mt5.history_deals_get(date_from, date_to)
+        if records is None:
+            raise BrokerError("history unavailable; reconciliation required")
+        if identity() != before:
+            raise BrokerError("history account identity changed during read")
+        account_key = f"{before[1]}:{before[0]}"
+        reverse = {value: key for key, value in self.symbol_mapping.items()}
+        entries = {0: "in", 1: "out", 2: "inout", 3: "out_by"}
+        deals = []
+        for record in records:
+            if record.type not in (0, 1):
+                continue
+            if record.entry not in entries or record.position_id <= 0 or record.order <= 0:
+                raise BrokerError("history deal identity invalid")
+            deals.append({"deal_id": str(record.ticket), "order_id": str(record.order),
+                          "position_id": str(record.position_id), "broker_id": self.id,
+                          "account_key": account_key, "currency": before[2],
+                          "symbol": reverse.get(record.symbol, record.symbol),
+                          "side": "buy" if record.type == 0 else "sell", "entry": entries[record.entry],
+                          "volume": record.volume, "price": record.price, "time_msc": record.time_msc,
+                          "profit": record.profit, "commission": record.commission,
+                          "swap": record.swap, "fee": record.fee})
+        return {"broker_id": self.id, "account_key": account_key,
+                "account_identity": {"broker_id": self.id, "login": str(before[0]),
+                                     "server": before[1], "currency": before[2]},
+                "date_from": date_from, "date_to": date_to, "deals": deals}
 
     def shutdown(self) -> None:
         if MT5_AVAILABLE and self._connected:

@@ -326,6 +326,7 @@ def test_positions_are_replaced_not_merged(bridge):
     positions = adapter.positions()
     assert [p.ticket for p in positions] == ["50002"]
     assert positions[0].direction.value == "down"
+    assert positions[0].broker_id == adapter.id
 
 
 def test_old_snapshot_is_refused_not_served(bridge):

@@ -3,6 +3,15 @@
 เอกสารนี้เขียนขึ้นเพื่อกันความเข้าใจผิดก่อนเอาเงินจริงเข้าไปเกี่ยวข้อง
 ทุกข้อคือสิ่งที่ **ยังไม่จริง** หรือ **ยังไม่ครบ** ใน V1 นี้
 
+## สถานะ baseline และขอบเขตหลักฐาน
+
+อ่าน [`BASELINE-P1.th.md`](BASELINE-P1.th.md) และ [`SAFETY-HANDOFF.th.md`](SAFETY-HANDOFF.th.md)
+ก่อนใช้ข้อความย้อนหลังในหน้านี้: มี deal ledger/FIFO และ historical EA compile แล้ว
+แต่ยังไม่มี authoritative history completeness, per-user account ownership, multi-host fencing
+หรือ MT5 crash/power-loss acceptance; current local runner ยัง skip real Redis/Bash tests
+ข้อความ “ทดสอบสดแล้ว” ด้านล่างเป็นบันทึกรอบเดิม ไม่ใช่การตรวจยืนยันสภาพแวดล้อมปัจจุบัน
+ตาราง/สถิติย้อนหลังไม่ใช่ release sign-off หรือการอนุญาต execution
+
 - **ค่าเริ่มต้นของ dashboard คือ feed จำลอง** (seed 7) — พิสูจน์ได้ว่าไปป์ไลน์ถูก ไม่ได้บอกว่าโมเดลมี edge
   มีสองทางที่จะวัดของจริง (ดู `docs/DATA.md`):
   - offline: `scripts/evaluate_dataset.py` บนข้อมูลที่นำเข้า

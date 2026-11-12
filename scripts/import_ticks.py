@@ -24,7 +24,8 @@ import pandas as pd
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from packages.shared_schemas.settings import reload_settings  # noqa: E402
-from services.market_data.tick_store import coverage, default_format, pyarrow_available  # noqa: E402
+from services.market_data.dataset import DatasetError, workspace_dataset_dir  # noqa: E402
+from services.market_data.tick_store import TickStoreError, coverage, default_format, pyarrow_available  # noqa: E402
 from services.market_data.ticks import TickDataError, import_ticks  # noqa: E402
 
 
@@ -34,7 +35,7 @@ def main() -> int:
     parser.add_argument("--symbol", required=True, help="symbol these ticks belong to")
     parser.add_argument("--tz", default="UTC",
                         help="timezone of the file's timestamps when they carry none")
-    parser.add_argument("--data-dir", default="", help="override the datasets directory")
+    parser.add_argument("--data-dir", default="", help="directory within configured workspace datasets")
     parser.add_argument("--chunk-rows", type=int, default=200_000,
                         help="rows per read (smaller = less memory, more passes)")
     parser.add_argument("--single-file", action="store_true",
@@ -44,7 +45,11 @@ def main() -> int:
     args = parser.parse_args()
 
     settings = reload_settings()
-    out_dir = Path(args.data_dir) if args.data_dir else settings.paths["datasets"]
+    try:
+        out_dir = workspace_dataset_dir(settings.paths["datasets"], args.data_dir or None)
+    except DatasetError as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        return 1
     if args.format and not args.single_file and args.format == "parquet" and not pyarrow_available():
         print("error: --format parquet needs pyarrow (pip install pyarrow)", file=sys.stderr)
         return 1
@@ -52,7 +57,7 @@ def main() -> int:
         summary = import_ticks(args.csv, args.symbol, out_dir, tz=args.tz,
                                layout="file" if args.single_file else "daily",
                                fmt=(args.format or None), chunk_rows=args.chunk_rows)
-    except TickDataError as exc:
+    except (TickDataError, TickStoreError) as exc:
         print(f"error: {exc}", file=sys.stderr)
         return 1
 

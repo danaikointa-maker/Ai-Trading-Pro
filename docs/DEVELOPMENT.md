@@ -2,7 +2,12 @@
 
 เอกสารนี้คือทางเข้าสำหรับ "เปิดเครื่องมาแล้วทำงานต่อ" — ติดตั้งยังไง, ลูปพัฒนาเป็นแบบไหน,
 แก้ตรงไหนไปแตะไฟล์อะไร, เกตก่อนส่งงานคืออะไร, และงานถัดไปที่คุ้มทำที่สุดคืออะไร
-(สถานะความจริงของระบบอยู่ที่ [`LIMITATIONS.md`](LIMITATIONS.md), วิธีดูแลตอนรันอยู่ที่ [`RUNBOOK.md`](RUNBOOK.md))
+(baseline ที่ตรวจแล้วอยู่ที่ [`BASELINE-P1.th.md`](BASELINE-P1.th.md), ข้อจำกัดอยู่ที่
+[`LIMITATIONS.md`](LIMITATIONS.md), วิธีดูแลตอนรันอยู่ที่ [`RUNBOOK.md`](RUNBOOK.md))
+
+สำหรับ Windows ใช้ [`LOCAL-VERIFICATION.th.md`](LOCAL-VERIFICATION.th.md) เป็น canonical local QA route;
+ตัวเลขเวลาจำนวน tests ในตารางด้านล่างเป็น **historical measurements ไม่ใช่ current acceptance**
+CI เป็น workflow ที่ประกาศใน repository ไม่ใช่หลักฐานว่า working tree ที่ยังไม่ commit นี้ผ่าน remote CI
 
 ---
 
@@ -11,7 +16,7 @@
 ```bash
 ./scripts/dev_setup.sh      # venv + deps + .env + dashboard bundle (ครั้งแรก ~2 นาที)
 ./scripts/run.sh            # http://127.0.0.1:8000  →  demo@no7.ai / no7demo1234
-./scripts/dev_check.sh      # เกตก่อน commit: ruff + 548 tests (~2 นาที)
+./scripts/dev_check.sh      # เกต Bash เดิม: ruff + bundle presence + pytest; จำนวน tests ดู evidence ล่าสุด
 ```
 
 ทั้งสามคำสั่งรันซ้ำได้เสมอ ไม่พังของเดิม
@@ -83,7 +88,7 @@ curl -s -H "Authorization: Bearer $TOK" localhost:8000/api/system/health | pytho
 ./scripts/dev_check.sh tests/test_api.py -x
 ```
 
-ตัวเลขอ้างอิงบนเครื่องพัฒนา (Python 3.11, 2 cores) — ช่วงเวลาคือ *รันแรกหลังล้างเครื่อง*
+ตัวเลขอ้างอิงย้อนหลังบนเครื่องพัฒนา (Python 3.11, 2 cores) ไม่ใช่ baseline ปัจจุบัน — ช่วงเวลาคือ *รันแรกหลังล้างเครื่อง*
 (cache เย็น, ต้องโหลด sklearn/lightgbm จากดิสก์) ถึง *รันถัดไป* (cache อุ่น):
 
 | ชุด | จำนวน | เวลา |
@@ -102,7 +107,8 @@ curl -s -H "Authorization: Bearer $TOK" localhost:8000/api/system/health | pytho
 **CI รันเกตตัวเดียวกันนี้ให้อัตโนมัติทุก PR** (`.github/workflows/ci.yml` → `./scripts/dev_check.sh`)
 ถ้าเครื่องคุณลืมรัน CI จะจับให้ และถ้าอีกทีม merge อะไรที่ชนกับของเรา CI จะแดงตั้งแต่ใน PR
 
-**เทสต์ไม่เคยแตะข้อมูลจริง** — `tests/conftest.py` ชี้ `NO7_DB_PATH`/`NO7_DATA_DIR`/… ไปที่ temp dir
+**ต้องล้าง runtime overrides ก่อนรันเทสต์** — `tests/conftest.py` ใช้ `setdefault` ชี้ `NO7_DB_PATH`/`NO7_DATA_DIR`/… ไปที่ temp dir
+จึงไม่ทับค่าที่สืบทอดอยู่; local runner ล้าง `NO7_*`/`MT5_*` ใน child environment ก่อนเรียก pytest
 และ fixture `settings` จะ assert ว่า path มีคำว่า `no7-tests-` อยู่ ถ้าเขียนเทสต์ใหม่ที่ต้องตั้ง env
 ให้ตั้ง **ก่อน** เรียก `reload_settings()` เสมอ (settings ถูก cache)
 

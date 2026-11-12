@@ -25,7 +25,7 @@ def explain(payload: ExplainRequest, runtime: TradingRuntime = Depends(get_runti
     if payload.signal_id:
         signal = runtime.plans.get(payload.signal_id, signal)
     snapshot = runtime.snapshot(symbol)
-    forecast = runtime.forecasts.get(symbol)
+    forecast = runtime.cached_forecast(symbol)
     explainer = TradeExplainer(No7LocalAI())
     result = explainer.explain(payload.question, signal, snapshot, forecast)
     result["facts"] = explainer.fact_sheet(signal, snapshot, forecast)

@@ -21,6 +21,104 @@ def test_login_rejects_wrong_password(client):
 def test_private_endpoints_require_auth(client):
     assert client.get("/api/trading/live").status_code == 401
     assert client.get("/api/risk/settings").status_code == 401
+    assert client.get("/api/trading/deals").status_code == 401
+
+
+def test_deal_history_endpoint_lists_account_scoped_evidence(client, auth, runtime):
+    from services.execution_gateway.history import DealLedger
+
+    identity = runtime.gateway._assert_account(runtime.adapter)
+    key = f"{identity['server']}:{identity['login']}"
+    row = {"deal_id": "api-deal-1", "order_id": "api-order-1", "position_id": "api-position-1",
+           "broker_id": runtime.adapter.id, "account_key": key, "currency": identity["currency"],
+           "symbol": "XAUUSD", "side": "buy", "entry": "in", "volume": 0.01,
+           "price": 2000.0, "time_msc": 1_700_000_000_000, "profit": 0.0,
+           "commission": 0.0, "swap": 0.0, "fee": 0.0}
+    ledger = DealLedger(runtime.db)
+    ledger.ingest(runtime.adapter.id, key, [row])
+    response = client.get("/api/trading/deals?limit=10", headers=auth)
+    assert response.status_code == 200
+    body = response.json()
+    assert body["deals"][0]["deal_id"] == "api-deal-1"
+    assert body["account_key"] == key
+    assert "not strategy ownership" in body["attribution"]
+
+
+def test_trade_review_keeps_original_signal_and_labels_retrospective_outcome(client, auth, runtime):
+    from packages.shared_schemas.models import Direction, TradeRecord
+
+    signal_id = "review-signal-1"
+    signal = {"id": signal_id, "t": 1_700_000_000, "symbol": "XAUUSD", "timeframe": "M5",
+              "broker_id": runtime.adapter.id, "action": "BUY", "status": "valid", "score": 72,
+              "strategy": "trend", "regime": "trending_up", "mode": "manual",
+              "plan": {"entry": 2000, "sl": 1990, "tp1": 2010, "tp2": 2020, "tp3": 2030,
+                       "lot": 0.01, "risk_amount": 1, "reward_risk": 1.0},
+              "reasons": ["trend aligned"], "blockers": [], "components": [], "zones_used": [],
+              "approval_required": True, "expires_at": 1_700_000_100, "explanation": {}}
+    runtime.db.execute("INSERT OR REPLACE INTO signals(id,t,symbol,action,score,payload) VALUES(?,?,?,?,?,?)",
+                       (signal_id, signal["t"], "XAUUSD", "BUY", 72, json.dumps(signal)))
+    trade = TradeRecord(ticket="review-ticket-1", symbol="XAUUSD", direction=Direction.up,
+                        volume=0.01, entry=2000, exit=2010, opened_at=signal["t"], closed_at=signal["t"] + 60,
+                        points=100, gross_pnl=1, costs=0, pnl=1, signal_id=signal_id,
+                        broker_id=runtime.adapter.id)
+    runtime.gateway.record_trade(trade)
+
+    response = client.get("/api/trading/trades/review-ticket-1/review", headers=auth)
+    assert response.status_code == 200
+    body = response.json()
+    assert body["trade"]["ticket"] == "review-ticket-1"
+    assert body["entry_snapshot"]["id"] == signal_id
+    assert body["entry_snapshot"]["score"] == 72
+    assert body["retrospective"]["outcome"] == "profitable"
+    assert body["retrospective"]["basis"] == "recorded trade result; not a new prediction"
+
+
+def test_trade_review_rejects_other_broker_account(client, auth, runtime):
+    from packages.shared_schemas.models import Direction, TradeRecord
+
+    runtime.gateway.record_trade(TradeRecord(ticket="private-ticket", symbol="XAUUSD", direction=Direction.up,
+        volume=0.01, entry=2000, exit=2001, opened_at=10, closed_at=20, points=100,
+        gross_pnl=1, costs=0, pnl=1, broker_id="other-account"))
+    response = client.get("/api/trading/trades/private-ticket/review", headers=auth)
+    assert response.status_code == 404
+
+
+def test_trade_review_remains_readable_when_market_feed_is_offline(client, auth, runtime, monkeypatch):
+    from packages.shared_schemas.models import Direction, TradeRecord
+
+    runtime.gateway.record_trade(TradeRecord(ticket="offline-review", symbol="XAUUSD", direction=Direction.down,
+        volume=0.01, entry=2000, exit=1995, opened_at=10, closed_at=20, points=500,
+        gross_pnl=0.5, costs=0, pnl=0.5, broker_id=runtime.adapter.id))
+    monkeypatch.setattr(runtime.market.adapter, "ticker", lambda _symbol: (_ for _ in ()).throw(RuntimeError("offline")))
+    response = client.get("/api/trading/trades/offline-review/review", headers=auth)
+    assert response.status_code == 200
+    assert response.json()["retrospective"]["outcome"] == "profitable"
+    assert response.json()["entry_snapshot"] is None
+
+
+def test_trade_history_is_scoped_to_active_broker_account(client, auth, runtime):
+    from packages.shared_schemas.models import Direction, TradeRecord
+
+    for ticket, broker_id in (("mine", runtime.adapter.id), ("other", "other-account")):
+        runtime.gateway.record_trade(TradeRecord(ticket=ticket, symbol="XAUUSD", direction=Direction.up,
+            volume=0.01, entry=2000, exit=2001, opened_at=10, closed_at=20, points=100,
+            gross_pnl=1, costs=0, pnl=1, broker_id=broker_id))
+    response = client.get("/api/trading/trades?limit=100", headers=auth)
+    assert response.status_code == 200
+    tickets = {trade["ticket"] for trade in response.json()["trades"]}
+    assert "mine" in tickets
+    assert "other" not in tickets
+
+
+def test_ticker_endpoint_retains_quote_when_market_is_closed(client, auth, runtime, monkeypatch):
+    from packages.shared_schemas.models import Tick
+
+    tick = Tick(t=1_700_000_000, bid=2000, ask=2001, spread_points=100, last=2000.5)
+    runtime.market.on_ticks({"XAUUSD": tick})
+    monkeypatch.setattr(runtime.market.adapter, "ticker", lambda _symbol: (_ for _ in ()).throw(RuntimeError("closed")))
+    response = client.get("/api/market/ticker?symbol=XAUUSD", headers=auth)
+    assert response.status_code == 200
+    assert response.json() == {"tick": tick.model_dump(), "stale": True, "source": "persisted"}
 
 
 def test_health_is_public(client):
@@ -31,12 +129,28 @@ def test_health_is_public(client):
     assert "services" in body and "broker_health" in body
 
 
+def test_single_close_http_preserves_unknown_result(client, auth, runtime, monkeypatch):
+    from unittest.mock import Mock
+
+    close = Mock(side_effect=RuntimeError("private broker detail"))
+    monkeypatch.setattr(runtime.gateway, "close", close)
+    res = client.post("/api/trading/close", json={"ticket": "unknown-send"}, headers=auth)
+    assert res.status_code == 400
+    detail = res.json()["detail"]
+    assert detail["ok"] is False and detail["outcome"] == "unknown"
+    assert detail["unknown"] == 1 and detail["attempted"] == 1
+    assert detail["exposure_verified"] is False
+    assert detail["reconciliation_required"] is True
+    assert "private" not in res.text
+    close.assert_called_once()
+
+
 def test_live_snapshot_has_every_block_the_ui_needs(client, auth):
     res = client.get("/api/trading/live", headers=auth)
     assert res.status_code == 200, res.text
     live = res.json()
     for key in ("account", "positions", "risk_state", "limits", "signal", "analysis",
-                "forecast", "mode", "feed", "alerts", "ticker"):
+                "forecast", "mode", "feed", "alerts", "ticker", "ticker_stale"):
         assert key in live, f"missing {key}"
     analysis = live["analysis"]
     assert len(analysis["supports"]) >= 3 and len(analysis["resistances"]) >= 3
@@ -49,6 +163,20 @@ def test_live_snapshot_has_every_block_the_ui_needs(client, auth):
     assert {s["name"] for s in forecast["scenarios"]} == {"bull", "base", "bear"}
     # the score is a heuristic and must never be presented as a probability
     assert live["signal"] is None or "score" in live["signal"]
+
+
+def test_live_snapshot_marks_memory_quote_stale_after_feed_stops(client, auth, runtime, monkeypatch):
+    from packages.shared_schemas.models import Tick
+
+    tick = Tick(t=1_700_000_000, bid=2000, ask=2001, spread_points=100, last=2000.5)
+    runtime.market.on_ticks({"XAUUSD": tick})
+    runtime.active_symbol = "XAUUSD"
+    runtime.ticks = {"XAUUSD": tick}
+    monkeypatch.setattr(runtime.market.adapter, "ticker", lambda _symbol: (_ for _ in ()).throw(RuntimeError("offline")))
+    runtime.market.latest_quote("XAUUSD")
+    live = runtime.live_payload()
+    assert live["ticker"] == tick.model_dump()
+    assert live["ticker_stale"] is True
 
 
 def test_signal_score_is_not_a_probability(client, auth):

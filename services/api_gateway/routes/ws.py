@@ -32,6 +32,8 @@ def _identity(ws: WebSocket, payload: dict | None) -> str:
 
 def _authority(runtime, settings, token):
     """Return a current identity/role, or a close code. Never trust token roles."""
+    if getattr(runtime.db, "workspace_id", None) != settings.security.get("workspace_id", "local"):
+        return None, 1011
     if not settings.security.get("require_auth", True):
         return ("anonymous", "anonymous"), None
     payload = decode_token(settings, token or "")

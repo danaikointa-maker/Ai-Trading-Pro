@@ -328,13 +328,15 @@ def test_prune_needs_admin(client, auth, isolated_datasets, tmp_path):
         client.delete("/api/users/tickviewer@no7.ai", headers=auth)
 
 
-def test_gzipped_legacy_file_still_imports_and_loads(tmp_path):
-    """An export written by the first version of the importer keeps working."""
+def test_unregistered_gzipped_legacy_file_is_not_silently_adopted(tmp_path):
+    """Old exports remain intact but need explicit re-import into a new root."""
     src = _write_csv(tmp_path / "legacy.csv", [_ticks(DAY1, 5)])
     path = tmp_path / "ticks" / "XAUUSD_ticks.csv.gz"
     path.parent.mkdir(parents=True, exist_ok=True)
     frame, _ = load_tick_csv(src, tz="UTC")
     path.write_bytes(gzip.compress(frame.to_csv(index=False).encode(), mtime=0))
     assert tick_layout(tmp_path, "XAUUSD") == "file"
-    book = TickBook.load(tmp_path, "XAUUSD")
-    assert book is not None and len(book) == 5
+    before = path.read_bytes()
+    with pytest.raises(TickStoreError, match="legacy|provenance"):
+        TickBook.load(tmp_path, "XAUUSD")
+    assert path.read_bytes() == before

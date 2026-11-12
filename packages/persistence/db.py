@@ -8,6 +8,7 @@ FastAPI event loop, the strategy thread and the simulator thread share it.
 from __future__ import annotations
 
 import json
+import re
 import sqlite3
 import threading
 import time
@@ -16,6 +17,12 @@ from pathlib import Path
 from typing import Any, Iterator
 
 SCHEMA = """
+CREATE TABLE IF NOT EXISTS broker_deals (
+    broker_id TEXT NOT NULL, account_key TEXT NOT NULL, deal_id TEXT NOT NULL,
+    time_msc INTEGER NOT NULL, payload TEXT NOT NULL,
+    PRIMARY KEY (broker_id, account_key, deal_id)
+);
+CREATE TABLE IF NOT EXISTS workspace_identity (singleton INTEGER PRIMARY KEY CHECK(singleton=1), workspace_id TEXT NOT NULL);
 CREATE TABLE IF NOT EXISTS candles (
     symbol TEXT NOT NULL, tf TEXT NOT NULL, t INTEGER NOT NULL,
     o REAL, h REAL, l REAL, c REAL, v REAL,
@@ -127,19 +134,55 @@ CREATE INDEX IF NOT EXISTS idx_notify_outbox ON notify_outbox(next_attempt_at);
 
 
 class Database:
-    def __init__(self, path: Path | str) -> None:
+    def __init__(self, path: Path | str, workspace_id: str = "local", *, adopt_legacy: bool = False) -> None:
+        if type(adopt_legacy) is not bool:
+            raise ValueError("adopt_legacy must be an explicit boolean")
+        if not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9_-]{0,63}", workspace_id):
+            raise ValueError("invalid workspace identity")
+        self.workspace_id = workspace_id
         self.path = Path(path)
         self.path.parent.mkdir(parents=True, exist_ok=True)
         self._lock = threading.RLock()
         self._conn = sqlite3.connect(str(self.path), check_same_thread=False, timeout=15.0)
         self._conn.row_factory = sqlite3.Row
         with self._lock:
-            self._conn.execute("PRAGMA journal_mode=WAL")
-            self._conn.execute("PRAGMA synchronous=NORMAL")
-            self._conn.execute("PRAGMA busy_timeout=8000")
-            self._conn.executescript(SCHEMA)
-            self._migrate()
-            self._conn.commit()
+            try:
+                # Reject foreign/corrupt/legacy ownership before schema or persistent
+                # PRAGMAs. Recheck under the writer lock to serialize first adoption.
+                self._check_workspace(workspace_id, adopt_legacy)
+                self._conn.execute("BEGIN IMMEDIATE")
+                self._check_workspace(workspace_id, adopt_legacy)
+                # executescript() would implicitly commit the ownership transaction.
+                for statement in SCHEMA.split(";"):
+                    if statement.strip():
+                        self._conn.execute(statement)
+                self._conn.execute("INSERT OR IGNORE INTO workspace_identity VALUES(1,?)", (workspace_id,))
+                self._migrate()
+                self._conn.commit()
+                self._conn.execute("PRAGMA journal_mode=WAL")
+                self._conn.execute("PRAGMA synchronous=NORMAL")
+                self._conn.execute("PRAGMA busy_timeout=8000")
+            except Exception:
+                self._conn.rollback()
+                self._conn.close()
+                raise
+
+    def _check_workspace(self, workspace_id: str, adopt_legacy: bool) -> None:
+        tables = {row[0] for row in self._conn.execute(
+            "SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%'")}
+        if "workspace_identity" not in tables:
+            if tables and not adopt_legacy:
+                raise ValueError("legacy database has no workspace identity; explicit adoption required")
+            return
+        try:
+            rows = list(self._conn.execute("SELECT singleton, workspace_id FROM workspace_identity"))
+        except sqlite3.Error as exc:
+            raise ValueError("invalid database workspace identity") from exc
+        if (len(rows) != 1 or rows[0][0] != 1 or not isinstance(rows[0][1], str)
+                or not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9_-]{0,63}", rows[0][1])):
+            raise ValueError("invalid database workspace identity")
+        if rows[0][1] != workspace_id:
+            raise ValueError("database belongs to another workspace")
 
     # ------------------------------------------------------------- migrations
     # Columns added after a database may already exist. `CREATE TABLE IF NOT

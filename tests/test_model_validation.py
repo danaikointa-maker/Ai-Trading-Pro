@@ -205,22 +205,16 @@ def test_predictor_loads_the_newest_run_not_the_newest_approval(settings, tmp_pa
     # A session runtime may finish training concurrently; this assertion needs
     # its own registry so the two timestamps below are the entire test history.
     registry = ModelRegistry(tmp_path / "models", Database(tmp_path / "models.sqlite3"))
+    from types import SimpleNamespace
+    from services.ai_forecast.pathprob import PathProbabilityTable
+
     for version, created, approved in (("m-old-approved", 100, 1),
                                        ("m-new-rejected", 200, 0)):
-        registry.db.execute(
-            "INSERT OR REPLACE INTO models(version, created_at, method, approved, samples,"
-            " metrics, notes, path) VALUES(?,?,?,?,?,?,?,?)",
-            (version, created, "test", approved, 10, '{"horizons": {}, "approval_rule": 2}',
-             "", str(registry.model_dir / version)))
+        registry.save(SimpleNamespace(version=version, trained_at=created, approved=bool(approved),
+                                      samples=10, metrics={"horizons": {}, "approval_rule": 2},
+                                      notes="rejected on evidence" if not approved else "approved fixture",
+                                      models={}, feature_columns=[], path_table=PathProbabilityTable()), "XAUUSD")
     assert registry.latest() == "m-new-rejected"
-
-    import joblib
-
-    target = registry.model_dir / "m-new-rejected"
-    target.mkdir(parents=True, exist_ok=True)
-    joblib.dump({"version": "m-new-rejected", "approved": False, "models": {},
-                 "metrics": {"horizons": {}, "approval_rule": 2}, "symbol": "XAUUSD",
-                 "trained_at": 200, "notes": "rejected on evidence"}, target / "models.joblib")
 
     predictor = ForecastPredictor(settings, registry)
     predictor.load_latest()

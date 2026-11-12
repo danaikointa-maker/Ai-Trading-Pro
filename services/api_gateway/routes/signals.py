@@ -18,7 +18,7 @@ def latest(symbol: str | None = None, runtime: TradingRuntime = Depends(get_runt
     with_lock = runtime.lock
     with with_lock:
         gate = runtime.gates.get(sym)
-        forecast = runtime.forecasts.get(sym)
+        forecast = runtime.cached_forecast(sym)
     return {"signal": signal.model_dump() if signal else None,
             "gate": gate,
             "forecast": forecast.model_dump() if forecast else None,

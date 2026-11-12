@@ -76,9 +76,17 @@ def train(payload: dict | None = None, runtime: TradingRuntime = Depends(get_run
 @router.post("/forecast/models/{version}/approve")
 def approve(version: str, payload: dict | None = None, runtime: TradingRuntime = Depends(get_runtime),
             user=Depends(current_user)):
-    approved = True if payload is None else bool(payload.get("approved", True))
-    runtime.model_registry.approve(version, approved)
-    if approved:
+    approved = True if payload is None else payload.get("approved", True)
+    if type(approved) is not bool:
+        raise HTTPException(status_code=422, detail="approved must be a boolean")
+    with runtime.lock:
+        if not runtime.model_registry.approve(version, approved):
+            raise HTTPException(
+                status_code=409,
+                detail="Model approval change refused; verify registration and artifact integrity.",
+            )
+        # Clear every symbol before reload, including when reload itself refuses.
+        runtime.forecasts.clear()
         runtime.predictor.load_latest()
     return {"ok": True, "version": version, "approved": approved,
             "note": "Approval is a research action; the full-auto gate still requires every OOS check to pass."}

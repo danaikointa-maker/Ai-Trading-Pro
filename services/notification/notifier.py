@@ -460,17 +460,21 @@ class Notifier:
                 # is the honest outcome — it is counted as expired, not delivered.
                 self.outbox.discard(row["id"], reason="channel disabled")
                 continue
-            if not self._paced(channel):
+            ready = self._paced(channel)
+            if not ready:
                 # Measured on the real app: skipping here drains a backlog at one
                 # message per loop cycle (15s). This runs on its own thread, so
                 # waiting out the channel's interval is free and the backlog clears
                 # at exactly the speed the provider allows. Bounded by `limit`.
-                gap = self.min_interval - (time.monotonic()
-                                           - self._last_send.get(channel, 0.0))
-                if allow_sleep and 0 < gap <= self.min_interval:
+                while allow_sleep and not ready:
+                    gap = max(0.001, self.min_interval - (time.monotonic()
+                                                        - self._last_send.get(channel, 0.0)))
                     if self._closing.wait(gap):
                         break
-                if not self._paced(channel):
+                    ready = self._paced(channel)
+                if self._closing.is_set():
+                    break
+                if not ready:
                     paced += 1
                     continue
             attempt = int(row["attempts"] or 0) + 1

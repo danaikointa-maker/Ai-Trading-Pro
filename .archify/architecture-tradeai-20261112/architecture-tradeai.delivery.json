@@ -1,0 +1,14 @@
+{
+  "schemaVersion": 1,
+  "receiptId": "9e0ce011-d123-4d35-a0c8-d87cc03a297e",
+  "status": "failed",
+  "command": "deliver",
+  "stage": "render",
+  "input": "C:\\workspace\\Ai-Trading-Pro\\.archify\\architecture-tradeai-20261112\\candidate.json",
+  "output": "C:\\workspace\\Ai-Trading-Pro\\.archify\\architecture-tradeai-20261112\\architecture-tradeai.html",
+  "artifact": {
+    "sha256": "98061547468bde15a1a09f6b919405efaad64f98af9bd82fbda879198b3dcebf",
+    "bytes": 860819
+  },
+  "error": "Could not run Git: spawnSync git ENOENT"
+}

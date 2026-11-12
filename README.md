@@ -1,4 +1,4 @@
-# No7 AI Trading Pro — V1
+﻿# No7 AI Trading Pro — V1
 
 [![gate](https://github.com/danaikointa-maker/TradeAi/actions/workflows/ci.yml/badge.svg)](https://github.com/danaikointa-maker/TradeAi/actions/workflows/ci.yml)
 
@@ -18,22 +18,28 @@
 
 ## สถานะปัจจุบัน (V1, บนเครื่องนี้)
 
+**Safety baseline เฟส 1:** ตรวจ source/config และผล local ตาม
+[`docs/BASELINE-P1.th.md`](docs/BASELINE-P1.th.md) และ
+[`docs/SAFETY-HANDOFF.th.md`](docs/SAFETY-HANDOFF.th.md)
+ตารางนี้บอกว่ามี implementation ไม่ใช่ release/MT5/เงินจริง acceptance;
+ยังคง single-runtime execution boundary และไม่อนุญาตเปิด execution จากผลทดสอบ local
+
 | ส่วน | สถานะ |
 |---|---|
 | API Gateway (FastAPI) + JWT + WebSocket | ✅ ทำงาน |
 | Market data (simulated feed, seed 7) + MT5 adapter | ✅ / ⏳ ต้องเทอร์มินัล Windows |
-| EA bridge (MQL5 poll → API) | ✅ ฝั่งเซิร์ฟเวอร์ + EA จำลองทดสอบแล้ว / ⏳ EA จริงยังไม่ compile |
+| EA bridge (MQL5 poll → API) | มี server/EA source และ historical compile evidence; ยังไม่ผ่าน MT5 crash/restart acceptance |
 | นำเข้าข้อมูลจริง (CSV) + ประเมิน offline บนข้อมูลจริง | ✅ `scripts/import_candles.py` (ดู `docs/DATA.md`) |
 | Live replay จากข้อมูลที่นำเข้า (`feed_mode: replay`) | ✅ ใช้งานได้ (ยังไม่ใช่ tick data) |
 | Trend · Market structure (BOS/CHoCH) · S/R confluence | ✅ |
 | Forecast 5/15/30/60/240 นาที + isotonic calibration + P10–P90 | ✅ (บาง horizon ยังไม่ผ่านเกณฑ์ OOS) |
 | Signal scoring 0–100 + Risk Gate | ✅ |
 | Risk Engine (kill switch, daily/weekly loss, cooldown, spread, news) | ✅ |
-| Execution gateway (idempotent, verify-after-send, paper broker) | ✅ |
+| Execution gateway | มี atomic admission สำหรับ connections ที่ใช้ SQLite DB เดียวกัน; ไม่ใช่ multi-host fencing |
 | Backtest engine + walk-forward + cost model | ✅ |
 | AI Journal / Explainer (deterministic, LLM เป็นตัวเลือก) | ✅ |
 | Dashboard (Vue 3 + Tailwind + ECharts + Lightweight Charts) | ✅ 10 หน้า |
-| MQL5 EA + bridge (คำสั่งไปถึงเทอร์มินัลครั้งเดียว, shared store หลาย worker) | ✅ (ยังไม่ compile กับ MT5 จริง) |
+| MQL5 EA durable journal + bridge | claim/outcome replay และ fail-closed guards; ไม่รับรอง broker exactly-once หรือ power-loss durability |
 | Tick storage รายวัน (parquet, lazy) + intra-bar ordering | ✅ |
 | Mobile PWA (ติดตั้งได้, แถบอัปเดต/ออฟไลน์ที่บอกความจริง) | ✅ |
 | TLS (uvicorn หรือ reverse proxy) + security headers/CORS allowlist | ✅ |
@@ -205,8 +211,13 @@ storage/                   db / datasets / models / backtests / logs (git-ignore
 
 ## ทดสอบ
 
+Windows/local evidence runner ใช้คำสั่ง explicit Python/Node/Git ใน
+[`docs/LOCAL-VERIFICATION.th.md`](docs/LOCAL-VERIFICATION.th.md): build ใหม่ก่อน PWA tests,
+ล้าง runtime env overrides, เก็บ exit/JUnit และแจกแจง skip โดยไม่ติดตั้งหรือเริ่ม service ให้เอง
+ผลแต่ละรอบและ source fingerprint อยู่ใน [`docs/BASELINE-P1.th.md`](docs/BASELINE-P1.th.md)
+
 ```bash
-./scripts/dev_check.sh           # เกตเต็ม: ruff + dashboard bundle + 548 tests (~2 นาที)
+./scripts/dev_check.sh           # เกต Bash เดิม: ruff + ตรวจว่ามี bundle + pytest (จำนวนขึ้นกับ tree/environment)
 ./scripts/test.sh                # เฉพาะ pytest (เลือก .venv ให้เอง)
 ```
 
@@ -218,11 +229,16 @@ storage/                   db / datasets / models / backtests / logs (git-ignore
 2. **โมเดลยังไม่ผ่านเกณฑ์ทุก horizon** — ระบบจะติดป้าย `UNVALIDATED` และใช้ค่าฐานสถิติแทน
 3. **ยังไม่มี tick data จริง** สำหรับ backtest (ใช้ M1 จาก feed) — ต้องอัปเกรดก่อนเชื่อถือผล
 4. **Backtest ยังไม่ reproducible 100%** เพราะ feed ถูก generate ตามเวลาปัจจุบัน (ดู `docs/LIMITATIONS.md`)
-5. **MQL5 EA ยังไม่เขียน** — ถ้า AI ดับ SL/TP จะไม่ถูกดูแลในเทอร์มินัล (ข้อกำหนดข้อนี้ยังไม่ครบ)
+5. **มี MQL5 EA และหลักฐาน compile ย้อนหลังแล้ว แต่ยังไม่มี runtime durability acceptance** —
+   ห้ามตีความ source tests/compile เป็นการรับรอง crash/restart/power-loss หรือ broker exactly-once
 6. **Connext + FSA (SVG) ไม่ได้กำกับ Forex โดยตรง** และ ธปท. เตือนเรื่องแพลตฟอร์มนอกระบบ
    → ใช้ Demo, ตรวจสอบกฎหมาย/ความคุ้มครองในไทยก่อนฝากเงินจริง
 
 ## เอกสาร
+
+- [`docs/BASELINE-P1.th.md`](docs/BASELINE-P1.th.md) — baseline source/config/evidence และเกณฑ์ปิดเฟส 1 (ไม่ใช่ release sign-off)
+- [`docs/SAFETY-HANDOFF.th.md`](docs/SAFETY-HANDOFF.th.md) — สถานะ safety ปัจจุบันและประวัติที่แยกรอบชัดเจน
+- [`docs/LOCAL-VERIFICATION.th.md`](docs/LOCAL-VERIFICATION.th.md) — local runner, artifact exits และข้อจำกัด skips
 
 - [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) — ชั้นต่าง ๆ และเหตุผลการออกแบบ
 - [`docs/API.md`](docs/API.md) — รายการ endpoint ที่ dashboard ใช้
@@ -247,3 +263,131 @@ storage/                   db / datasets / models / backtests / logs (git-ignore
 | `.venv/bin/python scripts/import_ticks.py --csv … --symbol XAUUSD` | นำเข้า tick จริงให้ backtest ตัดสินลำดับในแท่ง (แยกไฟล์ต่อวัน, อ่านแบบ lazy) |
 | `.venv/bin/python scripts/make_pwa_icons.py` | สร้างไอคอน PWA (ถ้าแก้ดีไซน์) |
 | `./scripts/fetch_redis_server.sh` | ดึง `redis-server` จริง (ไม่ต้อง root) ไว้ทดสอบ shared rate limit / cluster |
+
+---
+
+## คู่มือระบบฉบับภาษาไทย (ภาพรวมสำหรับเริ่มต้น)
+
+> **สถานะเอกสาร:** บันทึกเดิมอ้างภาพ source tree ณ 12 พฤศจิกายน 2026; environment ของรอบตรวจนี้ระบุ 8 พฤศจิกายน 2026 จึงยังยืนยันเวลา artifact เดิมไม่ได้. Working tree มีการแก้ไขหลายไฟล์ จึงไม่ใช่การรับรอง commit/release หรือสถานะ production
+
+### ระบบประกอบด้วยอะไร
+
+- **หน้าเว็บ:** Vue 3 SPA ใน `apps/web-dashboard/`; Vite ใช้พอร์ต `5173` ระหว่างพัฒนาและ proxy `/api` กับ `/ws` ไป backend
+- **API และตัวควบคุม runtime:** FastAPI ใน `services/api_gateway/`; route แบ่งตาม auth, market, analysis, signals, trading, risk, brokers, backtest, datasets, bridge, explain และ system
+- **Trading runtime:** `services/api_gateway/state.py` ประกอบ MarketDataService, AnalysisService, ForecastPredictor, StrategyEngine, RiskEngine, ExecutionGateway และ BrokerRegistry; runtime มี loop สำหรับ tick/decision/reconcile และ lifecycle ผ่าน app lifespan
+- **ข้อมูลตลาด/กลยุทธ์:** `services/market_data/`, `services/strategy_engine/`, `packages/indicators/`, `packages/market_structure/` และ `packages/strategy_rules/`
+- **โมเดล:** `services/ai_forecast/` เก็บการพยากรณ์ การตรวจเกณฑ์ และ registry; LLM ใน `integrations/no7_local_ai/` เป็นตัวเลือกด้านคำอธิบาย ไม่ใช่ผู้ส่งคำสั่ง
+- **การเชื่อมโบรกเกอร์:** สัญญา adapter อยู่ใน `integrations/brokers/`; มี paper/simulated, MT5 และ Bridge adapter; EA client อยู่ `bridge/No7BridgeEA.mq5`
+- **Persistence:** SQLite ผ่าน `packages/persistence/db.py`; ไฟล์ runtime อยู่ใต้ `storage/` ตาม settings, ไม่ควรถือว่า Redis หรือ database server ภายนอกมีอยู่เสมอ
+- **งานประกอบ:** `services/backtest_engine/`, `services/notification/`, `services/bridge/`; configuration ใน `config/`, tests ใน `tests/`, คู่มือปฏิบัติการใน `docs/`
+
+### Architecture และ Flow (ตรวจพบจาก source)
+
+ภาพย่อด้านล่างเป็น Mermaid source ที่แก้ไขต่อได้ ผู้อ่าน Markdown ต้องใช้ตัวแสดงผลที่รองรับ Mermaid; เปิด [Architecture Flow Diagram (HTML)](.archify/architecture-tradeai-20261112/architecture-tradeai.html) สำหรับภาพ native จาก Archify
+
+```mermaid
+flowchart LR
+  Browser[ผู้ใช้ / Browser] -->|HTTPS หรือ local HTTP| API[FastAPI Gateway]
+  Browser <-->|JWT + WebSocket /ws/live| API
+  Browser <-->|REST fallback /api/trading/live| API
+  API --> Runtime[TradingRuntime]
+  Runtime --> Feed[Market data feed / Broker adapter]
+  Feed --> Market[MarketDataService]
+  Market --> Analysis[AnalysisService]
+  Analysis --> Strategy[StrategyEngine + TradePlanner]
+  Forecast[ForecastPredictor / ModelRegistry] --> Strategy
+  Strategy --> Gate{RiskEngine gate}
+  Gate -->|ผ่านและมี execution request| Execution[ExecutionGateway]
+  Gate -->|ไม่ผ่าน| Explain[Signal + blocker / audit]
+  Execution --> Adapter[BrokerAdapter]
+  Adapter --> Broker[Paper / MT5 / EA Bridge]
+  Runtime <--> DB[(SQLite / workspace data)]
+  Execution --> DB
+  Runtime --> Notify[Notification outbox / channels]
+  Runtime --> Client[Live snapshot]
+  Client --> API
+```
+
+**ลำดับการประมวลผลโดยย่อ:** runtime อ่าน tick/ราคาและ candles → สร้าง snapshot จากแท่งที่ปิดแล้ว → สร้าง forecast และ signal/plan → Risk Engine ตรวจ spread, freshness, exposure, loss limits, news และเงื่อนไขอื่น → ถ้าคำสั่งถูกเรียกและผ่าน guard จึงเข้า ExecutionGateway ซึ่งตรวจ account identity/idempotency และเรียก adapter → บันทึกสถานะ/audit/reconcile เท่าที่มีหลักฐาน → API ส่งภาพสถานะให้หน้าเว็บผ่าน WebSocket หรือ REST polling
+
+```mermaid
+flowchart TD
+  Start([เริ่มรอบ runtime]) --> Tick[อ่าน feed และอัปเดต tick]
+  Tick --> Decision{ถึงรอบตัดสินใจหรือยัง}
+  Decision -->|ใช่| Snapshot[วิเคราะห์ข้อมูล / สร้าง forecast]
+  Snapshot --> Signal[สร้าง signal และ trade plan]
+  Signal --> Gate{Risk gate อนุญาต?}
+  Gate -->|ไม่| PersistBlock[บันทึก signal / blocker]
+  Gate -->|ใช่ แต่ยังเป็น manual| Await[รอการอนุมัติ/คำสั่งตาม mode]
+  Gate -->|ใช่และมีคำสั่ง auto ที่เปิดใช้| Submit[ExecutionGateway: claim + ตรวจ + ส่งครั้งเดียว]
+  Submit --> Verify[ตรวจผลและบันทึก / หากกำกวมต้อง reconcile]
+  PersistBlock --> Manage[จัดการสถานะและ reconcile ตามรอบ]
+  Await --> Manage
+  Verify --> Manage
+  Decision -->|ไม่| Manage
+  Manage --> Tick
+```
+
+> Flowchart อธิบายทางเดินใน source ไม่ได้หมายความว่า Full Auto เปิดอยู่หรือ broker ได้รับคำสั่งจริง; การผ่าน gate เพียงอย่างเดียวไม่ใช่หลักฐาน execution
+
+### ติดตั้งและเริ่มใช้งาน
+
+#### Windows — local simulation ที่แยกจาก live configuration
+
+ต้องเตรียม Python 3.11+ และ Node.js/npm ก่อน แล้วเปิด PowerShell ที่ root repository:
+
+```powershell
+powershell -NoProfile -ExecutionPolicy Bypass -File .\scripts\setup-windows.ps1
+powershell -NoProfile -ExecutionPolicy Bypass -File .\scripts\check-windows.ps1
+powershell -NoProfile -ExecutionPolicy Bypass -File .\scripts\run-local.ps1
+```
+
+launcher นี้ผูกกับ loopback `127.0.0.1:8000` และตั้งค่า paper/simulated ตามสคริปต์ ไม่ใช่คำสั่ง deploy หรือเชื่อมบัญชีจริง; หยุดด้วย `Ctrl+C`. ตรวจ task/script ก่อนใช้ และอย่าเปิด demo credentials สู่เครือข่าย
+
+#### Linux/macOS — development/demo ตาม script ที่มีใน repository
+
+```bash
+python3 -m pip install -r requirements-dev.txt
+cd apps/web-dashboard && npm ci && npm run build && cd ../..
+python3 -m uvicorn services.api_gateway.app:app --host 127.0.0.1 --port 8000
+```
+
+จากนั้นเปิด `http://127.0.0.1:8000`; กำหนด `.env` จาก `.env.example` และสร้าง `NO7_JWT_SECRET` ที่แข็งแรงก่อนใช้งาน ห้ามนำค่า demo ไปใช้กับ deployment สาธารณะ หากต้องการ frontend hot reload ให้รัน backend แยก แล้วใช้ `cd apps/web-dashboard && NO7_BACKEND=http://127.0.0.1:8000 npm run dev` ที่ `http://127.0.0.1:5173`
+
+### วิธีใช้งานหน้าจอ
+
+1. Login ด้วยผู้ใช้ที่ตั้งค่าไว้ จากนั้นตรวจหน้า **System** ว่า API/runtime/feed/model มีสถานะและข้อจำกัดตรงกับสภาพจริง
+2. ดูหน้า **Terminal** เพื่อเช็ค ticker freshness, analysis, signal, plan และ Risk blockers; score ไม่ใช่ probability
+3. ดู **Forecast** และ **Zones** เป็นข้อมูลประกอบ ไม่ใช่การรับประกันทิศทางหรือผลตอบแทน
+4. ใช้ **Trades** ทบทวนผลที่บันทึกไว้; signal snapshot อาจไม่มีหรือเชื่อมโยงไม่ได้ และข้อมูลอยู่ภายใต้ account scope ที่ API ตรวจได้
+5. ใช้ **Backtest** กับข้อมูลที่ระบุแหล่ง/ข้อจำกัด; tick storage ใช้ช่วยจัดลำดับ intrabar ใน backtest เท่านั้น ไม่ใช้ส่งคำสั่ง live
+6. ก่อนเปลี่ยน mode, broker, risk limits หรือเชื่อมต่อภายนอก ให้อ่าน `docs/RUNBOOK.md`, `docs/SAFETY-HANDOFF.th.md` และ `docs/LIMITATIONS.md` ก่อน
+
+### ขอบเขตข้อมูลและความปลอดภัยที่ควรทราบ
+
+- ค่าเริ่มต้นและ local launcher อาจใช้ feed จำลอง; เช็ค `feed`/freshness ใน API และ UI อย่าตีความราคาจำลองเป็นราคาตลาด
+- หน้าเว็บต้องพึ่ง API/DB สำหรับข้อมูล history; PWA cache ไม่ใช่ broker history archive และไม่ได้ทำให้ backend history อ่านได้เมื่อ host หยุด
+- SQLite เป็น persistent local store หลัก; Redis เป็น optional integration ตาม config สำหรับบาง shared coordination/rate-limit paths ไม่ใช่ dependency ที่ยืนยันว่าถูก deploy
+- trade review เป็น retrospective จาก trade/signal ที่บันทึกไว้ ไม่ได้ฝึก AI อัตโนมัติ และไม่ยืนยันความครบถ้วนของ broker history หรือ deal attribution
+- single-writer lease, account ownership, idempotency และ adapter validation เป็น local safeguards; ไม่ใช่ broker-side fencing หรือ exactly-once guarantee
+- ห้าม commit `.env`, password, token, account identifier หรือ raw broker logs; เก็บข้อมูลส่วนบุคคลใน artifact ให้เหลือน้อยที่สุด
+- MT5/EA/Redis/VM, disconnect/restart/crash, live account และ execution acceptance ต้องมีการทดสอบแยกจาก pytest/unit tests; เอกสาร/diagram ไม่ใช่หลักฐานว่าบริการเหล่านั้นเชื่อมต่ออยู่
+
+### งานค้างที่ต้องติดตาม (snapshot)
+
+- **H147 — ยังไม่รับรอง:** artifact full `tests/test_api.py` มี Windows status `3221225786`; verbose output แสดง collection 25 tests และชื่อ test แรกที่เริ่ม ส่วน `........F.` มาจาก stdout อีกชุด จึงยังระบุไม่ได้ว่าชุดใดเป็น failure เดียวกัน ไม่มี traceback/JUnit ระบุ test หรือ root cause. Focused API 1/1 และแยก batch 6/6 เป็นหลักฐานเฉพาะชุด ไม่แทน full-module acceptance. Vite exit `0`/13.05s เป็น build artifact เก่า ไม่ใช่ source ปัจจุบันหรือ browser acceptance
+- ผู้ใช้รายงานภายหลังว่า full `tests/test_api.py` ผ่าน 25/25 ใน PowerShell/Python 3.13.17; ยังไม่มี exit/JUnit artifact ที่ตรวจอิสระได้ใน workspace รอบนี้ จึงเป็น user-reported evidence เท่านั้นและต้องรักษาความต่างจาก artifact เก่า
+- **H146 — ยังเปิด:** ยังไม่ทดสอบ importer lifecycle/concurrency และ source-file mutation ระหว่าง chunk reads; ต้องกำหนด ownership/snapshot contract ก่อนเปลี่ยน implementation
+- **P2 — ยังไม่ปิด:** local verification ไม่ทดแทน acceptance บน Redis/VM/MT5/browser/crash/execution จริง
+
+**ลำดับงานถัดไป:** ผู้ใช้รายงาน full `tests/test_api.py` ผ่าน 25/25 ใน PowerShell/Python 3.13.17 แต่รอบนี้ยังตรวจ exit/JUnit artifact อิสระไม่ได้; เก็บหลักฐานดังกล่าวก่อน → รัน importer focused tests ใน artifact ใหม่ → build Vite พร้อม exit marker → ทดสอบ mouse/keyboard เมื่อ browser automation พร้อม → กำหนด H146 source snapshot/lifecycle/destination ownership ก่อน regression/แก้ importer. Shell bridge/PSReadLine รอบนี้ไม่คืนผล importer/build ที่ยืนยันได้ จึงไม่นับผลที่พยายามเป็น pass/fail
+
+สถานะและประวัติงานให้ยึด [`project-progress.html`](.archify/explainer-project-progress-20261109-114911/project-progress.html) และ [`docs/SAFETY-HANDOFF.th.md`](docs/SAFETY-HANDOFF.th.md); ทั้งคู่เป็นเอกสารเปลี่ยนตามรอบ ต้องดูวันที่และหลักฐานของแต่ละรอบ
+
+### ภาพ Architecture HTML และการดูแลเอกสาร
+
+- [Architecture Flow Diagram (HTML)](.archify/architecture-tradeai-20261112/architecture-tradeai.html) — candidate ระบุ source revision; delivery receipt ที่ตรวจมี `spawnSync git ENOENT`; browser-check และ visual review ยังไม่ยืนยัน และ HTML นี้ยังไม่ได้ refresh สำหรับ H153
+- [เปิด Project Progress (HTML)](.archify/explainer-project-progress-20261109-114911/project-progress.html) — HTML เดิมยังอ้าง candidate hash ก่อน H153; finalize ใหม่ไม่มี receipt ที่สังเกตได้ จึง stale
+- ก่อนส่งงานเอกสารหรือโค้ดในแต่ละ loop ให้อัปเดต README ภาษาไทย, handoff/register, สร้าง HTML ผ่าน Archify จาก candidate, ตรวจ receipt/hash และระบุสิ่งที่ยังไม่ได้ทดสอบ; อย่าถือว่า HTML เก่าอัปเดตเอง
+
+เอกสารย่อยอธิบายรายละเอียด setup, API, สูตร, verification, architecture และ limitations; ดูสารบัญในหัวข้อ [เอกสาร](#เอกสาร) ด้านบน

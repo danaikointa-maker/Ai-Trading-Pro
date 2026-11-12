@@ -17,6 +17,7 @@ then refuse to size a trade rather than silently apply 1.0.
 
 from __future__ import annotations
 
+import math
 from typing import Callable
 
 # A price lookup that returns a mid price, or None when the symbol is unknown.
@@ -26,20 +27,22 @@ PriceOf = Callable[[str], float | None]
 def resolve_quote_rate(profit_currency: str, account_currency: str, price_of: PriceOf,
                        ) -> tuple[float, str]:
     """Return ``(rate, source)`` where ``source`` is one of the literals below."""
-    profit = (profit_currency or "").upper()
-    account = (account_currency or "").upper()
+    profit = (profit_currency or "").strip().upper()
+    account = (account_currency or "").strip().upper()
     if not profit or not account:
         return 1.0, "unknown"
     if profit == account:
         return 1.0, "identity"
 
     direct = price_of(f"{profit}{account}")
-    if direct and direct > 0:
+    if direct and math.isfinite(direct) and direct > 0:
         return float(direct), "ticker"
 
     inverse = price_of(f"{account}{profit}")
-    if inverse and inverse > 0:
-        return 1.0 / float(inverse), "ticker"
+    if inverse and math.isfinite(inverse) and inverse > 0:
+        rate = 1.0 / float(inverse)
+        if math.isfinite(rate) and rate > 0:
+            return rate, "ticker"
 
     return 1.0, "unknown"
 

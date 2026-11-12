@@ -138,6 +138,9 @@ class SymbolSpec(BaseModel):
     swap_short_pct: float = 0.0
     swap_days_in_year: int = 360  # the basis brokers use for swap interest
     profit_currency: str = "USD"
+    account_currency: str = "USD"
+    # Adapters must mark incomplete external metadata; schema defaults are for simulation.
+    spec_complete: bool = True
     # Multiplier that turns one unit of `profit_currency` into one unit of the
     # account currency. 1.0 means "same currency" (or that no rate was needed).
     quote_to_account_rate: float = 1.0
@@ -183,17 +186,28 @@ class SymbolSpec(BaseModel):
     @property
     def quote_in_account_currency(self) -> bool:
         """True when one point of P&L is already denominated in the account currency."""
-        return self.profit_currency.upper() == "USD"
+        return bool(self.profit_currency.strip() and self.account_currency.strip()
+                    and self.profit_currency.strip().upper() == self.account_currency.strip().upper())
 
     @property
     def sizing_blocked(self) -> bool:
-        """A cross pair whose FX rate could not be resolved must not be sized.
+        """Reject incomplete/invalid contract data and unproven currency conversion.
 
-        Applying an assumed 1.0 rate to, say, USDJPY would overstate the value of
-        a point by the whole exchange rate (about 150x), so the planner is told to
-        stand down instead.
+        External adapters mark completeness explicitly; numeric validity is checked
+        here again because adapters and tests may mutate a spec after construction.
+        An identity rate is valid only for matching profit/account currencies.
         """
-        return not self.quote_in_account_currency and self.rate_source == "unknown"
+        values = (self.point, self.tick_size, self.contract_size, self.min_lot,
+                  self.max_lot, self.lot_step, self.quote_to_account_rate)
+        if (not self.spec_complete or any(not math.isfinite(v) or v <= 0 for v in values)
+                or self.min_lot > self.max_lot or self.lot_step > self.max_lot
+                or not self.profit_currency.strip() or not self.account_currency.strip()):
+            return True
+        if self.rate_source == "unknown":
+            return True
+        if self.rate_source == "identity":
+            return not self.quote_in_account_currency or self.quote_to_account_rate != 1.0
+        return False
 
     def round_price(self, price: float) -> float:
         """Snap to the broker's legal price grid (tick size), not just digits."""
@@ -736,6 +750,8 @@ class ModelInfo(BaseModel):
     features: int = 0
     samples: int = 0
     notes: str = ""
+    artifact_status: str = "unchecked"
+    artifact_reason: str = ""
 
 
 class HealthReport(BaseModel):

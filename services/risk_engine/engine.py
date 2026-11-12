@@ -118,7 +118,7 @@ class RiskEngine:
         return self._week_start(now)
 
     @staticmethod
-    def _notional(adapter: BrokerAdapter, positions) -> float:
+    def _notional(adapter: BrokerAdapter, positions, account_currency: str | None = None) -> float:
         """Open exposure in the *account* currency.
 
         `contract_size x price` is denominated in the pair's quote currency, so a
@@ -130,6 +130,9 @@ class RiskEngine:
         for pos in positions:
             try:
                 spec = adapter.symbol_spec(pos.symbol)
+                if (account_currency is not None
+                        and spec.account_currency.strip().upper() != account_currency):
+                    raise ValueError("spec/account currency mismatch")
                 values = (float(pos.current_price), float(pos.volume),
                           float(spec.contract_size), float(spec.quote_to_account_rate))
                 if spec.sizing_blocked or any(not math.isfinite(v) or v <= 0 for v in values):
@@ -144,8 +147,11 @@ class RiskEngine:
     def state(self, adapter: BrokerAdapter, now: float | None = None) -> RiskState:
         now = time.time() if now is None else now
         info: AccountInfo = adapter.account_info()
+        account_currency = str(getattr(info, "currency", "") or "").strip().upper()
+        if not account_currency:
+            raise BrokerError("exposure unavailable: account currency missing")
         positions = adapter.positions()
-        notional = self._notional(adapter, positions)
+        notional = self._notional(adapter, positions, account_currency)
         floating = [float(p.unrealized) for p in positions]
         if any(not math.isfinite(v) for v in (info.balance, info.equity, *floating)):
             raise BrokerError("exposure unavailable: invalid account or floating P&L")

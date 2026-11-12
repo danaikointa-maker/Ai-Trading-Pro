@@ -19,10 +19,11 @@ class StaleDataError(RuntimeError):
 
 
 class MarketDataService:
-    def __init__(self, settings: Settings, registry: BrokerRegistry, news: NewsService) -> None:
+    def __init__(self, settings: Settings, registry: BrokerRegistry, news: NewsService, db=None) -> None:
         self.settings = settings
         self.registry = registry
         self.news = news
+        self.db = db
         self._cache: dict[tuple[str, str, str], tuple[int, pd.DataFrame]] = {}
         self._last_ticks: dict[str, Tick] = {}
         self._virtual_now: float | None = None
@@ -46,6 +47,31 @@ class MarketDataService:
 
     def on_ticks(self, ticks: dict[str, Tick]) -> None:
         self._last_ticks.update(ticks)
+        if self.db is not None:
+            broker_id = self.registry.get().id
+            for symbol, tick in ticks.items():
+                self.db.kv_set(f"market-last-quote:{broker_id}:{symbol}", tick.model_dump())
+
+    def latest_quote(self, symbol: str, broker_id: str | None = None) -> dict[str, Any] | None:
+        adapter = self.registry.get(broker_id)
+        try:
+            tick = adapter.ticker(symbol)
+            self._last_ticks[symbol] = tick
+            if self.db is not None:
+                self.db.kv_set(f"market-last-quote:{adapter.id}:{symbol}", tick.model_dump())
+            return {"tick": tick.model_dump(), "stale": False, "source": "broker"}
+        except Exception:  # noqa: BLE001 - display last-known quote, never certify as live
+            tick = self._last_ticks.get(symbol)
+            if tick is None and self.db is not None:
+                payload = self.db.kv_get(f"market-last-quote:{adapter.id}:{symbol}")
+                try:
+                    tick = Tick(**payload) if payload is not None else None
+                except (TypeError, ValueError):
+                    tick = None
+            if tick is None:
+                return None
+            self._last_ticks[symbol] = tick
+            return {"tick": tick.model_dump(), "stale": True, "source": "persisted"}
 
     def ticker(self, symbol: str, broker_id: str | None = None) -> Tick:
         adapter = self.registry.get(broker_id)
