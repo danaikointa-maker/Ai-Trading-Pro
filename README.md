@@ -375,19 +375,74 @@ python3 -m uvicorn services.api_gateway.app:app --host 127.0.0.1 --port 8000
 
 ### งานค้างที่ต้องติดตาม (snapshot)
 
-- **H147 — ยังไม่รับรอง:** artifact full `tests/test_api.py` มี Windows status `3221225786`; verbose output แสดง collection 25 tests และชื่อ test แรกที่เริ่ม ส่วน `........F.` มาจาก stdout อีกชุด จึงยังระบุไม่ได้ว่าชุดใดเป็น failure เดียวกัน ไม่มี traceback/JUnit ระบุ test หรือ root cause. Focused API 1/1 และแยก batch 6/6 เป็นหลักฐานเฉพาะชุด ไม่แทน full-module acceptance. Vite exit `0`/13.05s เป็น build artifact เก่า ไม่ใช่ source ปัจจุบันหรือ browser acceptance
-- ผู้ใช้รายงานภายหลังว่า full `tests/test_api.py` ผ่าน 25/25 ใน PowerShell/Python 3.13.17; ยังไม่มี exit/JUnit artifact ที่ตรวจอิสระได้ใน workspace รอบนี้ จึงเป็น user-reported evidence เท่านั้นและต้องรักษาความต่างจาก artifact เก่า
-- **H146 — ยังเปิด:** ยังไม่ทดสอบ importer lifecycle/concurrency และ source-file mutation ระหว่าง chunk reads; ต้องกำหนด ownership/snapshot contract ก่อนเปลี่ยน implementation
+- **H147 — partial/old evidence:** artifact full `tests/test_api.py` มี Windows status `3221225786`; verbose output แสดง collection 25 tests และชื่อ test แรกที่เริ่ม ส่วน `........F.` มาจาก stdout อีกชุด จึงยังระบุไม่ได้ว่าชุดใดเป็น failure เดียวกัน ไม่มี traceback/JUnit ระบุ test หรือ root cause. H155 full API หลัง build 25/25 ไม่ได้แทน H147 feature/browser acceptance. Vite exit `0`/13.05s เป็น build artifact เก่า ไม่ใช่ source ปัจจุบันหรือ browser acceptance
+- H155: importer tests `40/40` ผ่าน พร้อม process exit `0` และ JUnit 40 tests/0 failures/errors/skips ใน `storage/local-dev/qa/safety/h155-continuation/`.
+- H155: full API `tests/test_api.py` ผ่าน `25/25`, exit `0`, JUnit 25 tests/0 failures/errors/skips หลัง Vite build สร้าง `apps/web-dashboard/dist`; รันก่อน build เคยพบ `test_spa_deep_links_are_served` 404 เพราะ app ใช้ placeholder เมื่อ bundle ไม่มีอยู่ จึงไม่ใช่ผล API หลัง build. มี 1 Starlette deprecation warning.
+- H155: Vite production build output `built in 13.95s`, exit marker `0`, stderr ว่าง. Browser/visual checks ยังไม่ได้ทำ.
+- H147 historical user-reported full API 25/25 ยังไม่มี artifact แยกใน workspace; H155 independently captured 25/25 หลัง Vite build, เป็น evidence ใหม่เฉพาะ source/current environment รอบนี้.
+- **H146 — ยังเปิด:** ข้อเสนอ contract และ test matrix ฉบับร่างอยู่ที่ [`storage/local-dev/qa/safety/h146-loop/H146-importer-contract.th.md`](storage/local-dev/qa/safety/h146-loop/H146-importer-contract.th.md) อ้างอิง source ปัจจุบัน: importer อ่าน bytes หนึ่งชุดแล้ว parse/hash แต่ CSV/sidecar สร้างแยกกัน; partial artifacts ถูก quarantine. ยังไม่มี acceptance เรื่อง process concurrency, crash/cancellation หรือการแก้ source ระหว่าง OS read. รอ review/ยืนยัน invariants ก่อนเพิ่ม regression หรือแก้ runtime
 - **P2 — ยังไม่ปิด:** local verification ไม่ทดแทน acceptance บน Redis/VM/MT5/browser/crash/execution จริง
 
-**ลำดับงานถัดไป:** ผู้ใช้รายงาน full `tests/test_api.py` ผ่าน 25/25 ใน PowerShell/Python 3.13.17 แต่รอบนี้ยังตรวจ exit/JUnit artifact อิสระไม่ได้; เก็บหลักฐานดังกล่าวก่อน → รัน importer focused tests ใน artifact ใหม่ → build Vite พร้อม exit marker → ทดสอบ mouse/keyboard เมื่อ browser automation พร้อม → กำหนด H146 source snapshot/lifecycle/destination ownership ก่อน regression/แก้ importer. Shell bridge/PSReadLine รอบนี้ไม่คืนผล importer/build ที่ยืนยันได้ จึงไม่นับผลที่พยายามเป็น pass/fail
+**ลำดับงานถัดไป:** review/ยืนยัน H146 contract draft และเลือก policy สำหรับ destination claim, partial-pair recovery, cancellation และ filesystem scope → เขียน regression tests แบบ fail-first แล้วจึงแก้ importer → refresh Architecture candidate เมื่อ source commit เปลี่ยน → browser/visual review เมื่อ automation ใช้ได้. API/importer/build H155 เป็นหลักฐานรอบก่อน ไม่ได้รันรอบนี้; browser/visual และ real Redis/VM/MT5/crash/execution acceptance ยังไม่ยืนยัน.
 
 สถานะและประวัติงานให้ยึด [`project-progress.html`](.archify/explainer-project-progress-20261109-114911/project-progress.html) และ [`docs/SAFETY-HANDOFF.th.md`](docs/SAFETY-HANDOFF.th.md); ทั้งคู่เป็นเอกสารเปลี่ยนตามรอบ ต้องดูวันที่และหลักฐานของแต่ละรอบ
 
 ### ภาพ Architecture HTML และการดูแลเอกสาร
 
-- [Architecture Flow Diagram (HTML)](.archify/architecture-tradeai-20261112/architecture-tradeai.html) — candidate ระบุ source revision; delivery receipt ที่ตรวจมี `spawnSync git ENOENT`; browser-check และ visual review ยังไม่ยืนยัน และ HTML นี้ยังไม่ได้ refresh สำหรับ H153
-- [เปิด Project Progress (HTML)](.archify/explainer-project-progress-20261109-114911/project-progress.html) — HTML เดิมยังอ้าง candidate hash ก่อน H153; finalize ใหม่ไม่มี receipt ที่สังเกตได้ จึง stale
+- [Architecture Flow Diagram (HTML)](.archify/architecture-tradeai-20261112/architecture-tradeai.html) — ภาพ As-is จาก source ที่ pin commit `098a8f87bd3012de16c08a1ee6240ecc91591591`; ตรวจซ้ำรอบ H161 โดยไม่เปลี่ยน source runtime. Automated artifact checks แยกจาก browser-check ซึ่งยังติด Chrome DevTools write pipe ปิด; ยังไม่มี visual review. แสดง dashboard/API/runtime, market/analysis/forecast/strategy/risk, execution/broker และ SQLite; ไม่ใช่ deployment diagram และไม่ยืนยันบริการที่กำลังเชื่อมต่อ
+- [เปิด Project Progress (HTML)](.archify/explainer-project-progress-20261109-114911/project-progress.html) — H160 finalize `validate/deliver/check` ผ่าน; มี writing warnings 20 รายการ. H161 browser/visual review ไม่ได้ทำ.
 - ก่อนส่งงานเอกสารหรือโค้ดในแต่ละ loop ให้อัปเดต README ภาษาไทย, handoff/register, สร้าง HTML ผ่าน Archify จาก candidate, ตรวจ receipt/hash และระบุสิ่งที่ยังไม่ได้ทดสอบ; อย่าถือว่า HTML เก่าอัปเดตเอง
 
 เอกสารย่อยอธิบายรายละเอียด setup, API, สูตร, verification, architecture และ limitations; ดูสารบัญในหัวข้อ [เอกสาร](#เอกสาร) ด้านบน
+
+### ภาพรวมสถาปัตยกรรมและทางเดินข้อมูล (As-is)
+
+ภาพนี้สรุปโครงสร้างจาก source ที่ commit แล้ว: Vue SPA ติดต่อ FastAPI ผ่าน REST/WebSocket; lifespan ของ API เปิด/ปิด `TradingRuntime`; runtime รับตลาดจาก adapter, สร้าง analysis/forecast/signal และส่งคำขอผ่าน Risk Engine กับ Execution Gateway ก่อนถึง broker adapter. SQLite เก็บข้อมูลและ audit ตามขอบเขตที่โค้ดระบุไว้. เส้นทางการตัดสินใจเป็นลำดับเชิงแนวคิด; ไม่ได้หมายความว่าทุก signal ทำให้เกิด order.
+
+```mermaid
+flowchart LR
+  UI[Vue Dashboard] <-->|REST / WebSocket| API[FastAPI Gateway]
+  API -->|lifespan| RT[TradingRuntime]
+  RT --> MD[MarketDataService]
+  BA[Broker Adapter / Replay / Simulated] --> MD
+  MD --> AS[AnalysisService]
+  AS --> FP[ForecastPredictor]
+  AS --> SE[StrategyEngine + TradePlanner]
+  FP --> SE
+  SE --> RG{RiskEngine gate}
+  RG -->|ผ่านและมีคำขอ| EG[ExecutionGateway]
+  RG -->|ปฏิเสธ| RT
+  EG --> BA
+  RT <--> DB[(SQLite workspace)]
+```
+
+### ติดตั้งและเริ่มใช้งานแบบ local
+
+บน Windows ให้ติดตั้ง Python 3.11+ และ Node.js/npm ก่อน แล้วรันจาก root ตามลำดับ; setup ใช้ lockfile, สร้าง `.venv` และสร้าง `.env` เฉพาะเมื่อยังไม่มีไฟล์เดิม:
+
+```powershell
+powershell -NoProfile -ExecutionPolicy Bypass -File .\scripts\setup-windows.ps1
+powershell -NoProfile -ExecutionPolicy Bypass -File .\scripts\check-windows.ps1
+powershell -NoProfile -ExecutionPolicy Bypass -File .\scripts\run-local.ps1
+```
+
+launcher นี้บังคับ simulated feed, bind ที่ `127.0.0.1`, ปิด Full Auto และต้องมี auth/JWT secret ที่ไม่ใช่ค่า development ตัวอย่าง; ไม่ใช่การตั้งค่า MT5/live. ควรอ่านสคริปต์และ [ข้อจำกัด](docs/LIMITATIONS.md) ก่อนใช้งาน. วิธีติดตั้ง/ตรวจสอบบนระบบอื่นให้ยึดขั้นตอนและ dependency ที่ระบุใน [Development](docs/DEVELOPMENT.md); อย่าสมมติว่า Bash gate ใช้ได้บน PowerShell.
+
+### การนำเข้าชุดข้อมูลแท่งเทียน
+
+ใช้ไฟล์ CSV ที่มีคอลัมน์เวลาและ OHLCV หรือรูปแบบ MT5; ระบุ timezone ต้นทางให้ถูกต้อง โดยเฉพาะเวลา broker server. ตัวอย่าง:
+
+```powershell
+python .\scripts\import_candles.py --csv .\sample.csv --symbol XAUUSD --tz Asia/Bangkok --timeframe M1
+python .\scripts\evaluate_dataset.py --symbol XAUUSD --timeframe M1
+```
+
+Importer ปฏิเสธ overwrite และเขียน CSV พร้อม metadata sidecar; ตรวจ counts/gaps/rows ที่ถูกทิ้งก่อนนำผลไปใช้. ข้อมูลนำเข้าไม่เท่ากับ tick data หรือผล backtest ที่ผ่านการยืนยัน. ดู [Data guide](docs/DATA.md).
+
+### วิธีใช้งานหลักและการตรวจสถานะ
+
+1. เปิด dashboard หลัง local launcher แสดง URL; ลงชื่อเข้าใช้ด้วยค่าที่ตั้งไว้ใน local `.env`/การตั้งค่าผู้ใช้ ไม่ควรเผยแพร่ credentials.
+2. ตรวจหน้า Terminal/Market ว่า feed เป็น `simulate`, `replay` หรือ adapter ที่ตั้งใจใช้ และดู freshness/health ก่อนอ่าน signal.
+3. ใช้ Forecast, Zones, Risk, Backtest และ Journal เป็นเครื่องมือวิเคราะห์/ทบทวน; score เป็น heuristic ไม่ใช่ probability.
+4. ก่อนทำงานพัฒนา ใช้คำสั่งใน [Local verification](docs/LOCAL-VERIFICATION.th.md); full suite อาจรายงาน skip และไม่แทน browser, Redis, VM หรือ MT5 acceptance.
+5. ก่อนเชื่อม MT5 หรือเปลี่ยน execution mode ให้ทำตาม [Runbook](docs/RUNBOOK.md) และ [Safety Handoff](docs/SAFETY-HANDOFF.th.md); ห้ามใช้ผล local test เป็นอนุมัติเงินจริง.

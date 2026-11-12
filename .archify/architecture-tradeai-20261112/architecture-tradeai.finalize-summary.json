@@ -7,34 +7,37 @@
   "quality": "showcase",
   "specification": {
     "path": "C:\\workspace\\Ai-Trading-Pro\\.archify\\architecture-tradeai-20261112\\candidate.json",
-    "sha256": "adc9675db76b69e35bfa12938a88bf14965c0f1a3f8c4a9bf31e042bedd52566",
-    "bytes": 6234
+    "sha256": "da315edae53b9b917715bf95a7081cf9d75bc94cf838171b3ed2ab2a927e531e",
+    "bytes": 6232
   },
   "artifact": {
     "path": "C:\\workspace\\Ai-Trading-Pro\\.archify\\architecture-tradeai-20261112\\architecture-tradeai.html",
-    "sha256": "98061547468bde15a1a09f6b919405efaad64f98af9bd82fbda879198b3dcebf",
+    "sha256": "a3ca458a5336c99a91d459dd17385a3ec5e7e1dd6920a0e2c80271aceafa9ee2",
     "bytes": 860819
   },
   "gates": {
-    "validate": "fail",
-    "deliver": "not-run",
-    "check": "not-run",
-    "browser-check": "not-run"
+    "validate": "pass",
+    "deliver": "pass",
+    "check": "pass",
+    "browser-check": "fail"
   },
-  "failedStage": "validate",
+  "failedStage": "browser-check",
   "diagnostics": [
     {
-      "code": "repository-evidence/git-unavailable",
+      "code": "viewer/evidence-path-conflict",
       "severity": "error",
-      "message": "Could not run Git: spawnSync git ENOENT",
+      "message": "browser-check will not replace the existing unowned evidence path \"C:\\workspace\\Ai-Trading-Pro\\.archify\\architecture-tradeai-20261112\\architecture-tradeai.browser-check.json\".",
       "subject": {
-        "surface": "repository-evidence"
+        "artifact": "C:\\workspace\\Ai-Trading-Pro\\.archify\\architecture-tradeai-20261112\\architecture-tradeai.html",
+        "evidencePath": "C:\\workspace\\Ai-Trading-Pro\\.archify\\architecture-tradeai-20261112\\architecture-tradeai.browser-check.json"
       },
       "evidence": {
-        "reason": "spawnSync git ENOENT"
+        "reason": {
+          "code": "ownership-artifact-mismatch"
+        }
       },
       "supportedFixes": [
-        "install Git and ensure it is available on PATH"
+        "move the conflicting file aside, or choose a separate --out-dir, then rerun browser-check"
       ]
     }
   ],
@@ -45,7 +48,8 @@
   },
   "evidence": {
     "receipt": "C:\\workspace\\Ai-Trading-Pro\\.archify\\architecture-tradeai-20261112\\architecture-tradeai.finalize.json",
-    "summaryReceipt": "C:\\workspace\\Ai-Trading-Pro\\.archify\\architecture-tradeai-20261112\\architecture-tradeai.finalize-summary.json"
+    "summaryReceipt": "C:\\workspace\\Ai-Trading-Pro\\.archify\\architecture-tradeai-20261112\\architecture-tradeai.finalize-summary.json",
+    "browserCheckReceipt": "C:\\workspace\\Ai-Trading-Pro\\.archify\\architecture-tradeai-20261112\\architecture-tradeai.browser-check.json"
   },
   "update": {
     "status": "current",
@@ -58,15 +62,9 @@
     "noticeText": null
   },
   "visualReview": "not-requested",
-  "durationMs": 3507,
+  "durationMs": 4394,
   "browserCheck": {
     "requested": true,
     "ran": false
-  },
-  "nextAction": {
-    "action": "edit-in-place",
-    "candidate": "C:\\workspace\\Ai-Trading-Pro\\.archify\\architecture-tradeai-20261112\\candidate.json",
-    "constraint": "Preserve unaffected semantics and geometry; apply each diagnostic's supportedFixes, or the fix its message names, and do not replace the whole candidate.",
-    "then": "finalize-once"
   }
 }

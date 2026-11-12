@@ -1,5 +1,36 @@
 # งานความปลอดภัย local และขั้นตอนส่งต่อ MT5
 
+## H161 — 8 พฤศจิกายน 2026: Architecture browser-check retry
+
+- ทวน README, Progress candidate/receipts และ H146 contract draft ก่อนเลือกงานถัดไป; H146 ยังรอการตัดสินใจจากผู้รับผิดชอบ จึงยังไม่เขียน implementation/tests ใหม่.
+- ลอง Archify browser-check ซ้ำบน Architecture HTML โดยใช้ output evidence directory แยก `review-h161` และ `--require-provenance`; provenance/output path ผ่านไปถึง Chrome startup แต่ browser-check ล้ม: `Chrome DevTools write pipe failed: stream closed`, process ยัง running, ได้ 0 bytes ทาง read pipe. ไม่มี screenshot หรือ visual review; บันทึก receipt ที่ `.archify/architecture-tradeai-20261112/review-h161/architecture-tradeai.browser-check.json` และ log/exit ที่ `storage/local-dev/qa/safety/h161-architecture-browser-check.*`.
+- Architecture candidate/HTML ไม่เปลี่ยนในรอบนี้; คง source pin commit `098a8f87bd3012de16c08a1ee6240ecc91591591`. README ปรับข้อความให้แยก artifact verification จาก browser acceptance.
+- ทดสอบซ้ำ `tests/test_dataset_provenance.py`: 25 passed, exit 0 (tests เดิม ไม่ใช่ H146 matrix). Project Progress เดิม H160 finalize ผ่าน `validate/deliver/check`; จะ finalize ใหม่หลังบันทึก H161.
+- ถัดไป: ลอง browser-check จาก non-elevated PowerShell ที่เปิดตามปกติ (คำแนะนำจาก error); ทำ H146 policy review และ regression RED หลังมีการยืนยัน; คง Redis/VM/MT5/crash/execution acceptance เป็น not tested.
+- Project Progress H161 finalize สด: `validate/deliver/check=pass`, candidate SHA `18ebe9d418b38094c3d37ecbc3456d08f43517035d57668d61258a4fc30f2bff`, HTML SHA `62e8ec5b870fc1531f477c5be56c4777c80cc8f9c70583542dbe034354ea4308`; มี 20 writing warnings และ browser-check not-run. Candidate/HTML hashes และ H160/H161 markers ตรวจตรง receipt.
+- `git diff --check` exit `0`; output มี Git line-ending conversion warnings สำหรับ Archify artifacts เท่านั้น.
+
+## H160 — 8 พฤศจิกายน 2026: H146 contract draft และ docs loop
+
+- Environment date รอบนี้คือ 8 พฤศจิกายน 2026; artifact ภายในบางรายการมี clock ที่ใหม่กว่า จึงไม่นับเป็นผลทดสอบสดของรอบนี้.
+- อ่าน importer และ provenance tests โดยตรง: source bytes ถูกอ่านครั้งเดียวแล้วใช้ parse/hash; CSV และ sidecar exclusive-create แยกกัน; loader ตรวจ provenance/digest ก่อน parse. Test เดิมครอบคลุม hash/no-overwrite/symlink/verified bytes แต่ไม่ยืนยัน process concurrency, interruption recovery, cancellation หรือ mutation ระหว่าง OS read.
+- เพิ่ม draft invariants/matrix ที่ `storage/local-dev/qa/safety/h146-loop/H146-importer-contract.th.md`; ยังไม่ยืนยันนโยบาย จึงไม่แก้ production code และไม่อ้างว่ามี regression test ใหม่.
+- README และ Progress candidate จัดลำดับ H146 เป็น review contract → เลือก claim/recovery/cancellation/filesystem policy → RED regression → implementation.
+- Architecture HTML ยังคง source snapshot ที่ pin committed HEAD เดิม; source runtime ไม่เปลี่ยน. browser-check/visual review ยังมี blocker เดิม (Chrome DevTools pipe ปิด); real Redis/VM/MT5/crash/execution acceptance ยังไม่ทำ.
+- รอบนี้ต้อง finalize Progress candidate หลังแก้ และตรวจ receipt/hash สดก่อน handoff.
+- ผลล่าสุด: Archify Project Progress finalize `validate/deliver/check=pass`, candidate SHA `4f576f2416329673ccbfe467fd6cff1bb737e6391198c6e8ef8b5ae3048cc377`, HTML SHA `f256366bf5a2bd9e482607338174a76226dd5cc3790ad2355f5191b19f5f0aad`; 20 writing warnings, browser-check ไม่ได้ร้องขอ. เทียบไฟล์กับ hashes ใน receipt ผ่าน และ HTML มี H160.
+- Fresh rerun `tests/test_dataset_provenance.py`: 25 passed, exit 0; เป็น tests เดิมเท่านั้น ไม่ใช่ H146 acceptance. `git diff --check` exit 0.
+- งานถัดไป: review draft กับผู้รับผิดชอบเพื่อยืนยัน policy; แล้วสร้าง RED tests สำหรับ concurrent claim และ partial pair ก่อน implementation. Architecture browser/visual retry ยังเปิด.
+
+## H159 — 12 พฤศจิกายน 2026: เอกสาร/Architecture ต่อเนื่อง
+
+- README ภาษาไทยเพิ่มภาพ flow, ขั้นตอน local Windows setup, CSV import, dashboard usage และข้อควรระวัง; Mermaid เป็นแหล่งแก้ไขได้ ส่วน Archify HTML แสดงภาพ architecture แบบ As-is.
+- Git identity ที่ตรวจได้: HEAD `098a8f87bd3012de16c08a1ee6240ecc91591591`, origin `https://github.com/danaikointa-maker/TradeAi.git`. มี uncommitted documentation/artifact changes; diagram source evidence อ้าง committed HEAD เท่านั้น.
+- Architecture candidate pin ตรง HEAD; validate/deliver/check ผ่านและ provenance current. `finalize` overall ยัง fail ที่ browser-check: ครั้งแรกชน evidence path เก่า; retry แยก out-dir แล้ว Chrome DevTools pipe ปิดก่อน inspection. Visual review ยังไม่ทำ; README ระบุสถานะตามนี้.
+- H146 source audit: `import_candles` อ่าน bytes หนึ่งครั้งแล้ว parse/hash; ปฏิเสธ destination ที่มีอยู่ก่อนอ่าน source; CSV และ sidecar สร้างแบบ exclusive แยกไฟล์. ขอบเขต concurrency, incomplete pair recovery, cancellation และ external source mutation ยังไม่กำหนด/ทดสอบ; ไม่มี runtime code/test changes ในรอบนี้.
+- H155 importer/API/Vite results เป็นหลักฐานรอบก่อน ไม่ได้ rerun ใน H159. Redis/VM/MT5/crash/execution acceptance ยังไม่ได้ทำ.
+- ถัดไป: finalize Architecture พร้อมตรวจ repository provenance → ระบุ H146 invariant/test matrix → ค่อยเขียน tests/implementation; browser review เมื่อ tooling พร้อม.
+
 ## สถานะปัจจุบัน — เฟส 2 กำลังทำบน baseline เฟส 1
 
 ### Continuation H082–H084 — 8 พฤศจิกายน 2026 (artifact clock แยก)
@@ -1353,6 +1384,41 @@ NO7_ALLOW_FULL_AUTO=false
 - Archify Project Progress: first finalize rejected `### Change history` as outside restricted author grammar. After changing it to `##`, another attempt did not return an observable receipt in this shell session. Existing HTML/receipt hashes still reference the older candidate; publication remains blocked and HTML stale for H153.
 - Architecture HTML remains unchanged; its inspected finalize receipt reports `spawnSync git ENOENT` and browser-check failure with no viewports. No visual review is claimed.
 - ไม่ยืนยัน Redis/VM/MT5/browser/crash/broker/execution acceptance หรือ broker-side fencing
+
+## H154 — รอบต่อเนื่องหลัง commit 098a8f8: document refresh และ tool recovery
+
+- สถานะเริ่มต้นตรวจได้: branch `integration/safety-main-2026-11-08`, HEAD/upstream `098a8f87bd3012de16c08a1ee6240ecc91591591`, working tree สะอาดก่อนแก้เอกสารรอบนี้.
+- H147: 25/25 เป็น user-reported; ไม่มี JUnit/exit artifact สดที่ตรวจอิสระได้ในรอบนี้. Artifact `3221225786` เดิมยังไม่บอกสาเหตุ และห้ามเชื่อมกับ stdout คนละไฟล์.
+- H146: source trace ยืนยัน bytes snapshot หนึ่งครั้งเพื่อ parse/hash, ตรวจ destination ก่อน source read, สร้าง CSV กับ sidecar แยกกัน. ยังไม่ยืนยัน locking/concurrent exclusion, pair atomicity, recovery หลัง crash หรือ external source mutation; ไม่มี runtime change.
+- PSReadLine ยังคงเกิด `ArgumentOutOfRangeException` ในการ render terminal. Node child process รอบสุดท้ายจบด้วย exit 0 และตรวจ candidate/HTML SHA ตรง receipt (`173b9041…` / `e502f086…`); `validate/deliver/check=pass`, browser-check ไม่ได้รัน, writing warnings 20. ไม่ใช่ browser/visual acceptance.
+- Correction: importer run ภายหลังแสดง `40 passed in 6.74s` และ JUnit 40 tests/0 failures/errors/skips ใน `storage/local-dev/qa/safety/h154-continuation/importer.xml`; แต่ไม่มี process exit marker ที่เชื่อถือได้. จึงนับเป็น pytest output/JUnit evidence เท่านั้น. Full API และ Vite ยังไม่มีผลรอบนี้.
+- Final Project Progress verify: `final-verification.json` records Node process exit 0, `receiptOk=true`, validation/delivery/check pass, candidate hash match and HTML hash match; candidate `173b9041…`, HTML `e502f086…`; HTML contains H154. 20 writing warnings; browser-check not run. README/handoff changes do not affect candidate/HTML bytes.
+- Next: run focused importer และ full API ผ่าน process runner ซึ่งบันทึก exit/stdout/stderr/JUnit; build dashboard พร้อม exit; ตกลง H146 contract ก่อนทดสอบ/เปลี่ยน behavior; อัปเดต architecture candidate จาก source ที่ pinned และตรวจ Git child-process path; ทำ browser/visual review เฉพาะเมื่อ environment พร้อม.
+- ไม่ยืนยัน Redis/VM/MT5/browser/crash/broker/execution acceptance หรือ broker-side fencing.
+
+## H156 — 12 พฤศจิกายน 2026: ตรวจและแก้ตำแหน่ง H155 ใน Project Progress
+
+- Correction: H155 ถูกเพิ่มต่อท้ายใต้หัวข้อประวัติครั้งแรก ทำให้ finalize HTML แม้ผ่าน แต่เนื้อหาที่แสดงยังไม่รวม H155. ไม่นับ HTML ฉบับนั้นว่าเผยแพร่ H155.
+- ตรวจอิสระภายหลังพบ candidate เปลี่ยนหลัง receipt และ HTML ไม่มี H155/H156. จึงถือ HTML stale; ห้ามอ้างว่า H155/H156 เผยแพร่แล้ว.
+- จัด H155/H156 ให้อยู่ก่อน history. รอบ finalize ก่อนหน้านี้ตามด้วยการแก้ candidate จึงไม่นำ hash เก่ามาอ้าง; ใช้ผล verification ล่าสุดใน artifact H157.
+
+## H157 — 12 พฤศจิกายน 2026: final Progress publication verification
+
+- Fresh finalize process exit `0`; receipt `ok=true`, `validate/deliver/check=pass`, `browser-check=not-run`; 19 writing warnings.
+- H158: latest finalize and verification details are retained in `storage/local-dev/qa/safety/h155-continuation/`; browser-check not-run, no visual review.
+- Browser/visual review not run. Next: H146 contract, architecture evidence/provenance refresh, then browser review if available.
+
+## H155 — 12 พฤศจิกายน 2026: importer/API/Vite มี exit evidence
+
+- Snapshot ยังคง branch `integration/safety-main-2026-11-08`, HEAD/upstream `098a8f87bd3012de16c08a1ee6240ecc91591591`; รอบนี้ไม่มี runtime code change.
+- Importer: `.venv\Scripts\python.exe -m pytest -q tests/test_dataset_import.py tests/test_dataset_provenance.py --junitxml=storage/local-dev/qa/safety/h155-continuation/importer.xml` ผ่าน `40 passed`, exit marker `0`, JUnit `40 tests / 0 failures / 0 errors / 0 skipped`; stderr ว่าง.
+- Full API รอบแรกก่อน production build: `24 passed, 1 failed`, exit `1`; `test_spa_deep_links_are_served` รับ `404` เพราะ `apps/web-dashboard/dist/index.html` ยังไม่มี จึงเข้า fallback placeholder ของ API. นี่สะท้อน prerequisite build ที่ยังไม่พร้อม ไม่ใช่ข้อพิสูจน์ว่า deep-link route ล้มเหลวเมื่อมี bundle.
+- Vite production build output `✓ built in 13.95s`, exit marker `0`, stderr ว่าง.
+- Full API rerun หลัง build: `25 passed`, exit marker `0`, JUnit `25 tests / 0 failures / 0 errors / 0 skipped`, stderr ว่าง; มี Starlette deprecation warning เรื่อง `httpx` TestClient.
+- หลักฐานอยู่ใน `storage/local-dev/qa/safety/h155-continuation/`. Wrapper บางครั้งยังถูกรบกวนโดย PSReadLine `ArgumentOutOfRangeException`; final child exit markers กับ stdout/JUnit/build output ที่เก็บได้สอดคล้องกัน.
+- H146 ยังเปิด: ต้องตกลง contract สำหรับ source snapshot ข้าม chunk, cancellation/lifecycle, concurrent import และ destination ownership ก่อนเพิ่ม regression หรือแก้ behavior; H155 ไม่ได้ทดสอบ crash/concurrency.
+- ถัดไป: (1) กำหนด H146 invariant และทดสอบตามขอบเขตที่ตกลง (2) refresh Architecture candidate ให้ pin HEAD และ finalize (3) browser/visual interaction เมื่อ tooling พร้อม.
+- Browser/visual review, Redis, VM, MT5, crash recovery, broker-side fencing และเงินจริง/execution acceptance ไม่ได้ทดสอบ.
 
 ## H145 — 12 พฤศจิกายน 2026: model training worker → registered artifact consumer
 

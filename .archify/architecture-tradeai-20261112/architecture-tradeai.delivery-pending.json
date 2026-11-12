@@ -1,8 +1,0 @@
-{
-  "schemaVersion": 1,
-  "command": "deliver",
-  "status": "pending",
-  "receiptId": "9e0ce011-d123-4d35-a0c8-d87cc03a297e",
-  "input": "C:\\workspace\\Ai-Trading-Pro\\.archify\\architecture-tradeai-20261112\\candidate.json",
-  "output": "C:\\workspace\\Ai-Trading-Pro\\.archify\\architecture-tradeai-20261112\\architecture-tradeai.html"
-}
