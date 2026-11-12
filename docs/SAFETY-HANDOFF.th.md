@@ -1,5 +1,13 @@
 # งานความปลอดภัย local และขั้นตอนส่งต่อ MT5
 
+## H162 — 12 พฤศจิกายน 2026: ยืนยัน Git และลำดับงานค้าง
+
+- ยืนยันสดว่า HEAD คือ `a62b012d95b9c7ce7c5a09822994f286e7952fb4` (`chore: update Thai docs and architecture progress H161`) และ `git status --short` ว่าง; commit H161 สำเร็จ.
+- H146 ยังรอการตัดสินใจเรื่อง destination claim/ownership, partial-pair quarantine หรือ recovery, cancellation/lifecycle และ filesystem scope. ห้ามเปลี่ยน importer behavior หรือเขียน regression ที่สมมติ policy ก่อนมีข้อยืนยัน.
+- Architecture browser retry รอบ H161 ล้มที่ Chrome DevTools write pipe; ไม่มี screenshot/visual acceptance. รอบ H162 ไม่มี retry ใหม่; Architecture ยังคง pin commit `098a8f87bd3012de16c08a1ee6240ecc91591591`.
+- รอบ H162 ไม่ได้รัน test suite หรือ `git diff --check`; Redis/VM/MT5/crash/power-loss/execution acceptance ไม่ได้ทดสอบ.
+- ขั้นถัดไป: ยืนยัน H146 policy → regression fail-first (concurrency/partial pair) → implementation/test; จากนั้นลอง browser-check ใน non-elevated PowerShell เพื่อเก็บภาพและ review หากสภาพแวดล้อมรองรับ.
+
 ## H161 — 8 พฤศจิกายน 2026: Architecture browser-check retry
 
 - ทวน README, Progress candidate/receipts และ H146 contract draft ก่อนเลือกงานถัดไป; H146 ยังรอการตัดสินใจจากผู้รับผิดชอบ จึงยังไม่เขียน implementation/tests ใหม่.

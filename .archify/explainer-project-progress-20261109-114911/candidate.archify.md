@@ -1254,6 +1254,15 @@ Correction — H153 Archify finalize attempt: after changing the nested history 
 - Project Progress H161 finalize `validate/deliver/check=pass`; candidate SHA `18ebe9d418b38094c3d37ecbc3456d08f43517035d57668d61258a4fc30f2bff`, HTML SHA `62e8ec5b870fc1531f477c5be56c4777c80cc8f9c70583542dbe034354ea4308`; 20 writing warnings, browser-check not-run. Receipt/hash/H160+H161 markers ตรง.
 - H161 `git diff --check` exit 0; Git แสดง line-ending conversion warnings สำหรับ Archify artifacts.
 
+## H162 — 12 พฤศจิกายน 2026: ตรวจยืนยัน commit และ handoff
+
+- ตรวจ Git สด: HEAD `a62b012d95b9c7ce7c5a09822994f286e7952fb4`, commit `chore: update Thai docs and architecture progress H161`, author `danaikointa-maker <danaikointa@gmail.com>`; worktree `git status --short` ว่าง. H161 commit ยืนยันแล้ว.
+- ไม่ได้เปลี่ยน importer หรือเพิ่ม regression tests: H146 ยังค้างการยืนยัน ownership/claim, partial-pair recovery/quarantine, cancellation/lifecycle และ filesystem scope. ลำดับถัดไปคือตกลง contract ก่อน RED tests แล้วจึงพิจารณา implementation.
+- Browser/visual acceptance ยังไม่ผ่าน: หลักฐานล่าสุด H161 บันทึก Chrome DevTools write pipe ปิดและไม่มี screenshot; รอบนี้ไม่มี browser retry ใหม่. Architecture artifact ยังคง pin `098a8f87bd3012de16c08a1ee6240ecc91591591` และไม่ถูก refresh.
+- Redis/VM/MT5/crash/power-loss/execution acceptance ไม่ได้ทดสอบในรอบนี้.
+- H162 `git diff --check` และ test suite ไม่ได้รันในรอบนี้; ไม่ยืมผล H160/H161 มาอ้างเป็นการทดสอบสด.
+- Next: ขอผู้รับผิดชอบยืนยัน H146 policy → เขียน regression fail-first สำหรับ concurrency/partial pair → implementation และชุดทดสอบ; แยก browser retry/visual review เมื่อมี non-elevated session ที่เหมาะสม.
+
 ## ประวัติการเปลี่ยนแปลง — H157 {#history-h157}
 
 - H157: recorded fresh importer/API/Vite evidence and ordered remaining work; Architecture and H146 remain open.
