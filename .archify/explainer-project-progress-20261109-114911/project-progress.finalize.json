@@ -5,16 +5,16 @@
   "status": "pass",
   "type": "explainer",
   "quality": "showcase",
-  "startedAt": "2026-11-12T15:33:57.069Z",
+  "startedAt": "2026-11-12T16:31:06.927Z",
   "specification": {
     "path": "C:\\workspace\\Ai-Trading-Pro\\.archify\\explainer-project-progress-20261109-114911\\candidate.archify.md",
-    "sha256": "c2c40033ce081d05cd4c5e67936cf1dea7a3f1f7fccc6d0325bad4b803f0c87c",
-    "bytes": 201491
+    "sha256": "2c76feceb5ecc10675372ff528d60625f341ae25a851e72f67114b721aba701b",
+    "bytes": 206495
   },
   "artifact": {
     "path": "C:\\workspace\\Ai-Trading-Pro\\.archify\\explainer-project-progress-20261109-114911\\project-progress.html",
-    "sha256": "28de30c7b5e8c969acaccc2f22fa035f6f11d158ca599426221fc6c988af9c07",
-    "bytes": 1073753
+    "sha256": "84f9fe6edc61dfdca3ed4f0b9f28417514446f7065bc6ff7778f9f178326fd70",
+    "bytes": 1094192
   },
   "stages": {
     "browser-check": {
@@ -42,8 +42,8 @@
         "ok": true,
         "command": "validate",
         "specification": {
-          "sha256": "c2c40033ce081d05cd4c5e67936cf1dea7a3f1f7fccc6d0325bad4b803f0c87c",
-          "bytes": 201491
+          "sha256": "2c76feceb5ecc10675372ff528d60625f341ae25a851e72f67114b721aba701b",
+          "bytes": 206495
         },
         "validation": {
           "checksPassed": 4,
@@ -58,7 +58,7 @@
     "deliver": {
       "status": "pass",
       "exitCode": 0,
-      "durationMs": 2931,
+      "durationMs": 1971,
       "command": [
         "C:\\Users\\danai\\AppData\\Local\\Programs\\TradeAi\\node-v26.13.0-win-x64\\node.exe",
         "C:\\Users\\danai\\.cline\\skills\\archify\\bin\\archify.mjs",
@@ -72,23 +72,23 @@
       ],
       "receipt": {
         "schemaVersion": 1,
-        "receiptId": "2083c313-a8b0-42d8-a0e2-05b018412865",
+        "receiptId": "57069cfc-1a3a-4c1d-ba7c-c8d3f19e0af3",
         "ok": true,
         "command": "deliver",
         "type": "explainer",
         "input": "C:\\workspace\\Ai-Trading-Pro\\.archify\\explainer-project-progress-20261109-114911\\candidate.archify.md",
         "output": "C:\\workspace\\Ai-Trading-Pro\\.archify\\explainer-project-progress-20261109-114911\\project-progress.html",
         "explainer": {
-          "preparedSha256": "a430bf1743ea9361a9e9117066573c67866fb6a80af105892705355f167c379b",
+          "preparedSha256": "9b220fb5ae7c0e85b7c10ef6e70321f71f59421d357e3dd27dd21ca50f5637e9",
           "dependencies": []
         },
         "specification": {
-          "sha256": "c2c40033ce081d05cd4c5e67936cf1dea7a3f1f7fccc6d0325bad4b803f0c87c",
-          "bytes": 201491
+          "sha256": "2c76feceb5ecc10675372ff528d60625f341ae25a851e72f67114b721aba701b",
+          "bytes": 206495
         },
         "artifact": {
-          "sha256": "28de30c7b5e8c969acaccc2f22fa035f6f11d158ca599426221fc6c988af9c07",
-          "bytes": 1073753
+          "sha256": "84f9fe6edc61dfdca3ed4f0b9f28417514446f7065bc6ff7778f9f178326fd70",
+          "bytes": 1094192
         },
         "validation": {
           "checksPassed": 4,
@@ -501,9 +501,30 @@
           {
             "code": "explainer/writing-sentence-length",
             "severity": "warning",
+            "message": "Sentence has 34 reading units, above the configured en limit of 28.",
+            "subject": {
+              "line": 1277,
+              "component": "list",
+              "panelId": "panel-daa69b244afb",
+              "input": "C:\\workspace\\Ai-Trading-Pro\\.archify\\explainer-project-progress-20261109-114911\\candidate.archify.md"
+            },
+            "evidence": {
+              "rule": "sentence-length",
+              "reason": "Sentence has 34 reading units, above the configured en limit of 28.",
+              "example": "先查缓存。未命中时再查数据库。 / Check the cache first. Query the database on a miss.",
+              "units": 34,
+              "limit": 28
+            },
+            "supportedFixes": [
+              "Split at a logical action or condition boundary while preserving qualifications and causal links."
+            ]
+          },
+          {
+            "code": "explainer/writing-sentence-length",
+            "severity": "warning",
             "message": "Sentence has 29 reading units, above the configured en limit of 28.",
             "subject": {
-              "line": 1273,
+              "line": 1292,
               "component": "list",
               "panelId": "history-h157",
               "input": "C:\\workspace\\Ai-Trading-Pro\\.archify\\explainer-project-progress-20261109-114911\\candidate.archify.md"
@@ -532,12 +553,12 @@
           "reason": "disabled"
         }
       },
-      "stderr": "archify: Sentence has 32 reading units, above the configured en limit of 28.\narchify: Sentence has 30 reading units, above the configured en limit of 28.\narchify: Sentence has 36 reading units, above the configured en limit of 28.\narchify: Sentence has 31 reading units, above the configured en limit of 28.\narchify: Sentence has 36 reading units, above the configured en limit of 28.\narchify: Sentence has 31 reading units, above the configured en limit of 28.\narchify: Sentence has 31 reading units, above the configured en limit of 28.\narchify: Sentence has 29 reading units, above the configured en limit of 28.\narchify: Sentence has 29 reading units, above the configured en limit of 28.\narchify: Sentence has 34 reading units, above the configured en limit of 28.\narchify: Sentence has 37 reading units, above the configured en limit of 28.\narchify: Sentence has 34 reading units, above the configured en limit of 28.\narchify: Sentence has 34 reading units, above the configured en limit of 28.\narchify: Sentence has 33 reading units, above the configured en limit of 28.\narchify: Sentence has 40 reading units, above the configured en limit of 28.\narchify: Sentence has 45 reading units, above the configured en limit of 28.\narchify: Sentence has 31 reading units, above the configured en limit of 28.\narchify: Sentence has 29 reading units, above the configured en limit of 28.\narchify: Sentence has 66 reading units, above the configured en limit of 28.\narchify: Sentence has 29 reading units, above the configured en limit of 28."
+      "stderr": "archify: Sentence has 32 reading units, above the configured en limit of 28.\narchify: Sentence has 30 reading units, above the configured en limit of 28.\narchify: Sentence has 36 reading units, above the configured en limit of 28.\narchify: Sentence has 31 reading units, above the configured en limit of 28.\narchify: Sentence has 36 reading units, above the configured en limit of 28.\narchify: Sentence has 31 reading units, above the configured en limit of 28.\narchify: Sentence has 31 reading units, above the configured en limit of 28.\narchify: Sentence has 29 reading units, above the configured en limit of 28.\narchify: Sentence has 29 reading units, above the configured en limit of 28.\narchify: Sentence has 34 reading units, above the configured en limit of 28.\narchify: Sentence has 37 reading units, above the configured en limit of 28.\narchify: Sentence has 34 reading units, above the configured en limit of 28.\narchify: Sentence has 34 reading units, above the configured en limit of 28.\narchify: Sentence has 33 reading units, above the configured en limit of 28.\narchify: Sentence has 40 reading units, above the configured en limit of 28.\narchify: Sentence has 45 reading units, above the configured en limit of 28.\narchify: Sentence has 31 reading units, above the configured en limit of 28.\narchify: Sentence has 29 reading units, above the configured en limit of 28.\narchify: Sentence has 66 reading units, above the configured en limit of 28.\narchify: Sentence has 34 reading units, above the configured en limit of 28.\narchify: Sentence has 29 reading units, above the configured en limit of 28."
     },
     "check": {
       "status": "pass",
       "exitCode": 0,
-      "durationMs": 643,
+      "durationMs": 1798,
       "command": [
         "C:\\Users\\danai\\AppData\\Local\\Programs\\TradeAi\\node-v26.13.0-win-x64\\node.exe",
         "C:\\Users\\danai\\.cline\\skills\\archify\\bin\\archify.mjs",
@@ -550,15 +571,15 @@
         "file": "C:\\workspace\\Ai-Trading-Pro\\.archify\\explainer-project-progress-20261109-114911\\project-progress.html",
         "family": "explainer",
         "artifact": {
-          "sha256": "28de30c7b5e8c969acaccc2f22fa035f6f11d158ca599426221fc6c988af9c07",
-          "bytes": 1073753
+          "sha256": "84f9fe6edc61dfdca3ed4f0b9f28417514446f7065bc6ff7778f9f178326fd70",
+          "bytes": 1094192
         },
         "checks": [
           {
             "name": "explainer_structure",
             "ok": true,
             "details": [
-              "368 unique DOM IDs"
+              "372 unique DOM IDs"
             ]
           },
           {
@@ -592,7 +613,7 @@
         },
         "diagnostics": [],
         "provenance": "current",
-        "deliveryReceiptId": "2083c313-a8b0-42d8-a0e2-05b018412865"
+        "deliveryReceiptId": "57069cfc-1a3a-4c1d-ba7c-c8d3f19e0af3"
       }
     }
   },
@@ -1003,10 +1024,31 @@
     {
       "code": "explainer/writing-sentence-length",
       "severity": "warning",
+      "message": "Sentence has 34 reading units, above the configured en limit of 28.",
+      "subject": {
+        "input": "C:\\workspace\\Ai-Trading-Pro\\.archify\\explainer-project-progress-20261109-114911\\candidate.archify.md",
+        "line": 1277,
+        "component": "list",
+        "panelId": "panel-daa69b244afb"
+      },
+      "evidence": {
+        "reason": "Sentence has 34 reading units, above the configured en limit of 28.",
+        "example": "先查缓存。未命中时再查数据库。 / Check the cache first. Query the database on a miss.",
+        "rule": "sentence-length",
+        "units": 34,
+        "limit": 28
+      },
+      "supportedFixes": [
+        "Split at a logical action or condition boundary while preserving qualifications and causal links."
+      ]
+    },
+    {
+      "code": "explainer/writing-sentence-length",
+      "severity": "warning",
       "message": "Sentence has 29 reading units, above the configured en limit of 28.",
       "subject": {
         "input": "C:\\workspace\\Ai-Trading-Pro\\.archify\\explainer-project-progress-20261109-114911\\candidate.archify.md",
-        "line": 1273,
+        "line": 1292,
         "component": "list",
         "panelId": "history-h157"
       },
@@ -1027,8 +1069,8 @@
     "summaryReceipt": "C:\\workspace\\Ai-Trading-Pro\\.archify\\explainer-project-progress-20261109-114911\\project-progress.finalize-summary.json"
   },
   "visualReview": "not-requested",
-  "finishedAt": "2026-11-12T15:34:01.762Z",
-  "durationMs": 4692,
+  "finishedAt": "2026-11-12T16:31:12.038Z",
+  "durationMs": 5111,
   "update": {
     "status": "unavailable",
     "installedVersion": null,
@@ -1038,6 +1080,6 @@
     "source": null,
     "noticeRequired": false,
     "noticeText": null,
-    "reason": "timeout"
+    "reason": "check-failed"
   }
 }
