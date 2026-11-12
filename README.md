@@ -47,6 +47,43 @@
 
 ## Quickstart (Linux/macOS/Windows, ไม่ต้องมี MT5)
 
+### Cross-platform local launcher
+
+Install Python 3.11+ and Node.js/npm, then run from the repository root. The
+setup command installs the local environment and starts the app.
+
+Windows PowerShell, first run:
+
+```powershell
+py -3 run.py --setup
+```
+
+Later runs:
+
+```powershell
+py -3 run.py
+```
+
+macOS/Linux, first run:
+
+```bash
+python3 run.py --setup
+```
+
+Later runs:
+
+```bash
+python3 run.py
+```
+
+To validate the local configuration without starting the server, run `py -3
+run.py --check` on Windows or `python3 run.py --check` on macOS/Linux. Use
+`--port 8001` to choose another port. The launcher binds to `127.0.0.1` and
+forces simulated market data, paper/simulated broker profiles, authentication,
+and disabled Full Auto/bridge/alerts. Runtime data stays under the ignored
+`storage/local-dev/` directory. Stop the foreground server with Ctrl+C. This
+launcher is for local development only, not live trading or server deployment.
+
 ### Windows PowerShell: isolated local development
 
 Install Python 3.11+ and Node.js/npm first. From the repository root:

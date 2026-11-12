@@ -7,13 +7,13 @@
   "quality": "showcase",
   "specification": {
     "path": "C:\\workspace\\Ai-Trading-Pro\\.archify\\explainer-project-progress-20261109-114911\\candidate.archify.md",
-    "sha256": "c2c40033ce081d05cd4c5e67936cf1dea7a3f1f7fccc6d0325bad4b803f0c87c",
-    "bytes": 201491
+    "sha256": "2c76feceb5ecc10675372ff528d60625f341ae25a851e72f67114b721aba701b",
+    "bytes": 206495
   },
   "artifact": {
     "path": "C:\\workspace\\Ai-Trading-Pro\\.archify\\explainer-project-progress-20261109-114911\\project-progress.html",
-    "sha256": "28de30c7b5e8c969acaccc2f22fa035f6f11d158ca599426221fc6c988af9c07",
-    "bytes": 1073753
+    "sha256": "84f9fe6edc61dfdca3ed4f0b9f28417514446f7065bc6ff7778f9f178326fd70",
+    "bytes": 1094192
   },
   "gates": {
     "validate": "pass",
@@ -192,11 +192,11 @@
     }
   ],
   "diagnosticSummary": {
-    "total": 20,
+    "total": 21,
     "shown": 8,
     "truncated": true,
     "omittedByCode": {
-      "explainer/writing-sentence-length": 12
+      "explainer/writing-sentence-length": 13
     }
   },
   "evidence": {
@@ -204,7 +204,7 @@
     "summaryReceipt": "C:\\workspace\\Ai-Trading-Pro\\.archify\\explainer-project-progress-20261109-114911\\project-progress.finalize-summary.json"
   },
   "visualReview": "not-requested",
-  "durationMs": 4692,
+  "durationMs": 5111,
   "browserCheck": {
     "requested": false,
     "ran": false

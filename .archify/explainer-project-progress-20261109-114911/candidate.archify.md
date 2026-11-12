@@ -1263,6 +1263,25 @@ Correction — H153 Archify finalize attempt: after changing the nested history 
 - H162 `git diff --check` และ test suite ไม่ได้รันในรอบนี้; ไม่ยืมผล H160/H161 มาอ้างเป็นการทดสอบสด.
 - Next: ขอผู้รับผิดชอบยืนยัน H146 policy → เขียน regression fail-first สำหรับ concurrency/partial pair → implementation และชุดทดสอบ; แยก browser retry/visual review เมื่อมี non-elevated session ที่เหมาะสม.
 
+## H163 — 12 พฤศจิกายน 2026: browser-check สำเร็จและสถานะ Git สด
+
+- ตรวจ H162 หลัง finalize: HEAD ยังคง `a62b012d95b9c7ce7c5a09822994f286e7952fb4`; H162 edits เป็น working-tree changes ที่ยังไม่ commit. `git diff --check` exit 0; มีเพียง line-ending conversion warnings ของ finalize receipts.
+- ค้นเอกสารและ H146 draft ไม่พบ policy approval ใหม่; H146 ยังคง blocked และไม่มี importer behavior/test changes.
+- รัน Architecture `browser-check --require-provenance` ด้วย output แยกที่ `storage/local-dev/qa/safety/h162-browser-check`; receipt status `pass`, provenance `current`, Chrome available, diagnostics ว่าง และ containment ผ่านทุก viewport. Screenshots เป็น `not-requested`; automated browser pass ไม่ใช่ visual review.
+- Architecture HTML ไม่ได้แก้ไข; ยังคง pin commit `098a8f87bd3012de16c08a1ee6240ecc91591591`.
+- ไม่ได้รัน test suite หรือ Redis/VM/MT5/crash/power-loss/execution acceptance รอบนี้.
+- Next: H146 policy approval → regression RED → implementation/tests; รักษา browser visual review และ real-environment acceptance เป็นงานแยก.
+
+## H164 — 12 พฤศจิกายน 2026: ดำเนินงานต่อทั้งสี่สาย
+
+- H146 review: อ่าน contract draft และค้น repository อีกครั้ง ไม่พบ policy approval/decision record. จึงยังไม่สร้าง tests ที่เลือกพฤติกรรมให้ owner และไม่แก้ importer. ข้อที่ต้องให้ owner ตอบ: (1) claim scope thread/process/host และ network filesystem support (2) stale claim ownership/expiry/manual quarantine (3) partial pair retain/quarantine หรือ owner-verified recovery (4) cancellation cut-off และผล API (5) source snapshot guarantee ระหว่าง OS read.
+- Regression readiness: พบ test harness รองรับ `ThreadPoolExecutor`/`Barrier` ใน tests อื่น แต่ยังไม่เพิ่ม test สมมติ contract. พยายามรัน importer focused suite แต่ PowerShell/terminal integration ล้มก่อนสร้าง JUnit/exit artifact; จึงไม่มีผล test สดที่ยืนยันได้.
+- Architecture visual-check: สร้าง captures 4 รูป 1440×900 และ 2048×1320 ทั้ง light/dark; receipt status `pass`, provenance `current`, diagnostics ว่าง และ containment ผ่าน. ตรวจภาพด้วยสายตา: flow อ่านตามทิศทางได้, nodes/edges/legend มี contrast และไม่เห็น clipping/overlap ชัดเจนใน captures. ข้อจำกัด: node/context text ในภาพกว้างมีขนาดเล็กมาก (receipt minimum projected node text 6px); ควรซูม/ใช้ lens หรือรายละเอียดเมื่ออ่าน และนี่ไม่ใช่ usability test กับผู้ใช้. Receipt ยังระบุ `visualReview=pending` เพราะตัวเครื่องมือไม่ได้บันทึก perceptual review.
+- Real environment inventory: ไม่พบ Redis binary ที่ `.tools/bin`, Docker command, MetaTrader terminal process หรือ Hyper-V `Get-VM` command; ไม่มี Redis/MT5/VM acceptance ที่รันได้อย่างซื่อสัตย์. ไม่ดาวน์โหลด/ติดตั้ง binary และไม่เริ่มระบบหรือบัญชีภายนอก.
+- `visual-check`/browser receipts และภาพอยู่ `storage/local-dev/qa/safety/h164-visual-review`; ไม่แก้ Architecture HTML. Progress/Handoff finalize หลังบันทึกผลครบ.
+- Project Progress finalize ล่าสุดให้ `validate/deliver/check=pass`, candidate SHA `ad57f902519ed200d3fc9aa7eabe50de147d5b2bd271d4e11c4fb201758471b3`, HTML SHA `8cc6355280d72e5f04f2dd6e5491e274f062c05f1cd7073ad44629c7c38c4df9`; receipt/hash และ H164 marker ตรง, 21 writing warnings, browser-check ไม่ได้ร้องขอ.
+- Next: ขอ owner ตอบ H146 decision points → RED tests → implementation/tests; เตรียม Redis binary ผ่านช่องทางที่อนุมัติและ environment/MT5 demo terminal ก่อน acceptance จริง; ปรับ Architecture text scale หากอ่านเนื้อหาเล็กเป็น blocker.
+
 ## ประวัติการเปลี่ยนแปลง — H157 {#history-h157}
 
 - H157: recorded fresh importer/API/Vite evidence and ordered remaining work; Architecture and H146 remain open.

@@ -1,5 +1,23 @@
 # งานความปลอดภัย local และขั้นตอนส่งต่อ MT5
 
+## H164 — 12 พฤศจิกายน 2026: เดินงานต่อเนื่องทั้งสี่ข้อ
+
+- H146: ค้น contract/repository แล้วไม่พบ policy approval ใหม่. ยังไม่เปลี่ยน importer และไม่เพิ่ม tests ที่สมมติ policy. Owner ต้องยืนยัน concurrency scope, network filesystem, stale claim, partial-pair handling, cancellation cutoff/result และ source snapshot guarantee.
+- Regression readiness: พบ pattern `ThreadPoolExecutor`/`Barrier` ใน test suite อื่น แต่ H164 ไม่เพิ่ม regression tests. พยายามรัน importer focused suite แต่ PowerShell/terminal integration ล้มก่อนสร้าง JUnit/exit artifact; ไม่มีผล test สดที่ยืนยันได้.
+- Architecture visual: `visual-check` สร้าง 4 captures (1440×900 และ 2048×1320, light/dark), receipt `pass`, provenance current, containment pass/diagnostics ว่าง. ตรวจภาพด้วยสายตาแล้ว: flow/contrast โดยรวมชัดและไม่พบ clipping/overlap เด่นชัด; ข้อจำกัดคือ node/context labels เล็ก (minimum projected text 6px ใน receipt). Visual review นี้ไม่ใช่ usability test.
+- Redis/VM/MT5 inventory: ไม่พบ `.tools/bin/redis-server`, Docker, terminal process ของ MetaTrader หรือ `Get-VM`; จึงรัน real-environment acceptance ไม่ได้. ไม่มีการติดตั้ง binary หรือเปิดระบบ/บัญชี.
+- หลักฐาน H164 อยู่ `storage/local-dev/qa/safety/h164-visual-review`; Architecture HTML คงเดิม. Redis/VM/MT5/crash/power-loss/execution acceptance ยังไม่ผ่าน/ไม่ได้ทดสอบ.
+- Project Progress finalize ล่าสุด `validate/deliver/check=pass`; candidate SHA `ad57f902519ed200d3fc9aa7eabe50de147d5b2bd271d4e11c4fb201758471b3`, HTML SHA `8cc6355280d72e5f04f2dd6e5491e274f062c05f1cd7073ad44629c7c38c4df9`; receipt/hash และ H164 marker ตรง, 21 writing warnings, browser-check not-run.
+- ถัดไป: ขอ owner ยืนยัน H146 policy → RED regression → implementation/tests; จัดเตรียม Redis/VM/MT5 demo environment ที่ได้รับอนุมัติ ก่อนทดสอบจริง.
+
+## H163 — 12 พฤศจิกายน 2026: Architecture browser-check ผ่าน
+
+- รัน `browser-check --require-provenance` ด้วย output แยก `storage/local-dev/qa/safety/h162-browser-check`; receipt `architecture-tradeai.browser-check.json` ระบุ status `pass`, provenance `current`, Chrome available, diagnostics ว่าง และ containment pass.
+- Screenshot ถูกระบุ `not-requested`; ผลนี้เป็น automated browser check ไม่ใช่ visual review. Architecture HTML ไม่ได้แก้และยัง pin commit `098a8f87bd3012de16c08a1ee6240ecc91591591`.
+- ยืนยัน HEAD `a62b012d95b9c7ce7c5a09822994f286e7952fb4`; H162 documentation/Progress updates ยังเป็น working-tree edits. `git diff --check` exit 0 (มี line-ending warnings ของ Archify receipts).
+- ไม่พบ policy approval ใหม่สำหรับ H146 จึงไม่มี importer/test behavior change. Redis/VM/MT5/crash/power-loss/execution acceptance ไม่ได้ทดสอบ.
+- ถัดไป: ยืนยัน H146 ownership/claim, partial-pair recovery, cancellation/lifecycle และ filesystem scope → regression fail-first → implementation; แยก visual review และ real-environment acceptance.
+
 ## H162 — 12 พฤศจิกายน 2026: ยืนยัน Git และลำดับงานค้าง
 
 - ยืนยันสดว่า HEAD คือ `a62b012d95b9c7ce7c5a09822994f286e7952fb4` (`chore: update Thai docs and architecture progress H161`) และ `git status --short` ว่าง; commit H161 สำเร็จ.
