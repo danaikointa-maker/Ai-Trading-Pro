@@ -98,6 +98,8 @@
       <div v-if="reviewLoading" class="px-4 py-5 text-sm text-muted">กำลังอ่านบันทึกไม้…</div>
       <p v-else-if="reviewError" class="px-4 py-5 text-sm text-down">{{ reviewError }} <button class="btn ml-2" @click="selectTrade(selectedTrade)">ลองอีกครั้ง</button></p>
       <div v-else-if="review" class="grid gap-3 p-4 md:grid-cols-2">
+        <TradeLevels class="md:col-span-2" :key="selectedTrade.ticket"
+                     :trade="review.trade" :snapshot="review.entry_snapshot" />
         <article class="rounded-lg border border-ink-700 p-3">
           <h2 class="text-sm font-semibold">ตอนเข้าไม้ · ข้อมูลที่บันทึกไว้</h2>
           <p v-if="review.entry_snapshot" class="mt-2 text-xs leading-relaxed text-slate-300">สัญญาณ {{ review.entry_snapshot.action }} · คะแนน {{ fmt(review.entry_snapshot.score, 0) }} · กลยุทธ์ {{ review.entry_snapshot.strategy }} · ภาวะตลาด {{ review.entry_snapshot.regime }}</p>
@@ -151,6 +153,7 @@ import { computed, onMounted, ref } from 'vue'
 import EquityChart from '../components/EquityChart.vue'
 import PositionsTable from '../components/PositionsTable.vue'
 import Stat from '../components/Stat.vue'
+import TradeLevels from '../components/TradeLevels.vue'
 import { api } from '../lib/api'
 import { datetime, fmt, fmtFactor, money, pct } from '../lib/format'
 import { permissions, state, toast } from '../lib/store'

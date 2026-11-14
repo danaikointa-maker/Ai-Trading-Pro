@@ -47,5 +47,18 @@ Extend the existing FastAPI / Vue 3 / Lightweight Charts / MT5-adapter architect
 - Preserve current server responsibilities and safety guidance; do not alter Proxmox storage, networking, or trading accounts.
 - Before any LIVE enablement: independent explicit operator authorization and verified release gates.
 
-## First PR scope
-Introduce the plan and a small pure closed-candle SR-flip detector with focused tests. This is **not** connected to order execution and does not change trading behavior. Follow-up PRs integrate it with the existing zone and dashboard pipelines.
+## Draft PR #24: implemented vertical slice
+- Pure SR Flip detector, plus read-only confirmed flip readings from **previously confirmed** M5 swing levels (with source swing, breakout and retest timestamps); no extra trading signal or executor action.
+- Read-only named Fibonacci 50% / 61.8% band anchored to the last two confirmed opposite M5 swings, with anchor and confirmation timestamps. The existing zone-engine Fibonacci family is not replaced.
+- Additive, backward-compatible `AnalysisSnapshot.sr_flips` and `AnalysisSnapshot.fibonacci_band` fields consumed by the dashboard.
+- Dashboard chart switches for EMA, S/R, SR Flip, Fibonacci, BOS/CHoCH, signal plan Entry/SL/TP, and current positions. Switches are stored only in browser local storage, not in trading state.
+- Closed-trade review displays a **price-level diagram**, separately switchable between the archived linked signal's original Entry/SL/TP and executed Entry/Exit. It never reconstructs missing historical levels from today's data, and is not yet a historical candlestick replay.
+- Focused tests cover pre-retest silence, wrong-side and unconfirmed swings, stale Fibonacci anchors, bullish and bearish retracement maths. Dashboard bundle must build.
+
+### What is still missing / not production-ready
+- Preserve a complete, immutable per-order **pre-submission** snapshot (all zone bounds, structure, flip, Fibonacci, original plan and risk state), with append-only revisions, order/position/deal mapping and partial-fill reconciliation.
+- Per-order overlays on a **historical candlestick** chart; the current closed-trade level diagram is a transparent interim visualization.
+- Three-timeframe Stochastic, formal WAIT/READY/EXPIRED/BLOCKED lifecycle and alerts, up-to-three proposed entries, and integrated risk validation of those proposals.
+- Full replay/walk-forward tests, MT5 demo reconciliation/disconnect testing, security and deployment gates. Auto-trade permissions and LIVE settings are **untouched**.
+
+Do not interpret a displayed flip or Fibonacci band as a validated entry. Hidden chart lines have no influence on signal evaluation, risk checks or execution.

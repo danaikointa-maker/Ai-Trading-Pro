@@ -285,6 +285,30 @@ class StructureEvent(BaseModel):
     note: str = ""
 
 
+class SRFlipReading(BaseModel):
+    """Read-only, closed-bar break/retest evidence for a historical swing level."""
+    level: float
+    direction: Literal["support_to_resistance", "resistance_to_support"]
+    source_swing_t: int
+    break_t: int
+    retest_t: int
+    confirmed_t: int
+    timeframe: str = "M5"
+
+
+class FibonacciBand(BaseModel):
+    """Latest confirmed swing-to-swing retracement, for chart annotation."""
+    direction: Literal["up", "down"]
+    anchor_start_t: int
+    anchor_end_t: int
+    anchor_start_price: float
+    anchor_end_price: float
+    confirmed_t: int
+    level_50: float
+    level_618: float
+    timeframe: str = "M5"
+
+
 class TrendReading(BaseModel):
     timeframe: str
     direction: Direction
@@ -364,6 +388,8 @@ class AnalysisSnapshot(BaseModel):
     trend: list[TrendReading] = Field(default_factory=list)
     structure: list[StructureEvent] = Field(default_factory=list)
     swings: list[SwingPoint] = Field(default_factory=list)
+    sr_flips: list[SRFlipReading] = Field(default_factory=list)
+    fibonacci_band: FibonacciBand | None = None
     zones: list[Zone] = Field(default_factory=list)
     supports: list[Zone] = Field(default_factory=list)
     resistances: list[Zone] = Field(default_factory=list)
