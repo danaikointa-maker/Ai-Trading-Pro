@@ -2,7 +2,8 @@
 
 Status: IN PROGRESS. This is a development plan, not a trading-system acceptance or profitability claim.
 Source of truth: this repository's executable code and current tests. Historical docs may be stale.
-Branch: `feature/smart-entry-v2`. No changes to `main` without review.
+Delivery: PR #24 and PR #27 were merged into `main` after review. New work is
+proposed on `feature/smart-entry-v2-reconciliation`; no direct push to `main`.
 
 ## Goal
 Extend the existing FastAPI / Vue 3 / Lightweight Charts / MT5-adapter architecture. Do not replace existing zone, structure, risk, execution, backtest, journal or authentication modules.
@@ -47,7 +48,7 @@ Extend the existing FastAPI / Vue 3 / Lightweight Charts / MT5-adapter architect
 - Preserve current server responsibilities and safety guidance; do not alter Proxmox storage, networking, or trading accounts.
 - Before any LIVE enablement: independent explicit operator authorization and verified release gates.
 
-## Draft PR #24: implemented vertical slice
+## Merged PR #24: implemented vertical slice
 - Pure SR Flip detector, plus read-only confirmed flip readings from **previously confirmed** M5 swing levels (with source swing, breakout and retest timestamps); no extra trading signal or executor action.
 - Read-only named Fibonacci 50% / 61.8% band anchored to the last two confirmed opposite M5 swings, with anchor and confirmation timestamps. The existing zone-engine Fibonacci family is not replaced.
 - Additive, backward-compatible `AnalysisSnapshot.sr_flips` and `AnalysisSnapshot.fibonacci_band` fields consumed by the dashboard.
@@ -71,9 +72,16 @@ Extend the existing FastAPI / Vue 3 / Lightweight Charts / MT5-adapter architect
 - Historical trade review resolves evidence by broker ticket, falling back to an **unambiguous** signal ID, and checks saved broker/account identity. The original evidence takes precedence over later mutable signal rows. The trade details diagram has independent client-only toggles for archived plan levels, fill/exit, S/R zone boundaries, flips, Fibonacci and BOS/CHoCH.
 - Tests cover before-send durability, restart/replay invariance, account/plan mismatch veto, failed-insert atomic rollback, schema guards, API historical plan priority and ordinary legacy records. No LIVE or full-auto setting is changed.
 
-### What is still missing / not production-ready
-- Follow-up software additions: append-only `position_events` for management requests and observed outcomes, read-only open-position review, decision-time archived M5 candles and historical candle chart, up to three **non-executable** aggregate-budgeted zone-entry scenarios, and restart-aware readiness deduplication. Broker position-ID-matched deals remain labelled as incomplete attribution.
+### Merged PR #27: further V2 code and audit trail
+- Added append-only `position_events` for position-management requests and observed outcomes, read-only open-position review, decision-time archived M5 candles and historical candle chart, up to three **non-executable** aggregate-budgeted zone-entry scenarios, and restart-aware readiness deduplication. Broker position-ID-matched deals remain labelled as incomplete attribution.
 - A standalone `scripts/smart_entry_release_gate.py` checks real-data provenance, four walk-forward folds, tick-level ordering, two higher-cost stress reports and 14-day/30-trade MT5 Demo evidence. It cannot enable LIVE; examples and an operator checklist are in `docs/SMART-ENTRY-V2-ACCEPTANCE.md`.
+
+### Current reconciliation follow-up (proposed, not yet MT5 Demo verified)
+- Persist broker-position observations for changes in SL/TP, volume, direction or entry, unexpected positions, missing positions and restoration to the old baseline. Identical polls have no duplicate event across restarts/processes; events are append-only and tied to the original account/workspace identity.
+- Management-cycle mirror updates now archive discrepancies and preserve unverified baselines **atomically in one SQLite transaction** before accepting that cycle's cache; rejection cannot silently overwrite the earlier local evidence.
+- No broker observation is labelled as a verified fill or as a human-originated manual change. A broker-missing position keeps its last baseline pending authoritative history. New observations trigger in-app/configured-channel alerts without changing execution permissions or the original plan.
+
+### What is still missing / not production-ready
 - Still missing: independent validation of optional Stochastic veto, **full post-entry candle replay**, attested broker-deal and partial-fill mapping, deterministic terminal disconnection/manual-change acceptance, target-host restore testing, and real-market forward evidence. No terminal access or real dataset was provided in this development environment. **Do not claim LIVE readiness.**
 
 Do not interpret a displayed flip or Fibonacci band as a validated entry. Hidden chart lines have no influence on signal evaluation, risk checks or execution.

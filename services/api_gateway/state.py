@@ -860,7 +860,9 @@ class TradingRuntime:
                     return
                 # Keep the epoch check, local transaction and cache acceptance
                 # together; mutation entry must not slip between these steps.
-                self.gateway.open_position_snapshot(positions, broker_id=adapter.id)
+                observations = self.gateway.open_position_snapshot(
+                    positions, broker_id=adapter.id, account_identity=identity,
+                    retain_unverified=True)
                 self.positions_cache = positions
                 self._positions_identity = dict(identity)
                 self._positions_adapter = adapter
@@ -869,6 +871,22 @@ class TradingRuntime:
                 plans = dict(self.plans)
                 ctx = self.contexts.get(self.active_symbol)
                 forecast = self.cached_forecast(self.active_symbol)
+            if observations and hasattr(self, "notifier"):
+                try:
+                    restored = all(row["status"] == "baseline_restored" for row in observations)
+                    self.notifier.emit(
+                        "info" if restored else "warning",
+                        "Broker position baseline restored" if restored else
+                        "Broker position changes need review",
+                        ("Broker positions returned to the stored baseline. " if restored else
+                         "Broker position list differs from the locally verified baseline. ")
+                        + "The observations are archived; no fills or human attribution inferred.",
+                        meta={"broker_id": adapter.id,
+                              "event_ids": [row["event_id"] for row in observations],
+                              "transitions": observations},
+                        dedupe_seconds=0)
+                except Exception as exc:  # noqa: BLE001 - alert delivery must not change positions
+                    self._log_error("position_observation_alert", exc)
         except Exception as exc:  # noqa: BLE001
             with self.lock:
                 self._positions_available = False
@@ -1243,6 +1261,25 @@ class TradingRuntime:
     def _reconcile_cycle(self) -> None:
         try:
             self.last_reconcile = self.gateway.reconcile(self.adapter)
+            observed = self.last_reconcile.get("observations_added", 0)
+            if observed:
+                transitions = self.last_reconcile.get("observation_transitions", [])
+                restored = all(item.get("status") == "baseline_restored" for item in transitions)
+                issues = []
+                for field in ("missing_at_broker", "unknown_locally", "changed_at_broker"):
+                    if self.last_reconcile.get(field):
+                        issues.append(f"{field}: {', '.join(self.last_reconcile[field][:4])}")
+                self.notifier.emit(
+                    "info" if restored else "warning",
+                    "Broker position baseline restored" if restored else
+                    "Broker position reconciliation needs review",
+                    ("The previously observed position discrepancy returned to the stored baseline. "
+                     if restored else "A new broker position discrepancy was recorded. ")
+                    + "No close/fill or human attribution has been inferred. " + "; ".join(issues),
+                    meta={"broker_id": self.last_reconcile.get("broker_id"),
+                          "event_ids": self.last_reconcile["observation_events"],
+                          "transitions": transitions},
+                    dedupe_seconds=0)
         except Exception as exc:  # noqa: BLE001
             self._log_error("reconcile", exc)
 

@@ -75,6 +75,10 @@
           <p class="mt-1 text-[10px] text-muted">{{ openReview.events?.length || 0 }} เหตุการณ์ · {{ openReview.deals?.length || 0 }} broker deals · {{ openReview.deal_attribution }}</p>
           <p v-for="event in openReview.events || []" :key="event.event_id" class="mt-1 text-xs text-slate-300">
             {{ datetime(event.created_at) }} · {{ event.kind }} · {{ event.status }} · {{ event.detail?.reason || event.actor }}
+            <span v-if="event.kind === 'broker_observation'" class="text-amber-300">
+              · ข้อมูลจากโบรกเกอร์ต่างจากบันทึก ({{ event.detail?.changed_fields?.join(', ') || 'ไม่ทราบรายละเอียด' }})
+              · ยังไม่ยืนยันผู้แก้หรือการปิดไม้
+            </span>
           </p>
           <p v-if="!openReview.events?.length" class="mt-2 text-xs text-muted">ยังไม่มีเหตุการณ์แก้ไข/ปิดบางส่วนที่ระบบบันทึกไว้</p>
         </div>
@@ -151,6 +155,10 @@
           <div v-for="event in review.events || []" :key="event.event_id" class="mt-2 border-b border-ink-700/60 pb-2 text-xs text-slate-300">
             {{ datetime(event.created_at) }} · {{ event.kind }} · {{ event.status }} · {{ event.actor }}
             <span class="text-muted">{{ event.detail?.reason || '' }}</span>
+            <span v-if="event.kind === 'broker_observation'" class="text-amber-300">
+              · {{ event.detail?.changed_fields?.join(', ') || 'position state' }}
+              · ยังไม่ยืนยันผู้แก้หรือผล fill
+            </span>
           </div>
           <p v-if="!review.events?.length" class="mt-2 text-xs text-muted">ยังไม่มีเหตุการณ์การปรับแผนที่บันทึกไว้</p>
           <p class="mt-2 text-[10px] text-amber-300">{{ review.deal_attribution }} · หมายเลข position ตรงกันไม่ได้รับรองว่าเป็นการส่งจากกลยุทธ์นี้</p>
