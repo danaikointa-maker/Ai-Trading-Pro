@@ -55,10 +55,18 @@ Extend the existing FastAPI / Vue 3 / Lightweight Charts / MT5-adapter architect
 - Closed-trade review displays a **price-level diagram**, separately switchable between the archived linked signal's original Entry/SL/TP and executed Entry/Exit. It never reconstructs missing historical levels from today's data, and is not yet a historical candlestick replay.
 - Focused tests cover pre-retest silence, wrong-side and unconfirmed swings, stale Fibonacci anchors, bullish and bearish retracement maths. Dashboard bundle must build.
 
+### Follow-up: readiness and multi-TF visibility
+- Added a separate, read-only `Signal.readiness` and `readiness_reason` populated **after** the existing risk gate. `SCANNING`, `WAIT`, `READY`, `BLOCKED`, `EXPIRED` do not grant execution permission, override `Signal.action` or bypass approval.
+- Differentiates missing entry conditions (WAIT) from health/news/feed vetoes and rejected actionable plans (BLOCKED). Uses market time to avoid false expiry during historical replay.
+- The Signal Card displays readiness and the reason; on an MT5 live feed, it also labels an expired signal immediately and disables the stale approval button.
+- An in-app/existing-channel alert is emitted when entering BLOCKED and on meaningful transition back to waiting. Initial idle WAIT and repeated identical states do not generate alerts; existing BUY/SELL alerts remain authoritative for READY. Alert exceptions cannot change the order decision.
+- Added closed-bar Stochastic (14,3,3) M5/M15/H1 values to AnalysisSnapshot. Unavailable or stale frames are marked explicitly. The display says this is **observation only**, not a new execution gate.
+- Unit tests cover lifecycle precedence, expiry, existing payload compatibility, transition deduplication, indicator lookahead and stale/missing timeframes.
+
 ### What is still missing / not production-ready
 - Preserve a complete, immutable per-order **pre-submission** snapshot (all zone bounds, structure, flip, Fibonacci, original plan and risk state), with append-only revisions, order/position/deal mapping and partial-fill reconciliation.
 - Per-order overlays on a **historical candlestick** chart; the current closed-trade level diagram is a transparent interim visualization.
-- Three-timeframe Stochastic, formal WAIT/READY/EXPIRED/BLOCKED lifecycle and alerts, up-to-three proposed entries, and integrated risk validation of those proposals.
+- Integrate and validate Stochastic **as an optional veto** only after out-of-sample evidence; lifecycle alert persistence across restart, up-to-three proposed entries, and integrated risk validation of those proposals.
 - Full replay/walk-forward tests, MT5 demo reconciliation/disconnect testing, security and deployment gates. Auto-trade permissions and LIVE settings are **untouched**.
 
 Do not interpret a displayed flip or Fibonacci band as a validated entry. Hidden chart lines have no influence on signal evaluation, risk checks or execution.

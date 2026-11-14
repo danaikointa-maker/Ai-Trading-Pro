@@ -36,6 +36,7 @@ from packages.shared_schemas.models import (
     Position,
     Signal,
     SignalAction,
+    SignalReadiness,
     SignalStatus,
     Tick,
     TradeMode,
@@ -58,6 +59,7 @@ from services.risk_engine.planner import PlanInputs, TradePlanner
 from services.strategy_engine.analysis import AnalysisContext, AnalysisService
 from services.strategy_engine.attribution import BlockerTally, merge
 from services.strategy_engine.engine import StrategyEngine
+from services.strategy_engine.readiness import assess_readiness
 
 def _truthy(value: Any) -> bool:
     return str(value or "").strip().lower() in ("1", "true", "yes", "on")
@@ -278,6 +280,7 @@ class TradingRuntime:
         self._thread: threading.Thread | None = None
         self._decision_interval = float(self.settings.app.get("app", {}).get("decision_interval_seconds", 4))
         self._alert_dedupe: dict[str, int] = {}
+        self._last_readiness: dict[str, SignalReadiness] = {}
         self._last_persisted: dict[str, tuple[str, float]] = {}
         self._forecast_invalid: dict[str, bool] = {}
         self.active_symbol = self.settings.market_data.get("default_symbol", "XAUUSD")
@@ -622,6 +625,13 @@ class TradingRuntime:
                 signal.action = SignalAction.wait
                 signal.status = SignalStatus.weak if signal.score >= 50 else SignalStatus.no_trade
 
+        # Explanatory lifecycle only. The executor still trusts solely the
+        # original action and independent risk gate; this field grants nothing.
+        readiness = assess_readiness(signal, gate_allow=gate.allow,
+                                     was_tradable=tradable, as_of=int(now))
+        signal.readiness = readiness.state
+        signal.readiness_reason = readiness.reason
+
         with self.lock:
             self.contexts[symbol] = ctx
             if forecast:
@@ -639,6 +649,13 @@ class TradingRuntime:
 
         if self.mode == TradeMode.full_auto and signal.action in (SignalAction.buy, SignalAction.sell):
             self.execute_signal(signal.id, actor="full-auto")
+
+        # Informational notifications run after the original decision and
+        # execution path, so they cannot delay an otherwise authorized order.
+        try:
+            self._maybe_alert_readiness(signal)
+        except Exception as exc:  # alerts must never alter trading decisions
+            self._log_error("readiness_alert", exc)
 
     def attribution_summary(self, symbol: str | None = None) -> dict[str, Any]:
         """Why the live engine has or has not been trading since `since`.
@@ -712,6 +729,38 @@ class TradingRuntime:
                                    f"analysis before acting.", symbol=signal.symbol, dedupe_seconds=0)
             elif not invalid:
                 self._forecast_invalid[signal.symbol] = False
+
+    def _maybe_alert_readiness(self, signal: Signal) -> None:
+        """Notify on readiness transitions, not on every four-second scan.
+
+        Existing BUY/SELL alerts handle READY. WAIT alerts only follow a prior
+        READY/BLOCKED state; initial idle scans produce no notification storm.
+        """
+        new = signal.readiness
+        if new is None:
+            return
+        previous = self._last_readiness.get(signal.symbol)
+        if previous == new:
+            return
+        self._last_readiness[signal.symbol] = new
+        if new == SignalReadiness.blocked:
+            self.notifier.emit(
+                "warning", f"Entry BLOCKED — {signal.symbol}",
+                signal.readiness_reason or "Risk Gate ไม่อนุญาตให้เปิดออเดอร์",
+                symbol=signal.symbol,
+                meta={"signal_id": signal.id, "readiness": new.value},
+                dedupe_seconds=300,
+            )
+        elif new in (SignalReadiness.wait, SignalReadiness.scanning) and previous in (
+            SignalReadiness.ready, SignalReadiness.blocked,
+        ):
+            self.notifier.emit(
+                "info", f"รอสัญญาณ — {signal.symbol}",
+                signal.readiness_reason or "ยังไม่ครบเงื่อนไขจุดเข้า",
+                symbol=signal.symbol,
+                meta={"signal_id": signal.id, "readiness": new.value},
+                dedupe_seconds=300,
+            )
 
     # --------------------------------------------------------- manage cycle
     def _manage_cycle(self, now: float) -> None:

@@ -47,6 +47,15 @@ class SignalStatus(str, Enum):
     no_trade = "no_trade"
 
 
+class SignalReadiness(str, Enum):
+    """Explanatory state after a decision and its independent risk gate."""
+    scanning = "SCANNING"
+    wait = "WAIT"
+    ready = "READY"
+    blocked = "BLOCKED"
+    expired = "EXPIRED"
+
+
 class TradeMode(str, Enum):
     manual = "manual"
     semi_auto = "semi_auto"
@@ -309,6 +318,17 @@ class FibonacciBand(BaseModel):
     timeframe: str = "M5"
 
 
+class StochasticReading(BaseModel):
+    """Closed-bar momentum evidence; not an execution gate in this stage."""
+    timeframe: str
+    k: float | None = None
+    d: float | None = None
+    direction: Literal["bullish", "bearish", "neutral", "unavailable"] = "unavailable"
+    source_t: int = 0
+    fresh: bool = False
+    reason: str = ""
+
+
 class TrendReading(BaseModel):
     timeframe: str
     direction: Direction
@@ -390,6 +410,7 @@ class AnalysisSnapshot(BaseModel):
     swings: list[SwingPoint] = Field(default_factory=list)
     sr_flips: list[SRFlipReading] = Field(default_factory=list)
     fibonacci_band: FibonacciBand | None = None
+    stochastic: list[StochasticReading] = Field(default_factory=list)
     zones: list[Zone] = Field(default_factory=list)
     supports: list[Zone] = Field(default_factory=list)
     resistances: list[Zone] = Field(default_factory=list)
@@ -509,6 +530,9 @@ class Signal(BaseModel):
     broker_id: str
     action: SignalAction
     status: SignalStatus
+    # Observability only. Order authorization still depends on action + RiskGate.
+    readiness: SignalReadiness | None = None
+    readiness_reason: str = ""
     score: float
     strategy: str
     regime: str
