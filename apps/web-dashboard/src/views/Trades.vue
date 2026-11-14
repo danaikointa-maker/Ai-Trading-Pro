@@ -66,7 +66,8 @@
       <div v-if="openReview" class="space-y-3 p-3">
         <ArchivedTradeChart :key="`open-${openReview.position.ticket}`" :trade="openReview.position"
                             :snapshot="openReview.original_plan_snapshot?.original_signal"
-                            :analysis="openReview.original_plan_snapshot?.analysis" />
+                            :analysis="openReview.original_plan_snapshot?.analysis"
+                            :post-entry="openReview.post_entry_candles" />
         <TradeLevels :key="`open-levels-${openReview.position.ticket}`" :trade="openReview.position"
                      :snapshot="openReview.original_plan_snapshot?.original_signal"
                      :analysis="openReview.original_plan_snapshot?.analysis" />
@@ -133,7 +134,8 @@
       <div v-else-if="review" class="grid gap-3 p-4 md:grid-cols-2">
         <ArchivedTradeChart class="md:col-span-2" :key="`chart-${selectedTrade.ticket}`"
                             :trade="review.trade" :snapshot="review.entry_snapshot"
-                            :analysis="review.original_plan_snapshot?.analysis" />
+                            :analysis="review.original_plan_snapshot?.analysis"
+                            :post-entry="review.post_entry_candles" />
         <TradeLevels class="md:col-span-2" :key="selectedTrade.ticket"
                      :trade="review.trade" :snapshot="review.entry_snapshot"
                      :analysis="review.original_plan_snapshot?.analysis" />

@@ -13,9 +13,11 @@ automated test on synthetic prices. Each item needs time-stamped broker evidence
    **not** upgrade an accepted but unverified close into a verified broker fill.
 3. Open-position and closed-trade review show original plan, decision-time M5
    candles where available, SR zone boundaries, flips, Fibonacci and structure.
-   Display switches affect presentation only. Historical **post-entry** candles
-   are not reconstructed unless separately recorded; recorded real exit prices
-   are shown as horizontal evidence lines.
+   Display switches affect presentation only. Some **post-entry** M5 candles
+   are now separately archived during observed management polls, account-scoped
+   and immutable. They appear in purple with their feed provenance; gaps remain
+   gaps, and neither the bars nor the recorded exit-price line prove a verified
+   tick/deal history. Missing past bars are never reconstructed from today's data.
 4. Up to three `entry_proposals` are read-only scenarios with per-plan sizing,
    combined risk/lot caps and conservative position slots. They cannot be
    submitted via the order endpoint. The existing `Signal + RiskGate` path is
@@ -37,6 +39,14 @@ automated test on synthetic prices. Each item needs time-stamped broker evidence
    the preceding mirror untouched. The separate direct mirror-replacement API
    *inside the codebase* remains available to trusted reconciliation workflows;
    this does not introduce a new end-user permission to rewrite history.
+8. Order-ID fill review sums only opening (`entry=in`) fragments. Closing and
+   netting-reversal fragments are excluded and labelled ambiguous. Matched
+   volume still does **not** authorize resolving a pending order or trading.
+9. Post-entry candle archiving is an auxiliary, best-effort audit feature: it
+   records only recently closed M5 bars where a matching cached symbol analysis
+   exists while the position is observed open; it never blocks protective
+   order management.
+   No broker tick verification or complete-time-series guarantee is implied.
 
 ## Reproducible backtest evidence (operator run)
 
@@ -101,9 +111,12 @@ cryptographic proof of an MT5 terminal's behavior.
 - An optional three-timeframe Stochastic veto is deliberately *not* permitted
   to change live order decisions until out-of-sample A/B testing on the same
   real snapshots is available. Today it remains observational.
-- Full broker-side partial-fill attribution and post-entry candlestick capture
-  depend on terminal history and order/deal ID semantics; the current ledger
-  displays matching position IDs but does not infer strategy ownership.
+- Full broker-side partial-fill attribution and **complete, tick-verified**
+  post-entry candlestick history still depend on terminal history and order/deal
+  ID semantics. The current ledger displays matching position IDs and opening
+  fragments but does not infer strategy ownership. The optional M5 observed-bar
+  archive cannot fill periods when the program was stopped, the position was
+  not observed or a matching cached analysis was unavailable or stale.
 - A difference in broker `positions()` does not identify whether the MT5 user,
   another EA, the broker or a netting operation caused it; the observation is
   evidence of a discrepancy only, not evidence of its cause or a completed fill.

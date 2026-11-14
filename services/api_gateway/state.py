@@ -57,6 +57,7 @@ from services.risk_engine.engine import RiskEngine, default_risk_state
 from services.risk_engine.manager import PositionAction, PositionManager
 from services.risk_engine.planner import PlanInputs, TradePlanner
 from services.strategy_engine.analysis import AnalysisContext, AnalysisService, decision_candles
+from packages.persistence.position_candles import PositionCandleLog
 from services.strategy_engine.attribution import BlockerTally, RollingAttribution, merge
 
 # One hour of live decisions is the default view: long enough that a four-second
@@ -935,6 +936,7 @@ class TradingRuntime:
                 self._positions_available = True
                 plans = dict(self.plans)
                 ctx = self.contexts.get(self.active_symbol)
+                observed_contexts = dict(self.contexts)
                 forecast = self.cached_forecast(self.active_symbol)
             if observations and hasattr(self, "notifier"):
                 try:
@@ -957,6 +959,28 @@ class TradingRuntime:
                 self._positions_available = False
             self._log_error("positions", exc)
             return
+        # Archive only recently observed, already-closed M5 bars for positions
+        # with an available *matching* analysed context, including non-active
+        # symbols. Never fetch a current chart to fill a missing past interval.
+        feed = getattr(getattr(self, "market", None), "feed_mode", None)
+        if not isinstance(feed, str) or not feed.strip():
+            feed = getattr(adapter, "adapter_type", "unknown")
+        if not isinstance(feed, str) or not feed.strip():
+            feed = "unknown"
+        log = PositionCandleLog(self.db)
+        for position in positions:
+            observation = observed_contexts.get(position.symbol)
+            if (observation is None or not getattr(observation, "frames", None)
+                    or "M5" not in observation.frames
+                    or observation.snapshot.broker_id != adapter.id
+                    or observation.snapshot.symbol != position.symbol):
+                continue
+            try:
+                bars = decision_candles(observation.frames["M5"], as_of=int(now), limit=5)
+                log.capture(position=position, account_identity=identity,
+                            bars=bars, market_time=int(now), feed_mode=feed)
+            except Exception as exc:  # noqa: BLE001 - chart archiving cannot block protective exits
+                self._log_error("post_entry_candle_archive", exc)
         atr_points = 0.0
         if ctx is not None:
             atr_points = ctx.snapshot.indicators.atr_points

@@ -2,8 +2,9 @@
 
 Status: IN PROGRESS. This is a development plan, not a trading-system acceptance or profitability claim.
 Source of truth: this repository's executable code and current tests. Historical docs may be stale.
-Delivery: PR #24 and PR #27 were merged into `main` after review. New work is
-proposed on `feature/smart-entry-v2-reconciliation`; no direct push to `main`.
+Delivery: PR #24, #27 and #28 were merged into `main` after review. The next
+increment is proposed on `feature/smart-entry-v2-historical-replay`; no direct
+push to `main`.
 
 ## Goal
 Extend the existing FastAPI / Vue 3 / Lightweight Charts / MT5-adapter architecture. Do not replace existing zone, structure, risk, execution, backtest, journal or authentication modules.
@@ -76,12 +77,18 @@ Extend the existing FastAPI / Vue 3 / Lightweight Charts / MT5-adapter architect
 - Added append-only `position_events` for position-management requests and observed outcomes, read-only open-position review, decision-time archived M5 candles and historical candle chart, up to three **non-executable** aggregate-budgeted zone-entry scenarios, and restart-aware readiness deduplication. Broker position-ID-matched deals remain labelled as incomplete attribution.
 - A standalone `scripts/smart_entry_release_gate.py` checks real-data provenance, four walk-forward folds, tick-level ordering, two higher-cost stress reports and 14-day/30-trade MT5 Demo evidence. It cannot enable LIVE; examples and an operator checklist are in `docs/SMART-ENTRY-V2-ACCEPTANCE.md`.
 
-### Current reconciliation follow-up (proposed, not yet MT5 Demo verified)
+### Merged PR #28: reconciliation follow-up (not MT5 Demo verified)
 - Persist broker-position observations for changes in SL/TP, volume, direction or entry, unexpected positions, missing positions and restoration to the old baseline. Identical polls have no duplicate event across restarts/processes; events are append-only and tied to the original account/workspace identity.
 - Management-cycle mirror updates now archive discrepancies and preserve unverified baselines **atomically in one SQLite transaction** before accepting that cycle's cache; rejection cannot silently overwrite the earlier local evidence.
 - No broker observation is labelled as a verified fill or as a human-originated manual change. A broker-missing position keeps its last baseline pending authoritative history. New observations trigger in-app/configured-channel alerts without changing execution permissions or the original plan.
 
+### Current historical-candle follow-up (proposed, not yet MT5 Demo verified)
+- Archive M5 candles **only after closing** and **only while an owned management cycle actually sees a matching open position and cached analysis for its symbol** (also covering non-active symbols when their own analysis remains available). Ignore pre-entry, unfinished, future, and >15-minute-old bars; never fill missing periods from a later download. Save observations per broker/ticket/workspace/account with a source and feed-mode label. Append-only SQLite guards preserve the original bars; a conflicting duplicate fails that position's archive transaction.
+- Read-only open/closed order reviews now serve the observed post-entry bars alongside the original frozen decision-time bars. The dashboard colors observed post-entry bars purple and warns that missing periods are unobserved; all historical S/R, flips, Fibonacci, structure and Entry/SL/TP layer switches remain visual-only.
+- Broker deal matching by order ID now counts `entry=in` fragments only. Close (`out`, `out_by`) and netting-reversal (`inout`) fragments cannot inflate a purported opening fill; their presence is reported as ambiguous, never automatically resolved. A complete broker-side reconciliation still needs independent Demo evidence.
+- Archive errors are logged and cannot block protective position management. Position polling and a fresh matching analysis context are required: the archive is **partial**, can have gaps during downtime or when no matching context is refreshed, and is **not** MT5 tick-history proof. The `complete`/`broker_tick_verified` flags remain false.
+
 ### What is still missing / not production-ready
-- Still missing: independent validation of optional Stochastic veto, **full post-entry candle replay**, attested broker-deal and partial-fill mapping, deterministic terminal disconnection/manual-change acceptance, target-host restore testing, and real-market forward evidence. No terminal access or real dataset was provided in this development environment. **Do not claim LIVE readiness.**
+- Still missing: independent validation of optional Stochastic veto, **complete broker-verified post-entry candle replay** (especially restart/offline intervals and symbols without cached analysis), attested broker-deal and partial-fill mapping, deterministic terminal disconnection/manual-change acceptance, target-host restore testing, and real-market forward evidence. No terminal access or real dataset was provided in this development environment. **Do not claim LIVE readiness.**
 
 Do not interpret a displayed flip or Fibonacci band as a validated entry. Hidden chart lines have no influence on signal evaluation, risk checks or execution.

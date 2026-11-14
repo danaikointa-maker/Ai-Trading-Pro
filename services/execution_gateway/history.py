@@ -149,14 +149,28 @@ class DealLedger:
 
     def order_evidence(self, broker_id: str, account_key: str, order_id: str,
                        symbol: str, side: str, requested_volume: float) -> dict:
+        """Inspect *opening* fill fragments for one exact broker order ID.
+
+        A closing or reversal deal with that ID cannot be counted as a new
+        opening fill, even if its direction happens to match the request.
+        Neither a full matched volume nor a position ID certifies ownership
+        of an internal strategy order; the caller must reconcile broker IDs.
+        """
         if not math.isfinite(requested_volume) or requested_volume <= 0:
             raise HistoryError("invalid requested volume")
         rows = [r for r in self.deals(broker_id, account_key) if r["order_id"] == order_id]
-        volume = sum((Decimal(str(r["volume"])) for r in rows), Decimal(0))
+        openings = [r for r in rows if r["entry"] == "in"]
+        non_opening = any(r["entry"] != "in" for r in rows)
+        volume = sum((Decimal(str(r["volume"])) for r in openings), Decimal(0))
         target = Decimal(str(requested_volume))
         mismatch = any(r["symbol"] != symbol or r["side"] != side for r in rows)
-        status = ("mismatch" if mismatch or volume > target else "missing" if not rows
+        status = ("ambiguous_non_opening_deal" if non_opening else
+                  "mismatch" if mismatch or volume > target else "missing" if not openings
                   else "full" if volume == target else "partial")
-        return {"status": status, "volume": float(volume), "deal_ids": [r["deal_id"] for r in rows],
-                "average_price": sum(r["price"] * r["volume"] for r in rows) / float(volume) if volume else None,
-                "auto_resolved": False}
+        return {"status": status, "volume": float(volume),
+                "deal_ids": [r["deal_id"] for r in openings],
+                "ignored_non_opening_ids": [r["deal_id"] for r in rows if r["entry"] != "in"],
+                "position_ids": sorted({r["position_id"] for r in openings}),
+                "average_price": (sum(r["price"] * r["volume"] for r in openings)
+                                  / float(volume) if volume else None),
+                "attribution": "broker_order_id_match_only", "auto_resolved": False}

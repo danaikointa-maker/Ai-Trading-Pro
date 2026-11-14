@@ -59,6 +59,17 @@ CREATE TABLE IF NOT EXISTS position_events (
 CREATE INDEX IF NOT EXISTS idx_position_events_ticket
     ON position_events(broker_id, ticket, created_at);
 
+-- Closed M5 bars observed while a broker position is open. The stored source
+-- distinguishes an analytical live/replay observation from broker tick proof.
+CREATE TABLE IF NOT EXISTS position_candles (
+    broker_id TEXT NOT NULL, ticket TEXT NOT NULL, timeframe TEXT NOT NULL,
+    t INTEGER NOT NULL, symbol TEXT NOT NULL, captured_at REAL NOT NULL,
+    payload TEXT NOT NULL,
+    PRIMARY KEY (broker_id, ticket, timeframe, t)
+);
+CREATE INDEX IF NOT EXISTS idx_position_candles_ticket
+    ON position_candles(broker_id, ticket, t);
+
 CREATE TABLE IF NOT EXISTS trades (
     ticket TEXT PRIMARY KEY, opened_at INTEGER, closed_at INTEGER,
     symbol TEXT, direction TEXT, volume REAL, entry REAL, exit REAL,
@@ -241,6 +252,11 @@ class Database:
                 CREATE TRIGGER IF NOT EXISTS position_events_no_{operation.lower()}
                 BEFORE {operation} ON position_events
                 BEGIN SELECT RAISE(ABORT, 'position evidence is immutable'); END
+            """)
+            self._conn.execute(f"""
+                CREATE TRIGGER IF NOT EXISTS position_candles_no_{operation.lower()}
+                BEFORE {operation} ON position_candles
+                BEGIN SELECT RAISE(ABORT, 'position candle evidence is immutable'); END
             """)
 
     # ------------------------------------------------------------------ core

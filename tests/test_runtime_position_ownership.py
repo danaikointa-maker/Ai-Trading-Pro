@@ -4,6 +4,7 @@ from threading import Event, RLock
 from types import SimpleNamespace
 from unittest.mock import Mock
 import time
+import pandas as pd
 
 import pytest
 
@@ -134,6 +135,68 @@ def test_management_poll_archives_unverified_sl_change_before_updating_cache(man
     runtime._manage_cycle(11)
     assert len(PositionEventLog(db).for_ticket(broker_id=broker.id, ticket="kept",
                                               account_identity=owner)) == 1
+
+
+def test_management_archives_only_recent_closed_m5_bars_for_its_symbol(managed):
+    from packages.persistence.position_candles import PositionCandleLog
+
+    runtime, broker, db = managed
+    frames = pd.DataFrame([{ "t": stamp, "o": 2000.0, "h": 2004.0,
+                             "l": 1998.0, "c": 2001.0, "v": 10.0}
+                           for stamp in (0, 300, 600, 900, 1200)])
+    runtime.contexts["XAUUSD"] = SimpleNamespace(
+        snapshot=SimpleNamespace(symbol="XAUUSD", broker_id="demo",
+                                 indicators=SimpleNamespace(atr_points=300)),
+        frames={"M5": frames})
+    runtime.contexts["EURUSD"] = SimpleNamespace(
+        snapshot=SimpleNamespace(symbol="EURUSD", broker_id="demo",
+                                 indicators=SimpleNamespace(atr_points=300)),
+        frames={"M5": frames})
+    runtime.market = SimpleNamespace(feed_mode="simulated")
+    broker.positions.return_value = [
+        position("tracked"),
+        position("eur-tracked").model_copy(update={"symbol": "EURUSD"}),
+        position("unobserved").model_copy(update={"symbol": "GBPUSD"}),
+    ]
+    runtime._manage_cycle(1200)
+    owner = runtime.gateway._assert_account(broker)
+    archive = PositionCandleLog(db).for_ticket(
+        broker_id="demo", ticket="tracked", account_identity=owner, symbol="XAUUSD")
+    assert [bar["t"] for bar in archive["bars"]] == [300, 600, 900]
+    assert all(bar["feed_mode"] == "simulated" for bar in archive["bars"])
+    assert archive["complete"] is False and archive["broker_tick_verified"] is False
+    assert [bar["t"] for bar in PositionCandleLog(db).for_ticket(
+        broker_id="demo", ticket="eur-tracked", account_identity=owner,
+        symbol="EURUSD")["bars"]] == [300, 600, 900]
+    assert PositionCandleLog(db).for_ticket(
+        broker_id="demo", ticket="unobserved", account_identity=owner,
+        symbol="GBPUSD")["bars"] == []
+    runtime._manage_cycle(1200)
+    assert len(PositionCandleLog(db).for_ticket(
+        broker_id="demo", ticket="tracked", account_identity=owner,
+        symbol="XAUUSD")["bars"]) == 3
+    runtime._log_error.assert_not_called()
+
+
+def test_chart_archive_failure_does_not_block_protective_management(managed, monkeypatch):
+    from packages.persistence.position_candles import PositionCandleLog
+
+    runtime, broker, _ = managed
+    runtime.contexts["XAUUSD"] = SimpleNamespace(
+        snapshot=SimpleNamespace(symbol="XAUUSD", broker_id="demo",
+                                 indicators=SimpleNamespace(atr_points=300)),
+        frames={"M5": pd.DataFrame([{ "t": 600, "o": 2000., "h": 2004.,
+                                      "l": 1998., "c": 2001., "v": 10.}])})
+    runtime.manager.evaluate.return_value = []
+    broker.positions.return_value = [position("tracked")]
+
+    def reject(*args, **kwargs):
+        raise OSError("chart storage unavailable")
+
+    monkeypatch.setattr(PositionCandleLog, "capture", reject)
+    runtime._manage_cycle(1200)
+    runtime.manager.evaluate.assert_called_once()
+    assert runtime._log_error.call_args.args[0] == "post_entry_candle_archive"
 
 
 def test_management_rejects_snapshot_if_broker_observation_cannot_be_saved(managed):
