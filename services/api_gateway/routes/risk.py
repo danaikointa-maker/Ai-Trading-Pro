@@ -67,6 +67,24 @@ def kill_reset(runtime: TradingRuntime = Depends(get_runtime), user=Depends(curr
     return {"ok": True, "kill_switch": False}
 
 
+@router.post("/loss-streak/release")
+def loss_streak_release(runtime: TradingRuntime = Depends(get_runtime),
+                        user=Depends(current_user)):
+    """Lift the hard stop that three consecutive losses put in place.
+
+    The rule is "stopped until a winning trade", and no winning trade can be
+    opened from inside the app while the stop holds — every order path runs
+    through the same gate. This is the operator's way out. It writes a
+    watermark instead of editing the ledger: the losing trades keep their P&L,
+    and the release is audited.
+    """
+    released_at = runtime.risk.release_losing_streak(user["email"])
+    state = runtime.risk_state()
+    return {"ok": True, "released_at": released_at,
+            "consecutive_losses": state.consecutive_losses,
+            "note": "losses closed before this moment no longer count toward the streak"}
+
+
 @router.get("/calculator")
 def calculator(symbol: str = "XAUUSD", points: float = 750, lot: float = 0.01,
                balance: float | None = None, risk_pct: float | None = None,

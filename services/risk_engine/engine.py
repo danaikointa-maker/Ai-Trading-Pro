@@ -178,18 +178,30 @@ class RiskEngine:
         self.db.kv_set("peak_equity", peak)
         drawdown = ((info.equity - peak) / peak * 100) if peak else 0.0
 
+        # Losing streak. Scanned newest-first and stopped at the first winning
+        # trade. A break-even close (P&L exactly 0) is neither: it does not count
+        # as a loss and it does not clear the streak, so moving a stop to entry
+        # can no longer launder three losses into a clean slate.
+        release_at = self.loss_streak_release_at()
         closed = self.db.query(
             "SELECT pnl, closed_at FROM trades ORDER BY closed_at DESC LIMIT 12")
         consecutive = 0
+        last_loss_at = 0.0
         for row in closed:
-            if float(row["pnl"] or 0) < 0:
-                consecutive += 1
-            else:
+            closed_at = float(row["closed_at"] or 0)
+            if closed_at <= release_at:
+                break       # everything older was written off by an operator
+            pnl = float(row["pnl"] or 0)
+            if pnl > 0:
                 break
+            if pnl == 0:
+                continue
+            consecutive += 1
+            if last_loss_at == 0.0:
+                last_loss_at = closed_at
         cooldown_until = None
-        if (closed and float(closed[0]["pnl"] or 0) < 0
-                and consecutive >= self.limits().max_consecutive_losses):
-            cooldown_until = int(closed[0]["closed_at"] + self.limits().cooldown_minutes * 60)
+        if consecutive >= self.limits().max_consecutive_losses and last_loss_at:
+            cooldown_until = int(last_loss_at + self.limits().cooldown_minutes * 60)
 
         open_lots = sum(p.volume for p in positions)
         # Notional exposure must use each symbol's own contract size (100 oz for
@@ -242,6 +254,26 @@ class RiskEngine:
         self.db.kv_set("kill_switch", {"active": True, "reason": reason, "since": now or time.time()})
         self.db.audit("risk-engine", "kill_switch.engage", {"reason": reason})
 
+    # ------------------------------------------------- losing-streak hard stop
+    def loss_streak_release_at(self) -> float:
+        """Losses closed at or before this moment no longer count toward the streak."""
+        try:
+            return float(self.db.kv_get("loss_streak_release_at", 0) or 0)
+        except (TypeError, ValueError):
+            return 0.0
+
+    def release_losing_streak(self, actor: str = "user", now: float | None = None) -> float:
+        """Operator override for the hard stop.
+
+        The streak itself is derived from the trade ledger, so it is not edited —
+        a watermark is written instead and older losses stop counting. The trades
+        keep their P&L, the journal stays truthful, and the release is audited.
+        """
+        ts = float(now or time.time())
+        self.db.kv_set("loss_streak_release_at", ts)
+        self.db.audit(actor, "risk.loss_streak.release", {"released_at": ts})
+        return ts
+
     def reset_kill_switch(self, actor: str = "user") -> None:
         self.db.kv_set("kill_switch", {"active": False, "reason": "", "since": 0})
         self.db.kv_set("peak_equity", None)
@@ -285,23 +317,27 @@ class RiskEngine:
                  f"drawdown {state.drawdown_pct:.2f}% has reached the -{limits.max_drawdown_pct:.2f}% limit")
         gate.add("weekly_loss", state.weekly_pnl_pct > -limits.max_weekly_loss_pct,
                  f"weekly P&L {state.weekly_pnl_pct:.2f}% has reached the -{limits.max_weekly_loss_pct:.2f}% limit")
+        # Owner's rule: three losses in a row stop trading at once, and the stop
+        # does NOT lift itself when the cooldown timer expires. It is added before
+        # the cooldown check on purpose — while both are true this is the binding
+        # one (it outlasts the timer), and the attribution report names the first
+        # failing check.
+        #
+        # Nothing the engine can do releases it: every order path, including the
+        # hand-approval button, runs through this gate, so the winning trade that
+        # would clear the streak cannot be opened from inside the app. The ways
+        # out are a winning trade recorded from the broker terminal, or an
+        # operator calling `release_losing_streak()` (audited).
+        streak_hit = state.consecutive_losses >= limits.max_consecutive_losses
+        gate.add("consecutive_losses", not streak_hit,
+                 f"{state.consecutive_losses} consecutive losses (limit "
+                 f"{limits.max_consecutive_losses}) — trading stays stopped until a winning "
+                 "trade is recorded or an operator releases the streak")
         cooldown_ok = not state.cooldown_until or now >= state.cooldown_until
         gate.add("cooldown", cooldown_ok,
                  f"cooldown after {state.consecutive_losses} consecutive losses until "
                  f"{datetime.fromtimestamp(state.cooldown_until, tz=self.tz).strftime('%H:%M')}"
                  if not cooldown_ok else "no cooldown")
-        # The losing streak is what *starts* the cooldown (risk.yaml: "then cooldown"),
-        # so it may only block for as long as that cooldown runs. As an independent
-        # hard check it deadlocked the system: the streak clears only on a winning
-        # trade, and no trade can be opened while it blocks. Measured on 20k bars —
-        # the engine opened a few trades, hit three losses and then rejected every
-        # later signal on this check, long after the 20-minute cooldown had expired.
-        # Past the cooldown it stays visible as a warning instead.
-        streak_hit = state.consecutive_losses >= limits.max_consecutive_losses
-        gate.add("consecutive_losses", not streak_hit,
-                 f"{state.consecutive_losses} consecutive losses (limit {limits.max_consecutive_losses})"
-                 + ("" if cooldown_ok else " — cooldown still running"),
-                 blocker=not cooldown_ok)
         gate.add("exposure", state.open_lots + requested_lot <= limits.max_exposure_lots + 1e-9,
                  f"exposure {state.open_lots + requested_lot:.2f} lots exceeds {limits.max_exposure_lots:.2f}")
         gate.add("trades_per_week", state.trades_this_week < limits.max_weekly_trades,

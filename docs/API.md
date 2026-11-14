@@ -120,6 +120,7 @@ CORS เป็น **allowlist**: ค่าเริ่มต้นไม่ใ�
 | GET | `/api/system/audit?limit=` | audit trail (ใครทำอะไร) |
 | GET | `/api/system/alerts?limit=` | alert ล่าสุด |
 | GET | `/api/system/errors` | error buffer ของ runtime |
+| POST | `/api/risk/loss-streak/release` | ปลดการหยุดเทรดที่เกิดจากขาดทุนติดกันถึงเพดาน → `{ok, released_at, consecutive_losses, note}` · เขียน watermark ไม่ได้แก้ P&L ในตาราง `trades` · บันทึก audit `risk.loss_streak.release` · ต้องมีสิทธิ์เทรด |
 | GET | `/api/system/attribution?symbol=` | **ทำไมถึงไม่เทรด**: นับเหตุผลที่บล็อกการตัดสินใจสด ตั้งแต่ `since` → `{since, window_seconds, symbols, headline, overall, per_symbol}` · `overall.signal` = `{decisions, actionable, blocked, primary[], fired[]}` และ `overall.gate` = `{evaluated, allowed, blocked, primary[], fired[]}` · แต่ละแถวคือ `{code, label, count, pct, samples}` · `primary` = เหตุผลผูกมัดที่สุดต่อหนึ่งการตัดสินใจ (ผลรวม = `blocked`), `fired` = ทุกกฎที่คัดค้าน (รวมกันได้เกิน) · รหัสที่ยังไม่ลงทะเบียนจะเป็น `unregistered:*` + `warning` |
 | POST | `/api/system/attribution/reset` | เริ่มหน้าต่างนับใหม่ (เช่นหลังแก้ threshold) — ต้องมี role `trader` ขึ้นไป |
 | GET | `/api/users` · `POST /api/users` · `PATCH /api/users/{email}` · `DELETE /api/users/{email}` | จัดการผู้ใช้ (**admin เท่านั้น**) |

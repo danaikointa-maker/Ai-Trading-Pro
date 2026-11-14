@@ -221,12 +221,17 @@ class Backtester:
                     sim["balance"] = round(sim["balance"] + closed.pnl, 2)
                     balance = sim["balance"]
                     sim["day_pnl"] = round(balance - sim["day_start_equity"], 2)
-                    if closed.pnl <= 0:
+                    # Same arithmetic as RiskEngine.state(): a win clears the streak,
+                    # a loss extends it, and a break-even close does neither. The
+                    # backtest used to count a flat trade as a loss while the live
+                    # engine counted it as a win — the two answered differently on
+                    # the one event that decides whether trading halts.
+                    if closed.pnl > 0:
+                        sim["consecutive_losses"] = 0
+                    elif closed.pnl < 0:
                         sim["consecutive_losses"] += 1
                         if sim["consecutive_losses"] >= self.risk.limits().max_consecutive_losses:
                             sim["cooldown_until"] = bar_time + self.risk.limits().cooldown_minutes * 60
-                    else:
-                        sim["consecutive_losses"] = 0
                     pos = None
 
             equity = balance + (self._floating(pos, float(bar["c"]), spec) if pos else 0.0)
@@ -407,6 +412,7 @@ class Backtester:
                 f"{actionable} were actionable, the risk gate blocked {gate_blocked}, "
                 f"{skipped} were skipped on fill drift, and {len(trades)} trades opened.",
                 tally.note(),
+                self._hard_stop_note(tally, len(trades)),
                 data_note or "Bar data: source not recorded — treat these numbers as unverified.",
                 *gap_notes,
             ],
@@ -538,6 +544,25 @@ class Backtester:
             trades_this_week=sim["trades_week"], cooldown_until=sim["cooldown_until"] or None,
             kill_switch_active=sim["kill"], kill_switch_reason=sim["kill_reason"],
         )
+
+    @staticmethod
+    def _hard_stop_note(tally: BlockerTally, trades: int) -> str:
+        """Say it loudly when the run ended on the losing-streak stop.
+
+        Three losses in a row halt trading and nothing in a backtest can lift it
+        (the release is an operator action). Every bar after that point measures
+        the stop, not the strategy, and the sample is whatever it had reached —
+        often three trades. Without this line the metrics look like a verdict.
+        """
+        blocked = tally.gate_primary.get("consecutive_losses", 0)
+        if not blocked:
+            return ("The losing-streak stop never fired: no three consecutive losses "
+                    "occurred in this sample.")
+        return (f"RUN ENDED ON THE LOSING-STREAK STOP: after three consecutive losses the risk "
+                f"gate rejected the next {blocked} signal(s) and nothing lifts that inside a "
+                f"backtest, so trading stopped for the rest of the sample. These {trades} trade(s) "
+                f"are where the account stood at the halt — read them as 'how fast it hit the "
+                f"stop', not as the strategy's performance.")
 
     @staticmethod
     def _forecast_note(edge: Any, model_decisions: int, proxy_decisions: int) -> str:
