@@ -41,6 +41,15 @@ CREATE TABLE IF NOT EXISTS orders (
     state TEXT, broker_id TEXT, symbol TEXT, payload TEXT
 );
 
+-- Written in the SAME transaction as an order's pending idempotency claim.
+-- Never updated or replaced: later fills/plan revisions must not rewrite intent.
+CREATE TABLE IF NOT EXISTS pre_order_snapshots (
+    order_id TEXT PRIMARY KEY, broker_id TEXT NOT NULL, signal_id TEXT,
+    symbol TEXT NOT NULL, captured_at REAL NOT NULL, payload TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_pre_order_signal
+    ON pre_order_snapshots(broker_id, signal_id);
+
 CREATE TABLE IF NOT EXISTS trades (
     ticket TEXT PRIMARY KEY, opened_at INTEGER, closed_at INTEGER,
     symbol TEXT, direction TEXT, volume REAL, entry REAL, exit REAL,
@@ -205,6 +214,19 @@ class Database:
                         # another worker added it between the PRAGMA and the ALTER
                         if "duplicate column" not in str(exc).lower():
                             raise
+        # Enforce append-only original evidence even if a future code path
+        # accidentally tries UPDATE/REPLACE/DELETE. Intent corrections must be
+        # separate, timestamped records, not silent historical rewrites.
+        self._conn.execute("""
+            CREATE TRIGGER IF NOT EXISTS pre_order_snapshot_no_update
+            BEFORE UPDATE ON pre_order_snapshots
+            BEGIN SELECT RAISE(ABORT, 'pre-order evidence is immutable'); END
+        """)
+        self._conn.execute("""
+            CREATE TRIGGER IF NOT EXISTS pre_order_snapshot_no_delete
+            BEFORE DELETE ON pre_order_snapshots
+            BEGIN SELECT RAISE(ABORT, 'pre-order evidence is immutable'); END
+        """)
 
     # ------------------------------------------------------------------ core
     @contextmanager

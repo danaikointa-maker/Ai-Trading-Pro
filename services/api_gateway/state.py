@@ -244,6 +244,9 @@ class TradingRuntime:
         self.signals: dict[str, Signal] = {}
         self.signal_log: deque[Signal] = deque(maxlen=400)
         self.plans: dict[str, Signal] = {}
+        # Decision-time analysis is pinned by signal ID. Later symbol scans
+        # must never substitute new zones for the original entry evidence.
+        self.plan_analyses: dict[str, dict[str, Any]] = {}
         self.gates: dict[str, dict[str, Any]] = {}
         # Why the live engine is not trading, counted per symbol by reason code.
         # The dashboard could already show the *last* decision; nobody could see
@@ -638,6 +641,10 @@ class TradingRuntime:
                 self.forecasts[symbol] = forecast
             self.signals[symbol] = signal
             self.plans[signal.id] = signal
+            if signal.action in (SignalAction.buy, SignalAction.sell) and signal.plan:
+                self.plan_analyses[signal.id] = ctx.snapshot.model_dump(mode="json")
+                while len(self.plan_analyses) > 256:
+                    self.plan_analyses.pop(next(iter(self.plan_analyses)))
             self.gates[symbol] = {
                 "allow": gate.allow, "blockers": gate.blockers, "warnings": gate.warnings,
                 "checks": gate.checks, "t": now,
@@ -900,6 +907,9 @@ class TradingRuntime:
         )
         with self.lock:
             self.plans[sig_id] = signal
+            self.plan_analyses[sig_id] = ctx.snapshot.model_dump(mode="json")
+            while len(self.plan_analyses) > 256:
+                self.plan_analyses.pop(next(iter(self.plan_analyses)))
             self.signal_log.append(signal)
         return signal, ""
 
@@ -969,8 +979,25 @@ class TradingRuntime:
                 mode=self.mode,
                 broker_id=self.adapter.id,
             )
+            with self.lock:
+                original_analysis = self.plan_analyses.get(signal.id)
+            original_plan_snapshot = {
+                "signal": signal.model_dump(mode="json"),
+                "analysis": original_analysis,
+                "analysis_provenance": "decision_time" if original_analysis is not None else "unavailable",
+                "risk_decision": {
+                    "evaluated_at": int(now),
+                    "allow": gate.allow,
+                    "checks": getattr(gate, "checks", []),
+                    "warnings": getattr(gate, "warnings", []),
+                    "risk_state": (risk_state.model_dump(mode="json")
+                                   if callable(getattr(risk_state, "model_dump", None)) else None),
+                },
+            }
             with self._position_mutation():
-                result: OrderResult = self.gateway.submit(self.adapter, request, actor=actor)
+                result: OrderResult = self.gateway.submit(
+                    self.adapter, request, actor=actor,
+                    original_plan_snapshot=original_plan_snapshot)
         except BrokerError as exc:
             return {"ok": False, "error": str(exc)}
         if result.status == OrderState.filled:

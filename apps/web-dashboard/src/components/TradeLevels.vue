@@ -5,17 +5,32 @@
         <h3 class="text-xs font-semibold text-slate-200">เส้นราคาแยกตามไม้ · {{ trade.ticket }}</h3>
         <p class="text-[10px] text-muted">แผนผังระดับราคาที่บันทึกไว้ ไม่ใช่กราฟแท่งเทียนย้อนหลัง</p>
       </div>
-      <div class="flex gap-1.5">
+      <div class="flex flex-wrap gap-1.5">
         <button type="button" class="btn py-1 text-[10px]" :aria-pressed="showOriginal" @click="showOriginal = !showOriginal">
           {{ showOriginal ? '✓' : '○' }} แผนเดิม
         </button>
         <button type="button" class="btn py-1 text-[10px]" :aria-pressed="showExecuted" @click="showExecuted = !showExecuted">
           {{ showExecuted ? '✓' : '○' }} ราคาจริง
         </button>
+        <button type="button" class="btn py-1 text-[10px]" :disabled="!analysis" :aria-pressed="showZones" @click="showZones = !showZones">
+          {{ showZones ? '✓' : '○' }} โซน S/R
+        </button>
+        <button type="button" class="btn py-1 text-[10px]" :disabled="!analysis" :aria-pressed="showFlip" @click="showFlip = !showFlip">
+          {{ showFlip ? '✓' : '○' }} SR Flip
+        </button>
+        <button type="button" class="btn py-1 text-[10px]" :disabled="!analysis" :aria-pressed="showFib" @click="showFib = !showFib">
+          {{ showFib ? '✓' : '○' }} Fibonacci
+        </button>
+        <button type="button" class="btn py-1 text-[10px]" :disabled="!analysis" :aria-pressed="showStructure" @click="showStructure = !showStructure">
+          {{ showStructure ? '✓' : '○' }} BOS/CHoCH
+        </button>
       </div>
     </div>
     <p v-if="!snapshot?.plan" class="mt-2 text-[10px] text-amber-300">
       ไม่พบบันทึกแผนตอนเข้าไม้ จึงไม่สร้างเส้น SL/TP ย้อนหลังจากราคาปัจจุบัน
+    </p>
+    <p v-if="!analysis" class="mt-2 text-[10px] text-amber-300">
+      ไม่มีหลักฐานโซนในจังหวะตัดสินใจ จึงไม่แสดงแนวรับ–ต้าน / Flip / Fib จากข้อมูลปัจจุบันแทน
     </p>
     <div v-if="levels.length" class="mt-3">
       <svg class="h-[260px] w-full" viewBox="0 0 760 260" preserveAspectRatio="none" role="img"
@@ -44,9 +59,14 @@ import { computed, ref } from 'vue'
 const props = defineProps({
   trade: { type: Object, required: true },
   snapshot: { type: Object, default: null },
+  analysis: { type: Object, default: null },
 })
 const showOriginal = ref(true)
 const showExecuted = ref(true)
+const showZones = ref(true)
+const showFlip = ref(true)
+const showFib = ref(true)
+const showStructure = ref(false)
 
 function numeric(value) {
   return value !== null && value !== undefined && value !== '' && Number.isFinite(Number(value))
@@ -70,6 +90,30 @@ const levels = computed(() => {
   if (showExecuted.value) {
     add('actual-entry', 'Fill entry', props.trade.entry, '#60a5fa', true)
     add('actual-exit', 'Closed exit', props.trade.exit, '#a78bfa', true)
+  }
+  if (props.analysis && showZones.value) {
+    const zones = props.analysis.zones || []
+    const used = new Set(props.snapshot?.zones_used || [])
+    const prioritized = [...zones].sort((a, b) => Number(used.has(b.id)) - Number(used.has(a.id)))
+    prioritized.slice(0, 4).forEach((zone) => {
+      const color = zone.kind === 'support' ? '#34d399' : '#f87171'
+      add(`zone-${zone.id}-low`, `${zone.kind} low`, zone.low, color)
+      add(`zone-${zone.id}-high`, `${zone.kind} high`, zone.high, color)
+    })
+  }
+  if (props.analysis && showFlip.value) {
+    ;(props.analysis.sr_flips || []).slice(0, 4).forEach((event, index) =>
+      add(`flip-${index}`, event.direction === 'resistance_to_support' ? 'Flip R→S' : 'Flip S→R',
+        event.level, '#22d3ee'))
+  }
+  if (props.analysis && showFib.value && props.analysis.fibonacci_band) {
+    add('fib-50', 'Fib 50%', props.analysis.fibonacci_band.level_50, '#fbbf24')
+    add('fib-618', 'Fib 61.8%', props.analysis.fibonacci_band.level_618, '#f59e0b')
+  }
+  if (props.analysis && showStructure.value) {
+    ;(props.analysis.structure || []).filter((event) => event.confirmed && event.kind !== 'NONE')
+      .slice(-3).forEach((event, index) =>
+        add(`structure-${index}`, event.kind, event.level, '#c4b5fd'))
   }
   return result
 })

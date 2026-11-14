@@ -63,8 +63,16 @@ Extend the existing FastAPI / Vue 3 / Lightweight Charts / MT5-adapter architect
 - Added closed-bar Stochastic (14,3,3) M5/M15/H1 values to AnalysisSnapshot. Unavailable or stale frames are marked explicitly. The display says this is **observation only**, not a new execution gate.
 - Unit tests cover lifecycle precedence, expiry, existing payload compatibility, transition deduplication, indicator lookahead and stale/missing timeframes.
 
+### Follow-up: immutable pre-order evidence (P5 partial)
+- `pre_order_snapshots` is appended **in the same SQLite transaction** as the pending idempotency order claim, before any broker send. Snapshot failures roll back the claim and block sending; duplicate-key replays do not overwrite original evidence.
+- For engine-created signals, the record freezes the original signal, Entry/SL/TP, broker/account/workspace identity, request details, the immediate pre-send risk-gate verdict/checks (and risk state when serializable), and a signal-ID-pinned analysis: support/resistance zones with original bounds, confirmed flips, Fibonacci anchors and structure. The per-signal analysis cache is bounded; if a restarted process cannot recover that context, it honestly marks analysis `unavailable` instead of borrowing new zones.
+- Direct gateway orders that have no engine plan still record an immutable `request_only` snapshot (broker, request, SL/TP) with no fabricated analysis.
+- SQLite update/delete guards protect the original records; later adjustments will require a separate append-only revision stream.
+- Historical trade review resolves evidence by broker ticket, falling back to an **unambiguous** signal ID, and checks saved broker/account identity. The original evidence takes precedence over later mutable signal rows. The trade details diagram has independent client-only toggles for archived plan levels, fill/exit, S/R zone boundaries, flips, Fibonacci and BOS/CHoCH.
+- Tests cover before-send durability, restart/replay invariance, account/plan mismatch veto, failed-insert atomic rollback, schema guards, API historical plan priority and ordinary legacy records. No LIVE or full-auto setting is changed.
+
 ### What is still missing / not production-ready
-- Preserve a complete, immutable per-order **pre-submission** snapshot (all zone bounds, structure, flip, Fibonacci, original plan and risk state), with append-only revisions, order/position/deal mapping and partial-fill reconciliation.
+- The new immutable pre-send snapshots hold decision-time zone/plan evidence and a copy of the current risk gate; they do **not yet** include fully versioned/attested risk-rule configuration, account-to-deal reconciliation, append-only post-entry revisions or partial-fill mapping. Order identity is durable; ticket-to-order resolution uses the recorded broker result when available.
 - Per-order overlays on a **historical candlestick** chart; the current closed-trade level diagram is a transparent interim visualization.
 - Integrate and validate Stochastic **as an optional veto** only after out-of-sample evidence; lifecycle alert persistence across restart, up-to-three proposed entries, and integrated risk validation of those proposals.
 - Full replay/walk-forward tests, MT5 demo reconciliation/disconnect testing, security and deployment gates. Auto-trade permissions and LIVE settings are **untouched**.

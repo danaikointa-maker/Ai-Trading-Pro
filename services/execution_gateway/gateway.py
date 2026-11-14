@@ -124,8 +124,37 @@ class ExecutionGateway:
             status=OrderState.pending, message="order unresolved; not resent — manual reconciliation required",
         )
 
+    @staticmethod
+    def _validate_original_plan(snapshot: dict[str, Any] | None, request: OrderRequest) -> None:
+        """Reject misattributed evidence before claiming an order, never infer old zones."""
+        if snapshot is None:
+            return
+        if not isinstance(snapshot, dict) or not isinstance(snapshot.get("signal"), dict):
+            raise BrokerError("original plan snapshot is invalid")
+        signal = snapshot["signal"]
+        plan = signal.get("plan")
+        expected_action = "BUY" if request.side.value == "buy" else "SELL"
+        expected_direction = "up" if request.side.value == "buy" else "down"
+        if (not request.signal_id or signal.get("id") != request.signal_id
+                or signal.get("broker_id") != request.broker_id
+                or signal.get("symbol") != request.symbol
+                or signal.get("action") != expected_action
+                or not isinstance(plan, dict)
+                or plan.get("direction") != expected_direction
+                or plan.get("lot") != request.volume
+                or plan.get("sl") != request.sl
+                or plan.get("tp3") != request.tp):
+            raise BrokerError("original plan does not match order intent")
+        analysis = snapshot.get("analysis")
+        if analysis is not None and (not isinstance(analysis, dict)
+                                    or analysis.get("symbol") != request.symbol
+                                    or analysis.get("broker_id") != request.broker_id
+                                    or analysis.get("timeframe") != signal.get("timeframe")):
+            raise BrokerError("original analysis does not match the plan")
+
     # ---------------------------------------------------------------- submit
-    def submit(self, adapter: BrokerAdapter, request: OrderRequest, actor: str = "system") -> OrderResult:
+    def submit(self, adapter: BrokerAdapter, request: OrderRequest, actor: str = "system",
+               original_plan_snapshot: dict[str, Any] | None = None) -> OrderResult:
         if request.broker_id is not None and request.broker_id != adapter.id:
             raise BrokerError("broker identity mismatch; idempotency intent must not be rewritten")
         identity = self._assert_account(adapter)
@@ -135,6 +164,24 @@ class ExecutionGateway:
         request = request.model_copy(update={"broker_id": adapter.id})
         key = self.make_key(request)
         request = request.model_copy(update={"idempotency_key": key})
+        self._validate_original_plan(original_plan_snapshot, request)
+
+        # Serialize the exact intent before broker I/O. A missing strategy plan
+        # is labelled request-only, never fabricated from later market data.
+        snapshot_payload = {
+            "schema_version": 1, "account_identity": identity,
+            "request": request.model_dump(mode="json"),
+            "evidence_level": "original_plan" if original_plan_snapshot is not None else "request_only",
+            "original_signal": original_plan_snapshot["signal"] if original_plan_snapshot else None,
+            "analysis": original_plan_snapshot.get("analysis") if original_plan_snapshot else None,
+            "risk_decision": original_plan_snapshot.get("risk_decision") if original_plan_snapshot else None,
+            "analysis_provenance": (original_plan_snapshot.get("analysis_provenance", "unavailable")
+                                    if original_plan_snapshot else "unavailable"),
+        }
+        try:
+            serialized_snapshot = json.dumps(snapshot_payload, sort_keys=True, allow_nan=False)
+        except (TypeError, ValueError) as exc:
+            raise BrokerError("original plan evidence is not serializable") from exc
 
         existing = self._existing(key)
         if existing:
@@ -159,6 +206,15 @@ class ExecutionGateway:
                     (order_id, time.time(), key, OrderState.pending.value, adapter.id, request.symbol,
                      json.dumps({"request": request.model_dump(), "actor": actor,
                                  "account_identity": identity}, default=str)),
+                )
+                # An insert failure rolls back BOTH the order claim and the
+                # evidence. A replay never rewrites the original snapshot.
+                cur.execute(
+                    "INSERT INTO pre_order_snapshots"
+                    "(order_id, broker_id, signal_id, symbol, captured_at, payload) "
+                    "VALUES(?,?,?,?,?,?)",
+                    (order_id, adapter.id, request.signal_id, request.symbol,
+                     time.time(), serialized_snapshot),
                 )
         if already_claimed:
             if existing is None:
