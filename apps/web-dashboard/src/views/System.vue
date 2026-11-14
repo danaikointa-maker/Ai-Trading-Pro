@@ -116,17 +116,35 @@
         <div class="panel-head">
           <div class="panel-title">ทำไมถึงไม่เทรด (Decision attribution)</div>
           <span class="chip" :class="attributionTone">{{ attributionChip }}</span>
-          <button class="btn ml-auto py-1 text-[10.5px]" :disabled="resetting" @click="resetAttribution">
-            เริ่มนับใหม่
-          </button>
+          <div class="ml-auto flex items-center gap-1">
+            <button
+              v-for="w in WINDOWS" :key="w.seconds"
+              class="rounded px-1.5 py-0.5 text-[10px] transition"
+              :class="w.seconds === windowSeconds
+                ? 'bg-accent/20 font-semibold text-accent'
+                : 'text-muted hover:text-slate-200'"
+              @click="setWindow(w.seconds)"
+            >{{ w.label }}</button>
+            <button class="btn py-1 text-[10.5px]" :disabled="resetting" @click="resetAttribution">
+              เริ่มนับใหม่
+            </button>
+          </div>
         </div>
         <div class="px-4 py-3">
           <p class="text-[11px] text-slate-200">{{ attribution?.headline || 'ยังไม่มีการตัดสินใจในหน้าต่างนี้' }}</p>
           <p class="mt-1 text-[10px] text-muted">
-            นับจากการตัดสินใจสดตั้งแต่ {{ datetime(attribution?.since) }}
-            ({{ fmt((attribution?.window_seconds || 0) / 60, 0) }} นาที) ·
-            {{ (attribution?.symbols || []).join(', ') || '—' }}
+            <template v-if="attribution?.basis === 'rolling'">
+              {{ fmt((attribution?.window_seconds || 0) / 60, 0) }} นาทีล่าสุด
+              (ตั้งแต่ {{ datetime(attribution?.window_since) }}) ·
+              ทั้งเซสชัน {{ sessionDecisions }} การตัดสินใจ ตั้งแต่ {{ datetime(attribution?.since) }}
+            </template>
+            <template v-else>
+              ทั้งเซสชันตั้งแต่ {{ datetime(attribution?.since) }}
+              ({{ fmt((attribution?.window_seconds || 0) / 60, 0) }} นาที)
+            </template>
+            · {{ (attribution?.symbols || []).join(', ') || '—' }}
           </p>
+          <p v-if="idleNote" class="mt-1 text-[10px] text-amber-300">{{ idleNote }}</p>
 
           <div class="mt-3 grid gap-3 md:grid-cols-2">
             <div>
@@ -477,6 +495,25 @@ const notifyTone = computed(() => {
 })
 const attribution = ref(null)
 const resetting = ref(false)
+// Cumulative-since-boot was the only view on offer, which answers "what has
+// stopped this engine on average since Tuesday" — never "why is it quiet now".
+const WINDOWS = [
+  { label: '15น', seconds: 900 },
+  { label: '1ชม', seconds: 3600 },
+  { label: '6ชม', seconds: 21600 },
+  { label: 'ทั้งหมด', seconds: 0 },
+]
+const windowSeconds = ref(3600)
+const sessionDecisions = computed(() => attribution.value?.session?.signal?.decisions ?? 0)
+// An empty table because nothing was decided is a different fact from an empty
+// table because everything passed; the panel must never let them look alike.
+const idleNote = computed(() => {
+  const a = attribution.value
+  if (!a || a.basis !== 'rolling' || a.overall?.signal?.decisions) return ''
+  if (!a.idle_seconds) return ''
+  return `เงียบ: ไม่มีการตัดสินใจในหน้าต่างนี้ ล่าสุดเมื่อ ${fmt(a.idle_seconds / 60, 0)} นาทีก่อน`
+    + ` — ลองขยายหน้าต่างเพื่อดูว่าติดอะไรอยู่`
+})
 const EMPTY_SIGNAL = { decisions: 0, actionable: 0, blocked: 0, primary: [], fired: [] }
 const EMPTY_GATE = { evaluated: 0, allowed: 0, blocked: 0, primary: [], fired: [] }
 const signalPart = computed(() => attribution.value?.overall?.signal || EMPTY_SIGNAL)
@@ -548,11 +585,27 @@ async function removeUser(user) {
   }
 }
 
+async function setWindow(seconds) {
+  windowSeconds.value = seconds
+  await loadAttribution()
+}
+
+async function loadAttribution() {
+  try {
+    attribution.value = await api.get(`/api/system/attribution?window=${windowSeconds.value}`)
+  } catch {
+    attribution.value = null  // older server without attribution: panel stays empty
+  }
+}
+
 async function resetAttribution() {
   if (resetting.value) return
   resetting.value = true
   try {
-    attribution.value = await api.post('/api/system/attribution/reset')
+    await api.post('/api/system/attribution/reset')
+    // Re-read rather than trusting the POST body: it answers for the default
+    // window and the operator may be looking at a different one.
+    await loadAttribution()
     toast('เริ่มนับเหตุผลใหม่แล้ว', 'success')
   } catch (err) {
     toast(err.message, 'error')
@@ -581,11 +634,7 @@ async function load() {
   } catch {
     bridge.value = null   // older server without the bridge: the card simply hides
   }
-  try {
-    attribution.value = await api.get('/api/system/attribution')
-  } catch {
-    attribution.value = null  // older server without attribution: panel stays empty
-  }
+  await loadAttribution()
   await loadUsers()
 }
 

@@ -85,9 +85,16 @@ def audit(limit: int = Query(100, ge=1, le=500), runtime: TradingRuntime = Depen
 
 @router.get("/attribution")
 def attribution(symbol: str | None = Query(None, description="limit to one symbol"),
+                window: float = Query(3600, ge=0, le=86_400,
+                                      description="rolling window in seconds; 0 = whole session"),
                 runtime: TradingRuntime = Depends(get_runtime), user=Depends(current_user)):
-    """Reason codes for the decisions the live engine did not trade."""
-    return runtime.attribution_summary(symbol)
+    """Reason codes for the decisions the live engine did not trade.
+
+    Defaults to the last hour. The session totals ride along in `session`, so a
+    narrow window never hides history — it only stops a condition that cleared
+    yesterday from still owning the table today.
+    """
+    return runtime.attribution_summary(symbol, window_seconds=window)
 
 
 @router.post("/attribution/reset")

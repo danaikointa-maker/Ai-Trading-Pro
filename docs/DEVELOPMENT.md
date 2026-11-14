@@ -99,7 +99,7 @@ curl -s -H "Authorization: Bearer $TOK" localhost:8000/api/system/health | pytho
 | `tests/test_ws_quota.py` (โควตา WebSocket) | 32 | ~5 วินาที |
 | `tests/test_redis_real.py` (redis จริง, skip ถ้าไม่มี binary) | 20 | ~4 วินาที |
 | `tests/test_notify_outbox.py` (คิวถาวร + ลายเซ็น webhook) | 27 | ~5 วินาที |
-| `tests/test_attribution.py` (เหตุผลที่ไม่เทรด + deadlock สตรีคขาดทุน) | 16 | ~4 วินาที |
+| `tests/test_attribution.py` (เหตุผลที่ไม่เทรด + กติกาแพ้ 3 ไม้ + หน้าต่าง rolling) | 34 | ~5 วินาที |
 
 (6 ที่ skip คือเทสต์สคริปต์ที่ต้องมี `bash`/`.venv` ซึ่งไม่มีในบางสภาพแวดล้อม)
 
@@ -365,8 +365,12 @@ slot เป็น **lease ที่หมดอายุ** ไม่ใช่ต
   `services/strategy_engine/attribution.py` นับเหตุผลด้วยรหัสคงที่ (ไม่ใช่ข้อความ)
   โผล่ที่ `report.diagnostics.attribution`, `GET /api/system/attribution`
   และแผงในหน้า System · เจอบั๊ก `consecutive_losses` ล็อกระบบถาวรทันทีที่เปิดดู
-  (LIMITATIONS §5) · ที่ยังเหลือ: หน้าต่างนับของระบบสดเป็นแบบสะสม ยังไม่ใช่ rolling รายชั่วโมง
-  และยังไม่ได้ผูกเหตุผลกับผลลัพธ์ย้อนหลัง ("ถ้าผ่อนกฎนี้จะได้/เสียเท่าไร")
+  (LIMITATIONS §5)
+  - ~~หน้าต่างนับของระบบสดเป็นแบบสะสม~~ ✅ **เสร็จรอบ 31** — `RollingAttribution`
+    เก็บเป็นถัง 5 นาที ย้อนหลัง 24 ชั่วโมง ขอช่วงไหนก็ได้ด้วย `?window=` (ค่าเริ่มต้น 1 ชม.)
+    พร้อมปุ่มเลือก 15น/1ชม/6ชม/ทั้งหมดในหน้า System · ยอดสะสมทั้งเซสชันยังอยู่ที่ `session`
+    จึงไม่ต้องกด reset เพื่อดูปัจจุบันอีกต่อไป
+  - ที่ยังเหลือ: ยังไม่ได้ผูกเหตุผลกับผลลัพธ์ย้อนหลัง ("ถ้าผ่อนกฎนี้จะได้/เสียเท่าไร")
 - **ยังไม่ได้ปรับ threshold ใด ๆ ทั้งที่รู้แล้วว่าตัวไหนบีบ** — 86% ของการตัดสินใจตายที่
   `entry_conditions` แต่การผ่อนกฎบนฟีดจำลองจะได้คำตอบที่เชื่อไม่ได้ (§9.2 ต้องมาก่อน)
 - PWA: screenshots/splash สำหรับ install prompt ที่สวยขึ้น, Web Push (ยังไม่มีโดยตั้งใจ)

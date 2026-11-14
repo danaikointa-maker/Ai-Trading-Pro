@@ -57,7 +57,12 @@ from services.risk_engine.engine import RiskEngine, default_risk_state
 from services.risk_engine.manager import PositionAction, PositionManager
 from services.risk_engine.planner import PlanInputs, TradePlanner
 from services.strategy_engine.analysis import AnalysisContext, AnalysisService
-from services.strategy_engine.attribution import BlockerTally, merge
+from services.strategy_engine.attribution import BlockerTally, RollingAttribution, merge
+
+# One hour of live decisions is the default view: long enough that a four-second
+# decision loop fills it with hundreds of samples, short enough that a condition
+# which started this morning cannot hide inside it.
+DEFAULT_ATTRIBUTION_WINDOW = 3600.0
 from services.strategy_engine.engine import StrategyEngine
 from services.strategy_engine.readiness import assess_readiness
 
@@ -250,8 +255,11 @@ class TradingRuntime:
         self.gates: dict[str, dict[str, Any]] = {}
         # Why the live engine is not trading, counted per symbol by reason code.
         # The dashboard could already show the *last* decision; nobody could see
-        # that, say, 95% of today's decisions died on one condition.
-        self.attribution: dict[str, BlockerTally] = {}
+        # that, say, 95% of today's decisions died on one condition. Kept in
+        # time buckets as well as a session total, because "why is it not
+        # trading now" and "what has been stopping it all week" are different
+        # questions and a single cumulative counter can only answer the second.
+        self.attribution: dict[str, RollingAttribution] = {}
         self.attribution_since = time.time()
         self.positions_cache: list[Position] = []
         self._positions_identity: dict[str, str] | None = None
@@ -645,14 +653,14 @@ class TradingRuntime:
         with self.lock:
             tally = self.attribution.get(symbol)
             if tally is None:
-                tally = self.attribution[symbol] = BlockerTally()
-            tally.add_signal(tradable, signal.blocker_codes, signal.blockers)
+                tally = self.attribution[symbol] = RollingAttribution()
+            tally.add_signal(tradable, signal.blocker_codes, signal.blockers, now=now)
             # The gate is consulted on every live decision, but counting it on
             # decisions that had nothing to trade anyway would bury the cases
             # that matter. Only signals that asked to trade are counted, which
             # is also the basis the backtest uses — so the two are comparable.
             if tradable:
-                tally.add_gate(gate.allow, gate.checks)
+                tally.add_gate(gate.allow, gate.checks, now=now)
 
         if not gate.allow:
             signal.blockers = list(dict.fromkeys(signal.blockers + gate.blockers))
@@ -696,14 +704,22 @@ class TradingRuntime:
         except Exception as exc:  # alerts must never alter trading decisions
             self._log_error("readiness_alert", exc)
 
-    def attribution_summary(self, symbol: str | None = None) -> dict[str, Any]:
-        """Why the live engine has or has not been trading since `since`.
+    def attribution_summary(self, symbol: str | None = None,
+                            window_seconds: float = DEFAULT_ATTRIBUTION_WINDOW) -> dict[str, Any]:
+        """Why the live engine has or has not been trading, over a window.
 
         Counted on live decisions only. A backtest answers the same question for
         a historical sample; this answers it for the session that is running, so
         an operator watching a quiet dashboard can tell "nothing qualifies" from
         "one gate has been rejecting everything for an hour".
+
+        `window_seconds` is the rolling span the headline numbers describe, and
+        0 means the whole session. Both views ship in every response: the
+        session totals under `session` are never pruned, so narrowing the window
+        hides nothing — it only stops the last six hours from being averaged
+        into the last six days.
         """
+        now = time.time()
         with self.lock:
             tallies = dict(self.attribution)
             since = self.attribution_since
@@ -711,15 +727,64 @@ class TradingRuntime:
             chosen = {symbol: tallies[symbol]} if symbol in tallies else {}
         else:
             chosen = tallies
-        overall = merge(chosen.values()) if chosen else BlockerTally()
+        requested = max(0.0, float(window_seconds or 0.0))
+        rolling = requested > 0
+
+        parts: dict[str, BlockerTally] = {}
+        starts: list[float] = []
+        last_seen: list[float] = []
+        for sym, roll in sorted(chosen.items()):
+            if rolling:
+                tally, covered_from = roll.window(requested, now=now)
+            else:
+                tally, covered_from = roll.total, (roll.first_at if roll.first_at else since)
+            parts[sym] = tally
+            starts.append(covered_from)
+            if roll.last_at:
+                last_seen.append(roll.last_at)
+
+        overall = merge(parts.values()) if parts else BlockerTally()
+        session = merge([r.total for r in chosen.values()]) if chosen else BlockerTally()
+        # The session view always spans the session; only a rolling view can be
+        # shorter than asked for, and only because the engine is younger.
+        window_since = (min(starts) if starts else now) if rolling else since
+        covered = round(max(0.0, now - window_since), 1)
+        last_at = max(last_seen) if last_seen else None
+        bucket = next(iter(chosen.values())).bucket_seconds if chosen else 300
+
         return {
+            "basis": "rolling" if rolling else "session",
+            "requested_window_seconds": requested if rolling else None,
+            "window_since": window_since,
+            # What the numbers actually cover, which is never more than the
+            # engine has been awake — a window is not evidence of its own span.
+            "window_seconds": covered,
+            "bucket_seconds": bucket,
             "since": since,
-            "window_seconds": round(max(0.0, time.time() - since), 1),
+            "session_seconds": round(max(0.0, now - since), 1),
+            "last_decision_at": last_at,
+            "idle_seconds": round(now - last_at, 1) if last_at else None,
             "symbols": sorted(chosen),
             "overall": overall.summary(),
-            "per_symbol": {sym: t.summary() for sym, t in sorted(chosen.items())},
-            "headline": overall.note(),
+            "per_symbol": {sym: t.summary() for sym, t in parts.items()},
+            "session": session.summary(),
+            "headline": self._attribution_headline(overall, rolling, covered, last_at, now),
         }
+
+    @staticmethod
+    def _attribution_headline(overall: BlockerTally, rolling: bool, covered: float,
+                              last_at: float | None, now: float) -> str:
+        """One sentence that states its own window, so a screenshot cannot lie."""
+        if not rolling:
+            return overall.note()
+        mins = max(1, int(round(covered / 60.0)))
+        if overall.decisions:
+            return f"Last {mins} min: {overall.note()}"
+        if last_at:
+            idle = max(1, int(round((now - last_at) / 60.0)))
+            return (f"No decisions in the last {mins} min — the last one was {idle} min ago. "
+                    f"Widen the window to see what was blocking them.")
+        return f"No decisions in the last {mins} min, and none recorded this session."
 
     def reset_attribution(self) -> None:
         """Start a fresh window — e.g. after changing a threshold."""
