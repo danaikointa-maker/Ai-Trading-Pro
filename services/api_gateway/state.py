@@ -519,11 +519,43 @@ class TradingRuntime:
                            symbol=trade.symbol, meta={"ticket": trade.ticket, "pnl": trade.pnl}, dedupe_seconds=0)
         with self.lock:
             self.version += 1
-        if trade.pnl < 0 and self.risk.state(self.adapter, now=self.market.now()).consecutive_losses >= \
-                self.risk.limits().max_consecutive_losses:
-            self.notifier.emit("critical", "Cooldown engaged",
-                               f"{self.risk.limits().max_consecutive_losses} consecutive losses — new entries paused "
-                               f"for {self.risk.limits().cooldown_minutes} minutes.", dedupe_seconds=0)
+        if trade.pnl < 0:
+            self._alert_losing_streak()
+
+    def _alert_losing_streak(self) -> None:
+        """Tell someone the moment trading stops, and tell them the truth.
+
+        This alert used to say "new entries paused for 20 minutes", which is what
+        the old cooldown did. Under the current rule nothing lifts the stop on a
+        timer: an operator who believes the message waits for a system that is
+        never coming back. The message now states the real release conditions and
+        what the streak cost.
+        """
+        try:
+            state = self.risk.state(self.adapter, now=self.market.now())
+        except Exception as exc:  # noqa: BLE001 - an alert must not break the close path
+            self._log_error("streak_alert", exc)
+            return
+        limit = self.risk.limits().max_consecutive_losses
+        if state.consecutive_losses < limit:
+            return
+        # One alert per streak, not one per losing trade that extends it.
+        key = f"loss-streak:{int(state.streak_since or 0)}"
+        if self._alert_dedupe.get(key):
+            return
+        self._alert_dedupe[key] = int(self.market.now())
+        releases = (f" This is after {state.streak_releases_today} release(s) today."
+                    if state.streak_releases_today else "")
+        self.notifier.emit(
+            "critical", f"Trading stopped — {state.consecutive_losses} consecutive losses",
+            (f"The streak cost {state.streak_loss:.2f} and the risk gate is now rejecting every "
+             f"signal, including hand-approved ones. Nothing lifts this on a timer: it clears "
+             f"when a winning trade is recorded, or when someone releases it on the Risk Engine "
+             f"card (audited).{releases}"),
+            meta={"consecutive_losses": state.consecutive_losses,
+                  "streak_loss": state.streak_loss,
+                  "releases_today": state.streak_releases_today},
+            dedupe_seconds=0)
 
     def _journal(self, trade: TradeRecord) -> None:
         """Deterministic, data-driven trade journal entry (no LLM required)."""

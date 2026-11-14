@@ -38,10 +38,18 @@
          a winning trade recorded at the broker, or this release. Say so here —
          otherwise the terminal just looks broken. -->
     <div v-if="streakStopped" class="mx-4 mb-3 rounded-lg border border-down/30 bg-down/10 p-2.5 text-[11px] text-down">
-      <div class="font-semibold">หยุดเทรด: ขาดทุนติดกัน {{ risk?.consecutive_losses }} ไม้ (เพดาน {{ maxStreak }})</div>
+      <div class="font-semibold">
+        หยุดเทรด: ขาดทุนติดกัน {{ risk?.consecutive_losses }} ไม้ (เพดาน {{ maxStreak }})
+        <span v-if="risk?.streak_loss" class="num">· {{ money(risk.streak_loss) }}</span>
+        <span v-if="streakSpan" class="font-normal text-down/80">· {{ streakSpan }}</span>
+      </div>
       <p class="mt-1 text-[10.5px] text-down/90">
         ระบบจะไม่กลับมาเทรดเองเมื่อครบ cooldown — ต้องมีไม้ที่กำไรเข้ามาในบัญชี
         หรือกดปลดด้านล่าง (บันทึก audit) · ปุ่มอนุมัติไม้ด้วยมือก็ถูกกฎนี้บล็อกเช่นกัน
+      </p>
+      <p v-if="risk?.streak_releases_today" class="mt-1 text-[10.5px] font-semibold text-amber-300">
+        ปลดไปแล้ว {{ risk.streak_releases_today }} ครั้งวันนี้{{ risk.last_release_by ? ` (ล่าสุดโดย ${risk.last_release_by})` : '' }}
+        — ถ้าต้องปลดซ้ำ ๆ แปลว่ากำลังเทรดสวนกฎของตัวเอง
       </p>
       <button class="btn btn-danger mt-2 w-full py-1.5" :disabled="!perms.canTrade || releasing"
               :title="perms.reason" @click="releaseStreak">
@@ -70,6 +78,14 @@ const perms = computed(() => permissions.value)
 const releasing = ref(false)
 const maxStreak = computed(() => state.live?.limits?.max_consecutive_losses ?? 3)
 const streakStopped = computed(() => (risk.value?.consecutive_losses ?? 0) >= maxStreak.value)
+// Three scratch losses in ten minutes and three full stops over two days both
+// read as "3". Show the damage and the span so the operator can tell them apart.
+const streakSpan = computed(() => {
+  const since = risk.value?.streak_since
+  if (!since) return ''
+  const minutes = Math.max(0, (Date.now() / 1000 - since) / 60)
+  return minutes >= 90 ? `ใน ${(minutes / 60).toFixed(1)} ชม.` : `ใน ${Math.round(minutes)} นาที`
+})
 
 const limits = computed(() => ({
   daily: state.live?.limits?.max_daily_loss_pct ?? 2.0,

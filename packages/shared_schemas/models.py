@@ -554,6 +554,16 @@ class RiskState(BaseModel):
     open_lots: float
     exposure_pct: float
     consecutive_losses: int
+    # What the streak actually cost and how long it took. Three scratch losses in
+    # ten minutes and three full-risk losses over two days both read as "3"
+    # without these, and they call for very different responses.
+    streak_loss: float = 0.0
+    streak_since: float | None = None
+    # Releases are the one way to overrule the hard stop, so they are counted and
+    # attributed. A system released four times in a day is not being protected.
+    streak_releases_today: int = 0
+    last_release_at: float | None = None
+    last_release_by: str = ""
     trades_today: int
     trades_this_week: int
     cooldown_until: int | None = None

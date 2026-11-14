@@ -293,6 +293,73 @@ def test_release_only_forgives_losses_older_than_itself(runtime):
         runtime.db.kv_set("loss_streak_release_at", 0)
 
 
+def test_release_does_not_hand_back_an_instant_re_entry(runtime):
+    """The release forgives the stop, not the losses.
+
+    Without this, an operator could release seconds after the third loss and fire
+    the next trade immediately — the exact moment the short cooldown exists for.
+    """
+    limits = runtime.risk.limits()
+    now = NOW
+    try:
+        runtime.db.execute("DELETE FROM trades")
+        for i in range(limits.max_consecutive_losses):
+            runtime.db.execute(
+                "INSERT INTO trades (ticket, symbol, direction, volume, entry, exit, pnl,"
+                " opened_at, closed_at, broker_id, strategy, exit_reason)"
+                " VALUES (?,?,?,?,?,?,?,?,?,?,?,?)",
+                (f"fresh-{i}", "XAUUSD", "buy", 0.01, 2000.0, 1999.0, -5.0,
+                 now - 300 + i * 60, now - 240 + i * 60, runtime.adapter.id, "test", "sl"))
+
+        runtime.risk.release_losing_streak("ops@no7.ai", now=now)
+        state = runtime.risk.state(runtime.adapter, now=now)
+        assert state.consecutive_losses == 0, "the streak is forgiven"
+
+        during = _gate(runtime, state=state, now=now)
+        assert not during.allow, "but the cooldown from the last loss still runs"
+        failed = [c["name"] for c in during.checks if not c["ok"]]
+        assert failed == ["cooldown"]
+
+        after = _gate(runtime, state=state, now=state.cooldown_until + 1)
+        assert after.allow
+    finally:
+        runtime.db.execute("DELETE FROM trades")
+        runtime.db.kv_set("loss_streak_release_at", 0)
+
+
+def test_state_reports_what_the_streak_cost_and_who_released(runtime):
+    try:
+        state = _ledger(runtime, [-12.0, -9.5, -15.25])
+        assert state.consecutive_losses == 3
+        assert state.streak_loss == -36.75, "three scratches and three full stops differ"
+        assert state.streak_since and state.streak_since > 0
+
+        detail = next(c["detail"] for c in _gate(runtime, state=state).checks
+                      if c["name"] == "consecutive_losses")
+        assert "36.75" in detail
+
+        before = runtime.risk.state(runtime.adapter).streak_releases_today
+        runtime.risk.release_losing_streak("ops@no7.ai")
+        after = runtime.risk.state(runtime.adapter)
+        assert after.streak_releases_today == before + 1
+        assert after.last_release_by == "ops@no7.ai" and after.last_release_at
+    finally:
+        runtime.db.execute("DELETE FROM trades")
+        runtime.db.kv_set("loss_streak_release_at", 0)
+
+
+def test_scan_window_follows_a_raised_limit(runtime, monkeypatch):
+    """A hard-coded 12-row scan would cap the count below a larger configured limit."""
+    limits = runtime.risk.limits()
+    monkeypatch.setattr(limits, "max_consecutive_losses", 15, raising=False)
+    monkeypatch.setattr(runtime.risk, "limits", lambda: limits)
+    try:
+        state = _ledger(runtime, [-5.0] * 15)
+        assert state.consecutive_losses == 15
+    finally:
+        runtime.db.execute("DELETE FROM trades")
+
+
 def test_release_endpoint_is_audited(client, auth, runtime):
     res = client.post("/api/risk/loss-streak/release", headers=auth)
     assert res.status_code == 200 and res.json()["ok"] is True
