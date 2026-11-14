@@ -183,25 +183,48 @@ class RiskEngine:
         # as a loss and it does not clear the streak, so moving a stop to entry
         # can no longer launder three losses into a clean slate.
         release_at = self.loss_streak_release_at()
+        # Scan far enough back that a raised `max_consecutive_losses` can still be
+        # reached; a fixed window would silently cap the count at the old limit.
+        scan = max(12, self.limits().max_consecutive_losses * 3)
         closed = self.db.query(
-            "SELECT pnl, closed_at FROM trades ORDER BY closed_at DESC LIMIT 12")
+            "SELECT pnl, closed_at FROM trades ORDER BY closed_at DESC LIMIT ?", (scan,))
         consecutive = 0
+        streak_loss = 0.0
+        streak_since: float | None = None
+        # The run of losses as the ledger has it, ignoring any operator release.
+        # The release forgives the *stop*; it does not pretend the losses did not
+        # happen, so the short cooldown still runs from the last one. Otherwise
+        # releasing would hand back the ability to fire a trade seconds after the
+        # third loss — the exact moment the pause exists for.
+        raw_streak = 0
         last_loss_at = 0.0
+        forgiven = False
         for row in closed:
             closed_at = float(row["closed_at"] or 0)
-            if closed_at <= release_at:
-                break       # everything older was written off by an operator
             pnl = float(row["pnl"] or 0)
             if pnl > 0:
                 break
             if pnl == 0:
                 continue
-            consecutive += 1
+            raw_streak += 1
             if last_loss_at == 0.0:
                 last_loss_at = closed_at
+            if closed_at <= release_at:
+                forgiven = True     # written off by an operator; stops counting
+                continue
+            if not forgiven:
+                consecutive += 1
+                streak_loss += pnl
+                streak_since = closed_at
         cooldown_until = None
-        if consecutive >= self.limits().max_consecutive_losses and last_loss_at:
+        if raw_streak >= self.limits().max_consecutive_losses and last_loss_at:
             cooldown_until = int(last_loss_at + self.limits().cooldown_minutes * 60)
+        releases_today = self.db.query_one(
+            "SELECT COUNT(*) AS n, MAX(t) AS last_t FROM audit WHERE action = ? AND t >= ?",
+            ("risk.loss_streak.release", day_start))
+        last_release = self.db.query_one(
+            "SELECT actor, t FROM audit WHERE action = ? ORDER BY id DESC LIMIT 1",
+            ("risk.loss_streak.release",))
 
         open_lots = sum(p.volume for p in positions)
         # Notional exposure must use each symbol's own contract size (100 oz for
@@ -222,6 +245,11 @@ class RiskEngine:
             open_lots=round(open_lots, 2),
             exposure_pct=round(notional / info.equity * 100, 2) if info.equity else 0.0,
             consecutive_losses=consecutive,
+            streak_loss=round(streak_loss, 2),
+            streak_since=streak_since,
+            streak_releases_today=int((releases_today or {})["n"] or 0) if releases_today else 0,
+            last_release_at=(float(last_release["t"]) if last_release else None),
+            last_release_by=(str(last_release["actor"]) if last_release else ""),
             trades_today=len(daily),
             trades_this_week=len(rows),
             cooldown_until=cooldown_until,
@@ -329,8 +357,13 @@ class RiskEngine:
         # out are a winning trade recorded from the broker terminal, or an
         # operator calling `release_losing_streak()` (audited).
         streak_hit = state.consecutive_losses >= limits.max_consecutive_losses
+        cost = f" costing {state.streak_loss:.2f}" if state.streak_loss else ""
+        span = ""
+        if state.streak_since:
+            minutes = max(0.0, (now - state.streak_since) / 60.0)
+            span = (f" over {minutes / 60:.1f}h" if minutes >= 90 else f" over {minutes:.0f} min")
         gate.add("consecutive_losses", not streak_hit,
-                 f"{state.consecutive_losses} consecutive losses (limit "
+                 f"{state.consecutive_losses} consecutive losses{cost}{span} (limit "
                  f"{limits.max_consecutive_losses}) — trading stays stopped until a winning "
                  "trade is recorded or an operator releases the streak")
         cooldown_ok = not state.cooldown_until or now >= state.cooldown_until

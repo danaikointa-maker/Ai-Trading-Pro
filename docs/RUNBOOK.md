@@ -709,6 +709,11 @@ curl -s -X POST localhost:8000/api/risk/loss-streak/release \
   -H "Authorization: Bearer $TOKEN" | python3 -m json.tool
 ```
 
+**ปลดแล้วยิงไม้ถัดไปทันทีไม่ได้** — การปลดล้างเฉพาะ *การหยุดถาวร* ส่วน cooldown 20 นาที
+นับจาก**ไม้ขาดทุนจริงไม้ล่าสุด** ไม่ใช่จากจุดที่กดปลด ถ้าเพิ่งแพ้ไปเมื่อ 3 นาทีก่อน กดปลดแล้ว
+`state.cooldown_until` จะยังเหลืออีกราว 17 นาที (ตรวจได้จาก `GET /api/risk/settings`)
+เจตนาคือกันการ "กดปลดแล้วเอาคืน" ซึ่งเป็นพฤติกรรมที่กฎนี้มีไว้หยุดตั้งแต่แรก
+
 การปลดจะเขียน watermark (`loss_streak_release_at`) ไม่ได้แก้ P&L ในตาราง `trades`
 ไม้ที่ขาดทุนยังอยู่ครบในสมุดบัญชีและใน Journal ทุกครั้งที่ปลดถูกบันทึก audit
 (`risk.loss_streak.release` พร้อมอีเมลคนกด) และ **ปลดแล้วไม่ได้แปลว่าปลอดภัยไปตลอด** —
@@ -719,8 +724,17 @@ curl -s -X POST localhost:8000/api/risk/loss-streak/release \
 ```bash
 curl -s localhost:8000/api/risk/settings -H "Authorization: Bearer $TOKEN" \
   | python3 -c "import sys,json; s=json.load(sys.stdin)['state']; \
-      print('consecutive_losses', s['consecutive_losses'], '| cooldown_until', s['cooldown_until'])"
+      print('consecutive_losses', s['consecutive_losses'], '| cooldown_until', s['cooldown_until'], \
+            '| เสียไป', s['streak_loss'], '| ปลดวันนี้', s['streak_releases_today'])"
 ```
+
+**ดูว่าสตรีคนี้ราคาเท่าไหร่ และกดปลดกันบ่อยแค่ไหน:** `risk_state` คืน `streak_loss`
+(ยอดขาดทุนรวมของสตรีค), `streak_since` (เวลาไม้แรก), `streak_releases_today`,
+`last_release_at`/`last_release_by` การ์ด Risk Engine แสดงค่าเหล่านี้ และจะขึ้นเตือนสีเหลือง
+เมื่อมีการปลดเกิดขึ้นแล้วในวันนั้น — **ถ้าต้องกดปลดหลายครั้งต่อวัน ปัญหาไม่ได้อยู่ที่กฎ**
+
+เวลาแพ้ครบ 3 ไม้ ระบบจะส่ง alert **หนึ่งครั้งต่อหนึ่งสตรีค** (ไม่สแปมทุกไม้ที่ปิด) ข้อความบอก
+ยอดที่เสียไปและเงื่อนไขปลดจริง — ก่อนรอบ 30 ข้อความนี้ยังเขียนว่า "พัก 20 นาที" ซึ่งขัดกับกติกา
 
 > ใน backtest ไม่มีใครกดปลดได้ ดังนั้นรันที่ชนกติกานี้จะ**จบตรงนั้น** และรายงานจะขึ้นบรรทัด
 > `RUN ENDED ON THE LOSING-STREAK STOP` — ตัวเลข metrics ของรันแบบนั้นบอกแค่ว่า
