@@ -182,6 +182,30 @@ def test_open_position_review_shows_unverified_broker_deltas(client, auth, runti
     assert events[0]["order_attribution"] == "unresolved"
 
 
+def test_closed_trade_review_shows_only_account_scoped_observed_candles(client, auth, runtime):
+    from packages.persistence.position_candles import PositionCandleLog
+    from packages.shared_schemas.models import Position, TradeRecord
+
+    owner = runtime.gateway._assert_account(runtime.adapter)
+    position = Position(ticket="closed-observed-candles", symbol="XAUUSD", direction="up",
+                        volume=0.1, entry=2000, sl=1990, tp=2030, open_time=600,
+                        current_price=2003, broker_id=runtime.adapter.id)
+    record = PositionCandleLog(runtime.db)
+    record.capture(position=position, account_identity=owner,
+                   bars=[{"t": 600, "o": 2000., "h": 2003., "l": 1998.,
+                          "c": 2002., "v": 10.}], market_time=1000, feed_mode="simulated")
+    runtime.gateway.record_trade(TradeRecord(
+        ticket=position.ticket, symbol="XAUUSD", direction="up", volume=0.1,
+        entry=2000, exit=2008, opened_at=600, closed_at=1200,
+        points=800, gross_pnl=80, costs=1, pnl=79, broker_id=runtime.adapter.id))
+    response = client.get("/api/trading/trades/closed-observed-candles/review", headers=auth)
+    assert response.status_code == 200
+    archived = response.json()["post_entry_candles"]
+    assert [bar["t"] for bar in archived["bars"]] == [600]
+    assert archived["bars"][0]["feed_mode"] == "simulated"
+    assert archived["broker_tick_verified"] is False
+
+
 def test_trade_history_is_scoped_to_active_broker_account(client, auth, runtime):
     from packages.shared_schemas.models import Direction, TradeRecord
 

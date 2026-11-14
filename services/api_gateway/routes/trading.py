@@ -7,6 +7,7 @@ from pydantic import BaseModel
 
 from packages.shared_schemas.models import Direction, EquityPoint, TradeMode, TradeRecord
 from packages.persistence.position_events import PositionEventLog
+from packages.persistence.position_candles import PositionCandleLog
 from services.api_gateway.deps import current_user, get_runtime
 from services.api_gateway.state import TradingRuntime
 from services.backtest_engine.metrics import compute_metrics
@@ -146,11 +147,13 @@ def _original_snapshot_for_trade(runtime: TradingRuntime, trade: TradeRecord) ->
         return None
 
 
-def _account_scoped_evidence(runtime: TradingRuntime, ticket: str, broker_id: str) -> dict:
+def _account_scoped_evidence(runtime: TradingRuntime, ticket: str, broker_id: str,
+                             symbol: str) -> dict:
     """Read-only broker history. Ticket equality does not certify strategy attribution."""
     row = runtime.db.query_one("SELECT value FROM kv WHERE key=?", ("account-owner:" + broker_id,))
     if row is None:
-        return {"events": [], "deals": [], "deal_attribution": "unavailable"}
+        return {"events": [], "deals": [], "deal_attribution": "unavailable",
+                "post_entry_candles": {"bars": [], "broker_tick_verified": False, "complete": False}}
     try:
         identity = json.loads(row["value"])
         if identity.get("broker_id") != broker_id or identity.get("workspace_id") != runtime.db.workspace_id:
@@ -162,9 +165,13 @@ def _account_scoped_evidence(runtime: TradingRuntime, ticket: str, broker_id: st
                  if d.get("position_id") == ticket]
         events = PositionEventLog(runtime.db).for_ticket(
             broker_id=broker_id, ticket=ticket, account_identity=identity)
+        post_entry = PositionCandleLog(runtime.db).for_ticket(
+            broker_id=broker_id, ticket=ticket, account_identity=identity, symbol=symbol)
     except (TypeError, KeyError, ValueError, AttributeError):
-        return {"events": [], "deals": [], "deal_attribution": "unavailable"}
+        return {"events": [], "deals": [], "deal_attribution": "unavailable",
+                "post_entry_candles": {"bars": [], "broker_tick_verified": False, "complete": False}}
     return {"events": events, "deals": deals,
+            "post_entry_candles": post_entry,
             "deal_attribution": "broker_position_id_match_only" if deals else "no_matching_deals"}
 
 
@@ -212,7 +219,7 @@ def trade_review(ticket: str, runtime: TradingRuntime = Depends(get_runtime),
         ]
     return {"trade": trade.model_dump(), "entry_snapshot": entry_snapshot,
             "original_plan_snapshot": original_plan_snapshot,
-            **_account_scoped_evidence(runtime, ticket, trade.broker_id),
+            **_account_scoped_evidence(runtime, ticket, trade.broker_id, trade.symbol),
             "retrospective": retrospective,
             "disclaimer": "เป็นการทบทวนข้อมูลในอดีต ไม่ใช่คำแนะนำลงทุนหรือการคาดการณ์ผลครั้งถัดไป"}
 
@@ -239,7 +246,7 @@ def position_review(ticket: str, runtime: TradingRuntime = Depends(get_runtime),
     entry = _original_snapshot_for_trade(runtime, SimpleNamespace(
         broker_id=adapter.id, symbol=position.symbol, ticket=ticket, signal_id=position.signal_id))
     return {"position": position.model_dump(), "original_plan_snapshot": entry,
-            **_account_scoped_evidence(runtime, ticket, adapter.id),
+            **_account_scoped_evidence(runtime, ticket, adapter.id, position.symbol),
             "disclaimer": "เส้นจากบันทึกก่อนส่งออเดอร์เท่านั้น; สถานะโบรกเกอร์อาจเปลี่ยนหลังการอ่าน"}
 
 

@@ -2,8 +2,8 @@
   <section class="rounded-lg border border-ink-700 p-3">
     <div class="flex flex-wrap items-center justify-between gap-2">
       <div>
-        <h3 class="text-xs font-semibold text-slate-200">แท่งเทียนที่บันทึกก่อนส่งออเดอร์ · {{ trade.ticket }}</h3>
-        <p class="mt-1 text-[10px] text-muted">M5 ที่ปิดแล้ว ณ จุดตัดสินใจเท่านั้น · ไม่เติมแท่งจากข้อมูลอนาคต</p>
+        <h3 class="text-xs font-semibold text-slate-200">ประวัติแท่งเทียนแยกตามไม้ · {{ trade.ticket }}</h3>
+        <p class="mt-1 text-[10px] text-muted">M5 ก่อนเข้าไม้ตาม snapshot เดิม + หลังเข้าไม้ที่ระบบบันทึกไว้จริงเท่านั้น</p>
       </div>
       <div class="flex flex-wrap gap-1">
         <button v-for="layer in layers" :key="layer.key" type="button"
@@ -15,11 +15,16 @@
     </div>
     <div v-if="candles.length" ref="container" class="mt-3 h-[300px] w-full"></div>
     <p v-else class="mt-3 rounded border border-amber-600/40 p-3 text-xs text-amber-300">
-      ไม่มีแท่งเทียนที่บันทึกในขณะตัดสินใจของไม้นี้ จึงไม่ดึงกราฟปัจจุบันมาสวมเป็นประวัติ
+      ไม่มีแท่งเทียนที่ระบบบันทึกสำหรับไม้นี้ จึงไม่ดึงกราฟปัจจุบันมาสวมเป็นประวัติ
     </p>
     <p v-if="candles.length" class="mt-2 text-[10px] text-muted">
-      {{ candles.length }} แท่ง · ตัดข้อมูลหลังเวลา {{ new Date((candles[candles.length - 1].t + 300) * 1000).toLocaleString() }}
-      · ราคาปิดไม้จริงแสดงเป็นระดับอ้างอิงเท่านั้น ไม่ใช่แท่งเทียนหลังเข้าไม้
+      {{ beforeCandles.length }} แท่งก่อนเข้า · {{ afterCandles.length }} แท่งหลังเข้า (สีม่วง)
+      · ข้อมูลล่าสุด {{ new Date((candles[candles.length - 1].t + 300) * 1000).toLocaleString() }}
+      · ไม่เติมแท่งเทียนในช่วงที่ระบบไม่ได้สังเกต
+    </p>
+    <p v-if="afterCandles.length" class="mt-1 text-[10px] text-amber-300">
+      แท่งหลังเข้าเป็นข้อมูล M5 ที่เห็นในรอบทำงาน ({{ feedLabels }}) ยังไม่ใช่หลักฐาน tick/deal จากโบรกเกอร์
+      และยังไม่รับรองว่าครบทุกช่วงเวลาที่ถือไม้
     </p>
     <p class="mt-1 text-[10px] text-muted">การแสดง/ซ่อนทุกชั้นเป็นเพียงการตั้งค่าหน้าจอ ไม่มีการเรียก API สั่งออเดอร์</p>
   </section>
@@ -33,16 +38,28 @@ const props = defineProps({
   trade: { type: Object, required: true },
   snapshot: { type: Object, default: null },
   analysis: { type: Object, default: null },
+  postEntry: { type: Object, default: null },
 })
 const container = ref(null)
 const layers = [
+  { key: 'observed', label: 'แท่งหลังเข้า' },
   { key: 'plan', label: 'Entry/SL/TP' }, { key: 'zones', label: 'S/R' },
   { key: 'flip', label: 'SR Flip' }, { key: 'fib', label: 'Fib' },
   { key: 'structure', label: 'BOS/CHoCH' }, { key: 'actual', label: 'Fill/Exit' },
 ]
-const visible = reactive({ plan: true, zones: true, flip: true, fib: true, structure: false, actual: true })
-const candles = computed(() => (props.analysis?.decision_candles || [])
+const visible = reactive({ observed: true, plan: true, zones: true, flip: true,
+  fib: true, structure: false, actual: true })
+const beforeCandles = computed(() => (props.analysis?.decision_candles || [])
   .filter((bar) => Number.isFinite(Number(bar.t)) && Number.isFinite(Number(bar.c)))
+  .sort((a, b) => a.t - b.t)
+  .filter((bar, index, arr) => index === 0 || bar.t !== arr[index - 1].t))
+const afterCandles = computed(() => (props.postEntry?.bars || [])
+  .filter((bar) => Number.isFinite(Number(bar.t)) && Number.isFinite(Number(bar.c)))
+  .sort((a, b) => a.t - b.t)
+  .filter((bar, index, arr) => index === 0 || bar.t !== arr[index - 1].t))
+const feedLabels = computed(() => [...new Set(afterCandles.value.map((bar) => bar.feed_mode))].join(', '))
+const afterTimes = computed(() => new Set(afterCandles.value.map((bar) => Number(bar.t))))
+const candles = computed(() => [...beforeCandles.value, ...(visible.observed ? afterCandles.value : [])]
   .sort((a, b) => a.t - b.t)
   .filter((bar, index, arr) => index === 0 || bar.t !== arr[index - 1].t))
 
@@ -99,15 +116,19 @@ function render() {
   series = chart.addCandlestickSeries({ upColor: '#34d399', downColor: '#f87171',
     wickUpColor: '#34d399', wickDownColor: '#f87171', borderVisible: false })
   series.setData(candles.value.map((bar) => ({ time: Number(bar.t),
-    open: bar.o, high: bar.h, low: bar.l, close: bar.c })))
+    open: bar.o, high: bar.h, low: bar.l, close: bar.c,
+    ...(visible.observed && afterTimes.value.has(Number(bar.t))
+      ? { color: '#a78bfa', wickColor: '#c4b5fd' } : {}),
+  })))
   chart.timeScale().fitContent()
   draw()
 }
 
 watch(visible, draw)
-watch(() => [props.analysis, props.trade, props.snapshot], () => {
+watch(() => [props.analysis, props.trade, props.snapshot, props.postEntry, visible.observed], () => {
   if (candles.value.length) render()
-})
+  else { chart?.remove(); chart = null; series = null; lines = [] }
+}, { flush: 'post' })
 onMounted(() => {
   render()
   if (typeof ResizeObserver !== 'undefined' && container.value) {
