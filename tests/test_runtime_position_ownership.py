@@ -103,9 +103,52 @@ def test_management_accepts_owned_snapshot_and_keeps_other_broker(managed, empty
     runtime._manage_cycle(10)
     assert runtime.positions_cache == broker.positions.return_value
     assert {row["ticket"] for row in db.query("SELECT ticket FROM open_positions")} == (
-        {"other"} if empty else {"other", "new"})
+        {"other", "kept"} if empty else {"other", "kept", "new"})
+    # A position missing from an isolated broker poll cannot be treated as a
+    # completed close. Its last baseline stays pending authoritative evidence.
+    from packages.persistence.position_events import PositionEventLog
+
+    owner = runtime.gateway._assert_account(broker)
+    events = PositionEventLog(db).for_ticket(broker_id=broker.id, ticket="kept",
+                                              account_identity=owner)
+    assert any(event["status"] == "missing_unverified" for event in events)
     runtime.manager.evaluate.assert_called_once()
     runtime._log_error.assert_not_called()
+
+
+def test_management_poll_archives_unverified_sl_change_before_updating_cache(managed):
+    from packages.persistence.position_events import PositionEventLog
+    import json
+
+    runtime, broker, db = managed
+    changed = position("kept").model_copy(update={"sl": 1995})
+    broker.positions.return_value = [changed]
+    runtime._manage_cycle(10)
+    owner = runtime.gateway._assert_account(broker)
+    events = PositionEventLog(db).for_ticket(
+        broker_id=broker.id, ticket="kept", account_identity=owner)
+    assert [event["status"] for event in events] == ["changed_unverified"]
+    assert events[0]["detail"]["changed_fields"] == ["sl"]
+    assert json.loads(db.query_one("SELECT payload FROM open_positions WHERE ticket='kept'")["payload"])["sl"] == 1990
+    assert runtime.positions_cache == [changed]
+    runtime._manage_cycle(11)
+    assert len(PositionEventLog(db).for_ticket(broker_id=broker.id, ticket="kept",
+                                              account_identity=owner)) == 1
+
+
+def test_management_rejects_snapshot_if_broker_observation_cannot_be_saved(managed):
+    runtime, broker, db = managed
+    before = [dict(row) for row in db.query("SELECT * FROM open_positions")]
+    prior_cache = runtime.positions_cache
+    broker.positions.return_value = [position("kept").model_copy(update={"sl": 1995})]
+    db.execute("CREATE TRIGGER deny_observation BEFORE INSERT ON position_events "
+               "BEGIN SELECT RAISE(ABORT, 'observation unavailable'); END")
+    runtime._manage_cycle(10)
+    assert runtime.positions_cache is prior_cache
+    assert [dict(row) for row in db.query("SELECT * FROM open_positions")] == before
+    assert db.query("SELECT * FROM position_events") == []
+    runtime.manager.evaluate.assert_not_called()
+    runtime._log_error.assert_called_once()
 
 
 def test_management_does_not_resurrect_snapshot_deleted_by_action(managed):
@@ -114,7 +157,9 @@ def test_management_does_not_resurrect_snapshot_deleted_by_action(managed):
     runtime._apply_action.side_effect = lambda *args, **kwargs: db.execute(
         "DELETE FROM open_positions WHERE ticket='new'")
     runtime._manage_cycle(10)
-    assert db.query("SELECT * FROM open_positions") == []
+    # The mutation removes `new` without bringing it back, while an unrelated
+    # broker-missing `kept` position remains flagged for reconciliation.
+    assert {row["ticket"] for row in db.query("SELECT ticket FROM open_positions")} == {"kept"}
     runtime._apply_action.assert_called_once()
 
 
@@ -474,7 +519,7 @@ def test_concurrent_read_cannot_resurrect_position_removed_during_mutation(manag
         finally:
             release.set()
         future.result(timeout=10)
-    assert db.query("SELECT * FROM open_positions") == []
+    assert {row["ticket"] for row in db.query("SELECT ticket FROM open_positions")} == {"kept"}
     assert runtime.positions_cache is accepted
     runtime.manager.evaluate.assert_not_called()
     assert runtime.position_view()["positions_status"]["available"] is False

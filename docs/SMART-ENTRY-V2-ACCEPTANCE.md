@@ -26,6 +26,17 @@ automated test on synthetic prices. Each item needs time-stamped broker evidence
    assumptions. The separate offline release gate rejects synthetic history,
    insufficient folds, unverified bar paths, cost regressions and missing Demo
    reconciliation evidence; it **never** switches the trading mode.
+7. Broker-position polling appends account-scoped observations for unknown,
+   changed, disappeared and restored positions, without claiming verified
+   closure or attributing a change to a human. Repeated identical observations
+   are deduplicated across restarts and competing reconciler processes. A
+   broker-missing position retains its last local baseline pending verified
+   history instead of being silently removed. The normal position-management
+   refresh performs this check **inside the same SQLite transaction** as its
+   mirror update; failing to save the observation rejects the refresh, leaving
+   the preceding mirror untouched. The separate direct mirror-replacement API
+   *inside the codebase* remains available to trusted reconciliation workflows;
+   this does not introduce a new end-user permission to rewrite history.
 
 ## Reproducible backtest evidence (operator run)
 
@@ -93,6 +104,9 @@ cryptographic proof of an MT5 terminal's behavior.
 - Full broker-side partial-fill attribution and post-entry candlestick capture
   depend on terminal history and order/deal ID semantics; the current ledger
   displays matching position IDs but does not infer strategy ownership.
+- A difference in broker `positions()` does not identify whether the MT5 user,
+  another EA, the broker or a netting operation caused it; the observation is
+  evidence of a discrepancy only, not evidence of its cause or a completed fill.
 
 The system must stay on PAPER/DEMO and the PR remain Draft until these gates
 are satisfied on the target installation.

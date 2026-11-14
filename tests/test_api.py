@@ -163,6 +163,25 @@ def test_open_position_review_is_read_only_and_scoped_to_broker(client, auth, ru
     assert client.get("/api/trading/positions/not-my-ticket/review", headers=auth).status_code == 404
 
 
+def test_open_position_review_shows_unverified_broker_deltas(client, auth, runtime, monkeypatch):
+    from packages.shared_schemas.models import Position
+
+    baseline = Position(ticket="open-delta-1", symbol="XAUUSD", direction="up",
+                        volume=0.1, entry=2000, sl=1990, tp=2030,
+                        open_time=100, current_price=2002, broker_id=runtime.adapter.id)
+    runtime.gateway.open_position_snapshot([baseline], broker_id=runtime.adapter.id)
+    changed = baseline.model_copy(update={"sl": 1995})
+    monkeypatch.setattr(runtime.adapter, "positions", lambda: [changed])
+    assert runtime.gateway.reconcile(runtime.adapter)["changed_at_broker"] == ["open-delta-1"]
+    response = client.get("/api/trading/positions/open-delta-1/review", headers=auth)
+    assert response.status_code == 200
+    events = response.json()["events"]
+    assert len(events) == 1
+    assert events[0]["status"] == "changed_unverified"
+    assert events[0]["detail"]["changed_fields"] == ["sl"]
+    assert events[0]["order_attribution"] == "unresolved"
+
+
 def test_trade_history_is_scoped_to_active_broker_account(client, auth, runtime):
     from packages.shared_schemas.models import Direction, TradeRecord
 
