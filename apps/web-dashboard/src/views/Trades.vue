@@ -53,6 +53,35 @@
 
     <PositionsTable />
 
+    <section v-if="positions.length" class="panel">
+      <div class="panel-head"><div class="panel-title">ตรวจเส้นแผนเดิมของไม้ที่ยังเปิดอยู่</div></div>
+      <div class="flex flex-wrap gap-2 p-3">
+        <button v-for="position in positions" :key="position.ticket" type="button" class="btn"
+                :aria-pressed="selectedOpen === position.ticket" @click="reviewOpen(position)">
+          {{ position.symbol }} · #{{ position.ticket }} · ดูเส้นก่อนส่งออเดอร์
+        </button>
+      </div>
+      <p v-if="openError" class="px-3 pb-3 text-xs text-amber-300">{{ openError }}</p>
+      <p v-if="openLoading" class="px-3 pb-3 text-xs text-muted">กำลังอ่านหลักฐานจากโบรกเกอร์…</p>
+      <div v-if="openReview" class="space-y-3 p-3">
+        <ArchivedTradeChart :key="`open-${openReview.position.ticket}`" :trade="openReview.position"
+                            :snapshot="openReview.original_plan_snapshot?.original_signal"
+                            :analysis="openReview.original_plan_snapshot?.analysis" />
+        <TradeLevels :key="`open-levels-${openReview.position.ticket}`" :trade="openReview.position"
+                     :snapshot="openReview.original_plan_snapshot?.original_signal"
+                     :analysis="openReview.original_plan_snapshot?.analysis" />
+        <div class="rounded-lg border border-ink-700 p-3">
+          <h3 class="text-xs font-semibold text-slate-200">บันทึกการจัดการออเดอร์ที่ยังเปิด</h3>
+          <p class="mt-1 text-[10px] text-muted">{{ openReview.events?.length || 0 }} เหตุการณ์ · {{ openReview.deals?.length || 0 }} broker deals · {{ openReview.deal_attribution }}</p>
+          <p v-for="event in openReview.events || []" :key="event.event_id" class="mt-1 text-xs text-slate-300">
+            {{ datetime(event.created_at) }} · {{ event.kind }} · {{ event.status }} · {{ event.detail?.reason || event.actor }}
+          </p>
+          <p v-if="!openReview.events?.length" class="mt-2 text-xs text-muted">ยังไม่มีเหตุการณ์แก้ไข/ปิดบางส่วนที่ระบบบันทึกไว้</p>
+        </div>
+        <p class="text-[10px] text-muted">คำสั่งนี้แสดงหลักฐานอย่างเดียว ไม่สามารถเปิด/ปิดไม้จากหน้าดูเส้นนี้</p>
+      </div>
+    </section>
+
     <section class="panel">
       <div class="panel-head">
         <div class="panel-title">Closed trades</div>
@@ -98,6 +127,9 @@
       <div v-if="reviewLoading" class="px-4 py-5 text-sm text-muted">กำลังอ่านบันทึกไม้…</div>
       <p v-else-if="reviewError" class="px-4 py-5 text-sm text-down">{{ reviewError }} <button class="btn ml-2" @click="selectTrade(selectedTrade)">ลองอีกครั้ง</button></p>
       <div v-else-if="review" class="grid gap-3 p-4 md:grid-cols-2">
+        <ArchivedTradeChart class="md:col-span-2" :key="`chart-${selectedTrade.ticket}`"
+                            :trade="review.trade" :snapshot="review.entry_snapshot"
+                            :analysis="review.original_plan_snapshot?.analysis" />
         <TradeLevels class="md:col-span-2" :key="selectedTrade.ticket"
                      :trade="review.trade" :snapshot="review.entry_snapshot"
                      :analysis="review.original_plan_snapshot?.analysis" />
@@ -112,6 +144,16 @@
           <p v-else class="mt-2 text-xs text-amber-300">ไม่มี snapshot สัญญาณที่เชื่อมกับไม้ จึงไม่สรุปเหตุผลตอนเข้า</p>
           <p v-if="review.entry_snapshot?.reasons?.length" class="mt-2 text-xs text-muted">เหตุผล: {{ review.entry_snapshot.reasons.join(' · ') }}</p>
           <p v-if="review.entry_snapshot?.plan" class="mt-2 text-xs text-muted">แผนเดิม: SL {{ fmt(review.entry_snapshot.plan.sl) }} · เป้าหมาย {{ fmt(review.entry_snapshot.plan.tp3) }} · ความเสี่ยงตามแผน {{ money(review.entry_snapshot.plan.risk_amount) }}</p>
+        </article>
+        <article class="rounded-lg border border-ink-700 p-3 md:col-span-2">
+          <h2 class="text-sm font-semibold">ลำดับการแก้แผนและหลักฐานจากโบรกเกอร์</h2>
+          <p class="mt-1 text-xs text-muted">{{ review.events?.length || 0 }} เหตุการณ์ · {{ review.deals?.length || 0 }} broker deals</p>
+          <div v-for="event in review.events || []" :key="event.event_id" class="mt-2 border-b border-ink-700/60 pb-2 text-xs text-slate-300">
+            {{ datetime(event.created_at) }} · {{ event.kind }} · {{ event.status }} · {{ event.actor }}
+            <span class="text-muted">{{ event.detail?.reason || '' }}</span>
+          </div>
+          <p v-if="!review.events?.length" class="mt-2 text-xs text-muted">ยังไม่มีเหตุการณ์การปรับแผนที่บันทึกไว้</p>
+          <p class="mt-2 text-[10px] text-amber-300">{{ review.deal_attribution }} · หมายเลข position ตรงกันไม่ได้รับรองว่าเป็นการส่งจากกลยุทธ์นี้</p>
         </article>
         <article class="rounded-lg border border-ink-700 p-3">
           <h2 class="text-sm font-semibold">หลังปิด · ผลจริงและทบทวน</h2>
@@ -160,9 +202,10 @@ import EquityChart from '../components/EquityChart.vue'
 import PositionsTable from '../components/PositionsTable.vue'
 import Stat from '../components/Stat.vue'
 import TradeLevels from '../components/TradeLevels.vue'
+import ArchivedTradeChart from '../components/ArchivedTradeChart.vue'
 import { api } from '../lib/api'
 import { datetime, fmt, fmtFactor, money, pct } from '../lib/format'
-import { permissions, state, toast } from '../lib/store'
+import { permissions, positions, toast } from '../lib/store'
 
 // Read-only accounts see the buttons disabled — the server refuses them anyway.
 const perms = computed(() => permissions.value)
@@ -175,6 +218,10 @@ const selectedTrade = ref(null)
 const review = ref(null)
 const reviewLoading = ref(false)
 const reviewError = ref('')
+const selectedOpen = ref('')
+const openReview = ref(null)
+const openLoading = ref(false)
+const openError = ref('')
 let reviewRequest = 0
 const startingBalance = 10000
 
@@ -212,6 +259,20 @@ async function selectTrade(trade) {
     if (requestId === reviewRequest) reviewError.value = err.message || 'อ่านรายละเอียดไม้ไม่ได้'
   } finally {
     if (requestId === reviewRequest) reviewLoading.value = false
+  }
+}
+async function reviewOpen(position) {
+  selectedOpen.value = position.ticket
+  openReview.value = null
+  openError.value = ''
+  openLoading.value = true
+  try {
+    const response = await api.get(`/api/trading/positions/${encodeURIComponent(position.ticket)}/review`)
+    if (selectedOpen.value === position.ticket) openReview.value = response
+  } catch (err) {
+    if (selectedOpen.value === position.ticket) openError.value = err.message || 'ไม่พบหลักฐานไม้ปัจจุบัน'
+  } finally {
+    if (selectedOpen.value === position.ticket) openLoading.value = false
   }
 }
 async function closeAll() {

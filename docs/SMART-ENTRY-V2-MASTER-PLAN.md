@@ -72,9 +72,8 @@ Extend the existing FastAPI / Vue 3 / Lightweight Charts / MT5-adapter architect
 - Tests cover before-send durability, restart/replay invariance, account/plan mismatch veto, failed-insert atomic rollback, schema guards, API historical plan priority and ordinary legacy records. No LIVE or full-auto setting is changed.
 
 ### What is still missing / not production-ready
-- The new immutable pre-send snapshots hold decision-time zone/plan evidence and a copy of the current risk gate; they do **not yet** include fully versioned/attested risk-rule configuration, account-to-deal reconciliation, append-only post-entry revisions or partial-fill mapping. Order identity is durable; ticket-to-order resolution uses the recorded broker result when available.
-- Per-order overlays on a **historical candlestick** chart; the current closed-trade level diagram is a transparent interim visualization.
-- Integrate and validate Stochastic **as an optional veto** only after out-of-sample evidence; lifecycle alert persistence across restart, up-to-three proposed entries, and integrated risk validation of those proposals.
-- Full replay/walk-forward tests, MT5 demo reconciliation/disconnect testing, security and deployment gates. Auto-trade permissions and LIVE settings are **untouched**.
+- Follow-up software additions: append-only `position_events` for management requests and observed outcomes, read-only open-position review, decision-time archived M5 candles and historical candle chart, up to three **non-executable** aggregate-budgeted zone-entry scenarios, and restart-aware readiness deduplication. Broker position-ID-matched deals remain labelled as incomplete attribution.
+- A standalone `scripts/smart_entry_release_gate.py` checks real-data provenance, four walk-forward folds, tick-level ordering, two higher-cost stress reports and 14-day/30-trade MT5 Demo evidence. It cannot enable LIVE; examples and an operator checklist are in `docs/SMART-ENTRY-V2-ACCEPTANCE.md`.
+- Still missing: independent validation of optional Stochastic veto, **full post-entry candle replay**, attested broker-deal and partial-fill mapping, deterministic terminal disconnection/manual-change acceptance, target-host restore testing, and real-market forward evidence. No terminal access or real dataset was provided in this development environment. **Do not claim LIVE readiness.**
 
 Do not interpret a displayed flip or Fibonacci band as a validated entry. Hidden chart lines have no influence on signal evaluation, risk checks or execution.

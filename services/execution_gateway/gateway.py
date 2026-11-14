@@ -20,6 +20,7 @@ from typing import Any
 
 from integrations.brokers.base import BrokerAdapter, BrokerError
 from packages.persistence.db import Database
+from packages.persistence.position_events import PositionEventLog
 from packages.shared_schemas.models import (
     Direction,
     Health,
@@ -341,13 +342,22 @@ class ExecutionGateway:
     def modify(self, adapter: BrokerAdapter, ticket: str, sl: float | None = None,
                tp: float | None = None, reason: str = "") -> bool:
         try:
-            self._assert_account(adapter)
+            identity = self._assert_account(adapter)
+            ledger = PositionEventLog(self.db)
+            detail = {"sl": sl, "tp": tp, "reason": reason}
+            ledger.append(broker_id=adapter.id, ticket=ticket, actor="position-manager",
+                          kind="modify", status="requested", account_identity=identity, detail=detail)
             ok = adapter.modify_position(ticket, sl=sl, tp=tp)
             self._assert_account(adapter)
+            ledger.append(broker_id=adapter.id, ticket=ticket, actor="position-manager",
+                          kind="modify", status="accepted_unverified" if ok else "unknown",
+                          account_identity=identity, detail=detail)
             self.db.audit("position-manager", "position.modify",
                           {"ticket": ticket, "sl": sl, "tp": tp, "ok": ok, "reason": reason})
             return ok
         except BrokerError as exc:
+            # The request already exists in append-only evidence; a transport
+            # exception cannot prove that the broker rejected it.
             self.db.audit("position-manager", "position.modify_failed", {"ticket": ticket, "error": str(exc)})
             return False
 
@@ -360,8 +370,17 @@ class ExecutionGateway:
         ``OrderResult``. Callers used to assume ``.status`` existed and crashed on
         every simulated close, so this method now returns one dict for both.
         """
-        self._assert_account(adapter)
-        result = adapter.close_position(ticket, volume=volume, comment=reason[:24])
+        identity = self._assert_account(adapter)
+        ledger = PositionEventLog(self.db)
+        detail = {"volume": volume, "reason": reason}
+        ledger.append(broker_id=adapter.id, ticket=ticket, actor=actor, kind="close",
+                      status="requested", account_identity=identity, detail=detail)
+        try:
+            result = adapter.close_position(ticket, volume=volume, comment=reason[:24])
+        except Exception:
+            ledger.append(broker_id=adapter.id, ticket=ticket, actor=actor, kind="close",
+                          status="unknown", account_identity=identity, detail=detail)
+            raise
         self._assert_account(adapter)
         payload: dict[str, Any]
         if isinstance(result, TradeRecord):
@@ -375,11 +394,21 @@ class ExecutionGateway:
                                "reason": reason})
             else:
                 self.record_trade(result)
+            ledger.append(broker_id=adapter.id, ticket=ticket, actor=actor, kind="close",
+                          status="partial_realized" if still_open else "closed_recorded",
+                          account_identity=identity,
+                          detail={**detail, "realized_volume": result.volume, "pnl": result.pnl})
             payload = {"ok": True, "trade": result.model_dump()}
         else:
             if result.status not in (OrderState.closed, OrderState.filled, OrderState.rejected, OrderState.cancelled):
+                ledger.append(broker_id=adapter.id, ticket=ticket, actor=actor, kind="close",
+                              status="unknown", account_identity=identity, detail=detail)
                 raise BrokerError("close outcome unknown; reconcile before further action or resending")
             ok = result.status in (OrderState.closed, OrderState.filled)
+            ledger.append(broker_id=adapter.id, ticket=ticket, actor=actor, kind="close",
+                          status="accepted_unverified" if ok else "rejected",
+                          account_identity=identity,
+                          detail={**detail, "retcode": result.retcode, "broker_status": result.status.value})
             payload = {"ok": ok, "order": result.model_dump()}
         self.db.audit(actor, "position.close",
                       {"ticket": ticket, "volume": volume, "reason": reason, "result": payload})
