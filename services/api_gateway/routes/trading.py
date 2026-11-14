@@ -29,14 +29,15 @@ class ModeRequest(BaseModel):
 
 @router.get("/state")
 def state(runtime: TradingRuntime = Depends(get_runtime), user=Depends(current_user)):
-    return {
+    payload = {
         "account": runtime.account(),
-        "positions": [p.model_dump() for p in runtime.positions_cache],
         "risk": runtime.risk_state().model_dump(),
         "mode": runtime.mode.value,
         "reconcile": runtime.last_reconcile,
         "broker": runtime.adapter.describe(),
     }
+    payload.update(runtime.position_view())
+    return payload
 
 
 @router.get("/live")
@@ -86,7 +87,8 @@ def set_mode(payload: ModeRequest, runtime: TradingRuntime = Depends(get_runtime
 @router.get("/trades")
 def trades(limit: int = Query(50, ge=1, le=500), runtime: TradingRuntime = Depends(get_runtime),
           user=Depends(current_user)):
-    rows = runtime.db.query("SELECT payload FROM trades ORDER BY closed_at DESC LIMIT ?", (limit,))
+    rows = runtime.db.query("SELECT payload FROM trades WHERE broker_id=? ORDER BY closed_at DESC LIMIT ?",
+                            (runtime.adapter.id, limit))
     out = []
     for row in rows:
         try:
@@ -94,6 +96,67 @@ def trades(limit: int = Query(50, ge=1, le=500), runtime: TradingRuntime = Depen
         except json.JSONDecodeError:
             continue
     return {"trades": out}
+
+
+@router.get("/trades/{ticket}/review")
+def trade_review(ticket: str, runtime: TradingRuntime = Depends(get_runtime),
+                 user=Depends(current_user)):
+    row = runtime.db.query_one("SELECT broker_id,payload FROM trades WHERE ticket=?", (ticket,))
+    if row is None:
+        raise HTTPException(status_code=404, detail="trade not found")
+    try:
+        trade = TradeRecord(**json.loads(row["payload"]))
+    except Exception as exc:  # noqa: BLE001 - don't expose corrupt stored payload
+        raise HTTPException(status_code=409, detail="stored trade evidence is invalid") from exc
+    if row["broker_id"] != runtime.adapter.id or trade.broker_id != runtime.adapter.id:
+        raise HTTPException(status_code=404, detail="trade not found")
+    signal_row = (runtime.db.query_one("SELECT payload FROM signals WHERE id=?", (trade.signal_id,))
+                  if trade.signal_id else None)
+    entry_snapshot = None
+    if signal_row:
+        try:
+            signal_payload = json.loads(signal_row["payload"])
+            if signal_payload.get("broker_id") == trade.broker_id and signal_payload.get("symbol") == trade.symbol:
+                entry_snapshot = signal_payload
+        except (TypeError, json.JSONDecodeError):
+            entry_snapshot = None
+    outcome = "profitable" if trade.pnl > 0 else "loss" if trade.pnl < 0 else "breakeven"
+    retrospective = {
+        "outcome": outcome,
+        "points": trade.points,
+        "pnl": trade.pnl,
+        "r_multiple": trade.r_multiple,
+        "exit_reason": trade.exit_reason,
+        "basis": "recorded trade result; not a new prediction",
+        "limitations": ([] if entry_snapshot else ["ไม่มี snapshot สัญญาณตอนเข้าไม้ที่เชื่อมโยงได้"]),
+        "suggestions": [],
+    }
+    if entry_snapshot:
+        retrospective["suggestions"] = [
+            "ทบทวนเหตุผลและเงื่อนไขความเสี่ยงที่บันทึกไว้ก่อนเข้าไม้ เทียบกับผลจริง; ผลครั้งเดียวไม่ยืนยันว่ากลยุทธ์ดีหรือไม่"
+        ]
+    return {"trade": trade.model_dump(), "entry_snapshot": entry_snapshot,
+            "retrospective": retrospective,
+            "disclaimer": "เป็นการทบทวนข้อมูลในอดีต ไม่ใช่คำแนะนำลงทุนหรือการคาดการณ์ผลครั้งถัดไป"}
+
+
+@router.get("/deals")
+def deals(limit: int = Query(500, ge=1, le=5000), runtime: TradingRuntime = Depends(get_runtime),
+          user=Depends(current_user)):
+    from services.execution_gateway.history import DealLedger
+
+    from integrations.brokers.base import BrokerError
+
+    try:
+        identity = runtime.gateway._assert_account(runtime.adapter)
+    except BrokerError as exc:
+        raise HTTPException(status_code=409, detail="broker history account is unresolved") from exc
+    account_key = f"{identity['server']}:{identity['login']}"
+    ledger = DealLedger(runtime.db)
+    rows = ledger.deals(runtime.adapter.id, account_key)
+    rows = list(reversed(rows[-limit:]))
+    return {"deals": rows, "count": len(rows), "broker_id": runtime.adapter.id,
+            "account_key": account_key, "attribution": "broker deal evidence; not strategy ownership"}
 
 
 @router.get("/journal")

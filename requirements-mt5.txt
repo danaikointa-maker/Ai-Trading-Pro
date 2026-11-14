@@ -1,0 +1,2 @@
+# Optional local Windows diagnostic only; install into the existing .venv.
+MetaTrader5==5.0.6231; sys_platform == "win32"

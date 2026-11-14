@@ -16,6 +16,8 @@ def get_runtime(request: Request) -> TradingRuntime:
     runtime = getattr(request.app.state, "runtime", None)
     if runtime is None:  # pragma: no cover
         raise HTTPException(status_code=503, detail="runtime not ready")
+    if getattr(runtime.db, "workspace_id", None) != get_settings().security.get("workspace_id", "local"):
+        raise HTTPException(status_code=503, detail="runtime workspace identity mismatch")
     return runtime
 
 
@@ -35,6 +37,10 @@ async def current_user(request: Request, token: str | None = Query(default=None)
     endpoint writable by a read-only account.
     """
     settings: Settings = get_settings()
+    runtime = getattr(request.app.state, "runtime", None)
+    if (runtime is None or getattr(runtime.db, "workspace_id", None)
+            != settings.security.get("workspace_id", "local")):
+        raise HTTPException(status_code=503, detail="runtime workspace identity mismatch")
     if not settings.security.get("require_auth", True):
         return {"email": "anonymous", "role": ADMIN, "demo": True}
     header = request.headers.get("authorization", "")

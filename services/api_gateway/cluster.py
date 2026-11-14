@@ -21,6 +21,7 @@ Backends:
 from __future__ import annotations
 
 import json
+import math
 import os
 import time
 from typing import Any, Callable
@@ -181,19 +182,23 @@ def build_shared_state(settings: Any, client_factory: Callable[[], Any] | None =
 def replica_payload(shared: SharedState, key: str = LIVE_KEY) -> dict[str, Any] | None:
     """Read the leader's frame and mark it as such, or None when there is none.
 
-    A replica must never present old frames as current: the age is included so the
-    dashboard can say how stale it is, and an expired frame simply disappears
-    (the TTL is the authority, not this process's memory).
+    TTL is not enough: reject malformed/future/over-age publication timestamps
+    even if a backend retains the item. Account ownership is checked by runtime.
     """
     frame = shared.read(key)
-    if not frame or not isinstance(frame.get("payload"), dict):
+    if not isinstance(frame, dict) or not isinstance(frame.get("payload"), dict):
         return None
-    published = float(frame.get("published_at") or 0)
+    published = frame.get("published_at")
+    now = time.time()
+    if (type(published) not in (int, float) or not math.isfinite(published)
+            or not 0 <= now - published <= DEFAULT_TTL):
+        return None
     return {
         **frame["payload"],
         "replica": True,
         "served_by": frame.get("owner", "unknown"),
-        "frame_age_seconds": round(max(0.0, time.time() - published), 1) if published else None,
+        "frame_age_seconds": now - published,
+        "_account_identity": frame.get("account_identity"),
     }
 
 

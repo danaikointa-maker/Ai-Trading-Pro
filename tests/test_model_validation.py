@@ -6,7 +6,6 @@ folds must clear the same bar), never looser.
 """
 from __future__ import annotations
 
-import time
 
 import pytest
 
@@ -197,34 +196,27 @@ def test_stored_approval_from_an_older_rule_is_demoted(runtime):
     assert predictor.approved is True
 
 
-def test_predictor_loads_the_newest_run_not_the_newest_approval(runtime):
+def test_predictor_loads_the_newest_run_not_the_newest_approval(settings, tmp_path):
     """A fresher rejected run must replace the metrics of an older approved model."""
     from services.ai_forecast.predictor import ForecastPredictor
+    from services.ai_forecast.registry import ModelRegistry
+    from packages.persistence.db import Database
 
-    registry = runtime.model_registry
-    # Timestamps deliberately in the future. The runtime trains a model on boot
-    # (`auto_train_on_boot`), and that background thread registers a row stamped
-    # "now" at some unpredictable point during the session — with created_at=100/200
-    # this test passed or failed depending on how long the tests before it took.
-    base = int(time.time()) + 10_000
-    for version, created, approved in (("m-old-approved", base, 1),
-                                       ("m-new-rejected", base + 100, 0)):
-        registry.db.execute(
-            "INSERT OR REPLACE INTO models(version, created_at, method, approved, samples,"
-            " metrics, notes, path) VALUES(?,?,?,?,?,?,?,?)",
-            (version, created, "test", approved, 10, '{"horizons": {}, "approval_rule": 2}',
-             "", str(registry.model_dir / version)))
+    # A session runtime may finish training concurrently; this assertion needs
+    # its own registry so the two timestamps below are the entire test history.
+    registry = ModelRegistry(tmp_path / "models", Database(tmp_path / "models.sqlite3"))
+    from types import SimpleNamespace
+    from services.ai_forecast.pathprob import PathProbabilityTable
+
+    for version, created, approved in (("m-old-approved", 100, 1),
+                                       ("m-new-rejected", 200, 0)):
+        registry.save(SimpleNamespace(version=version, trained_at=created, approved=bool(approved),
+                                      samples=10, metrics={"horizons": {}, "approval_rule": 2},
+                                      notes="rejected on evidence" if not approved else "approved fixture",
+                                      models={}, feature_columns=[], path_table=PathProbabilityTable()), "XAUUSD")
     assert registry.latest() == "m-new-rejected"
 
-    import joblib
-
-    target = registry.model_dir / "m-new-rejected"
-    target.mkdir(parents=True, exist_ok=True)
-    joblib.dump({"version": "m-new-rejected", "approved": False, "models": {},
-                 "metrics": {"horizons": {}, "approval_rule": 2}, "symbol": "XAUUSD",
-                 "trained_at": base + 100, "notes": "rejected on evidence"}, target / "models.joblib")
-
-    predictor = ForecastPredictor(runtime.settings, registry)
+    predictor = ForecastPredictor(settings, registry)
     predictor.load_latest()
     assert predictor.version == "m-new-rejected"
     assert predictor.approved is False

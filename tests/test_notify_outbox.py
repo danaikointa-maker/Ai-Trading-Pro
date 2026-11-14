@@ -458,6 +458,19 @@ def test_a_real_time_drain_spaces_messages_instead_of_giving_up_on_them(db):
     assert elapsed >= 0.05, "they were spaced, not fired as a burst"
 
 
+def test_drain_does_not_reserve_the_pacing_slot_twice(db, monkeypatch):
+    n = webhook_notifier(db, "https://example.invalid/hook", transport=FlakyTransport(),
+                         min_interval_seconds=0.05)
+    n.outbox.enqueue("webhook", "one", "m", delay=0, now=time.time() - 1)
+    checks = iter([False, False, True])
+    monkeypatch.setattr(n, "_paced", lambda channel: next(checks))
+    monkeypatch.setattr(n._closing, "wait", lambda timeout: False)
+    n._last_send["webhook"] = time.monotonic()
+    result = n.drain()
+    assert result["sent"] == 1
+    assert result["paced"] == 0
+
+
 def test_a_simulated_drain_never_sleeps(db):
     n = webhook_notifier(db, "https://example.invalid/hook", transport=FlakyTransport(),
                          min_interval_seconds=30)

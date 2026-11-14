@@ -43,7 +43,12 @@ export async function request(path, { method = 'GET', body, silent = false } = {
     }
     const detail = data && (data.detail || data.error)
     const message = typeof detail === 'string' ? detail : JSON.stringify(detail || data || res.statusText)
-    if (!silent) throw new Error(message)
+    if (!silent) {
+      const error = new Error(message)
+      error.detail = detail
+      error.status = res.status
+      throw error
+    }
   }
   return data
 }

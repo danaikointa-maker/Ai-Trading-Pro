@@ -1,5 +1,11 @@
 # Runbook — ตั้งค่าและดูแลระบบ
 
+> **Safety baseline:** อ่าน [`BASELINE-P1.th.md`](BASELINE-P1.th.md) และ
+> [`SAFETY-HANDOFF.th.md`](SAFETY-HANDOFF.th.md) ก่อนดำเนินการ ขั้นตอนเปิด terminal/Algo Trading,
+> เชื่อม MT5/Redis, restart หรือ deploy ใน runbook เป็นคำแนะนำสำหรับการอนุมัติแยก
+> ไม่ใช่สิทธิ์จากการผ่าน local QA; งานเฟส 1 ไม่ได้ทำขั้นตอนเหล่านั้น
+> Local Windows QA ที่ไม่เริ่ม service ใช้ [`LOCAL-VERIFICATION.th.md`](LOCAL-VERIFICATION.th.md)
+
 ## 1. Linux / macOS (โหมด demo, ไม่ต้องมี MT5)
 
 ```bash
@@ -309,6 +315,11 @@ curl -s localhost:8000/sw.js | grep "const VERSION"   # ต้องเป็น
 - dev (vite 5173) **ไม่มี** service worker — การทดสอบ PWA ต้องใช้ build + uvicorn เท่านั้น
 
 ## 12. เชื่อม MT5 ผ่าน EA bridge (ไม่ต้องรันเซิร์ฟเวอร์บน Windows)
+
+> **ขั้นตอนเดิมด้านล่างเป็นข้อมูลเก่า ไม่ใช่คำสั่งเปิดใช้งานในรอบนี้**:
+> bridge ปัจจุบันมีค่าเริ่มต้น read-only และต้องระบุ Demo login/server จริง
+> ดู [ขั้นตอนส่งต่องานและ acceptance ปัจจุบัน](SAFETY-HANDOFF.th.md) ก่อนติดตั้งหรือเปลี่ยนค่า
+> ห้ามเปิด Algo Trading หรือเปิด execution ตามตัวอย่างเดิม; simulator ไม่ใช่ข้อมูลโบรกเกอร์จริง
 
 **หลักการ**: เซิร์ฟเวอร์ไม่ถือรหัส MT5 เลย — EA ในเทอร์มินัลจะ poll `/api/bridge/poll` ทุก 1 วินาที
 ส่ง snapshot (บัญชี/ราคา/โพซิชัน/M1 rates) และรับคำสั่งไป execute แล้วรายงานกลับครั้งเดียว

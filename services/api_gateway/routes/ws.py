@@ -8,6 +8,7 @@ from fastapi import APIRouter, Query, WebSocket, WebSocketDisconnect
 
 from packages.shared_schemas.settings import get_settings
 from services.api_gateway.auth import decode_token
+from services.api_gateway.roles import normalize_role
 
 router = APIRouter(tags=["websocket"])
 
@@ -29,53 +30,69 @@ def _identity(ws: WebSocket, payload: dict | None) -> str:
     return f"ip:{client.host if client else 'unknown'}"
 
 
+def _authority(runtime, settings, token):
+    """Return a current identity/role, or a close code. Never trust token roles."""
+    if getattr(runtime.db, "workspace_id", None) != settings.security.get("workspace_id", "local"):
+        return None, 1011
+    if not settings.security.get("require_auth", True):
+        return ("anonymous", "anonymous"), None
+    payload = decode_token(settings, token or "")
+    if not payload or not payload.get("sub"):
+        return None, 4401
+    try:
+        row = runtime.db.query_one("SELECT email, role, active FROM users WHERE email = ?",
+                                   (str(payload["sub"]).lower(),))
+    except Exception:  # noqa: BLE001 - no frames when authority cannot be verified
+        return None, 1011
+    if row is None:
+        return None, 4401
+    if not bool(row["active"] if row["active"] is not None else 1):
+        return None, 4403
+    return (row["email"], normalize_role(row["role"])), None
+
+
 @router.websocket("/ws/live")
 async def live_socket(ws: WebSocket, token: str | None = Query(default=None)):
     settings = get_settings()
-    require_auth = bool(settings.security.get("require_auth", True))
-    payload = decode_token(settings, token or "") if token else None
-    if require_auth and not payload:
-        await ws.close(code=WS_UNAUTHORIZED)
+    runtime = ws.app.state.runtime
+    authority, code = await asyncio.to_thread(_authority, runtime, settings, token)
+    if code:
+        await ws.close(code=code)
         return
-
     quota = getattr(ws.app.state, "ws_quota", None)
-    identity = _identity(ws, payload)
-    lease = quota.acquire(identity) if quota is not None else None
+    payload = {"sub": authority[0]} if settings.security.get("require_auth", True) else None
+    quota_identity = _identity(ws, payload) if quota is not None else ""
+    lease = quota.acquire(quota_identity) if quota is not None else None
     if quota is not None and lease is None:
-        # Accept first, then close: a handshake rejection gives the browser nothing to
-        # show, while a close code plus one frame tells the client what to fix.
         await ws.accept()
-        held, total = quota.counts(identity)
+        held, total = quota.counts(quota_identity)
         await ws.send_text(json.dumps({
             "type": "error", "code": WS_OVER_QUOTA,
             "error": "too many open connections",
-            "detail": (f"{identity} already holds {held} of {quota.per_identity} live sockets "
+            "detail": (f"{quota_identity} already holds {held} of {quota.per_identity} live sockets "
                        f"({total} open in total, limit {quota.max_total_label()})"),
         }))
         await ws.close(code=WS_OVER_QUOTA)
         return
-
-    await ws.accept()
-    runtime = ws.app.state.runtime
     # A "tick" frame is a light payload without analysis/forecast. Sending only
     # one full frame at connect meant those blocks never refreshed (and, before
     # the client merged frames, they vanished after the first second).
     # The cadence is time based on purpose: `runtime.version` bumps on every tick
     # cycle, so keying off it would send the heavy payload every single second.
-    full_every_seconds = float(settings.app.get("ws", {}).get("full_snapshot_seconds", 5))
-    # Renew well before the lease expires, so one slow payload cannot drop the slot.
-    renew_every = max(2.0, (lease.expires_at - time.time()) / 3) if lease else 1e9
     try:
+        full_every_seconds = float(settings.app.get("ws", {}).get("full_snapshot_seconds", 5))
+        # Configuration/accept failures must release the reserved lease too.
+        renew_every = max(2.0, (lease.expires_at - time.time()) / 3) if lease else 1e9
+        await ws.accept()
         full = True
         last_full = 0.0
         last_renew = time.time()
         while True:
-            now = time.time()
-            # A token that expires mid-stream must end the stream: without this the
-            # socket outlives the credential that opened it, for as long as it stays up.
-            if payload and payload.get("exp") and now >= float(payload["exp"]):
-                await ws.close(code=WS_UNAUTHORIZED)
+            current, code = await asyncio.to_thread(_authority, runtime, settings, token)
+            if code or current != authority:
+                await ws.close(code=code or 4403)
                 return
+            now = time.time()
             if lease is not None and now - last_renew >= renew_every:
                 if not quota.renew(lease):
                     await ws.close(code=WS_OVER_QUOTA)
@@ -88,6 +105,11 @@ async def live_socket(ws: WebSocket, token: str | None = Query(default=None)):
             else:
                 data = await asyncio.to_thread(runtime.live_payload, True)
                 data["type"] = "tick"
+            # Payload generation can take time; recheck immediately before disclosure.
+            current, code = await asyncio.to_thread(_authority, runtime, settings, token)
+            if code or current != authority:
+                await ws.close(code=code or 4403)
+                return
             await ws.send_text(json.dumps(data, default=str))
             await asyncio.sleep(1.0)
     except WebSocketDisconnect:

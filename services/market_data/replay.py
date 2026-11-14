@@ -19,6 +19,7 @@ Two things it deliberately does *not* do:
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+from pathlib import Path
 from typing import Any
 
 import numpy as np
@@ -269,10 +270,27 @@ def build_feed(settings: Any, symbols: dict[str, dict[str, Any]],
     timeframe = str(replay_cfg.get("timeframe", "M1"))
     must_have = set(required or symbols)
     try:
+        configured_root = Path(settings.paths["datasets"]).expanduser()
+        if any(part.is_symlink() for part in (configured_root, *configured_root.parents)):
+            raise DatasetError("configured dataset workspace is linked")
+        root = configured_root.resolve()
+        selected = Path(dataset_dir).expanduser()
+        if not selected.is_absolute():
+            selected = Path(settings.root) / selected
+        if not selected.resolve().is_relative_to(root):
+            raise DatasetError("dataset selection outside workspace")
+        dataset_dir = selected
         frames: dict[str, Any] = {}
         missing: list[str] = []
         for symbol in symbols:
             try:
+                # Constrain names and the actual file, not only its parent.
+                if (not symbol or any(c in symbol for c in '/\\:')
+                        or not timeframe.isalnum()):
+                    raise DatasetError("invalid workspace dataset identifier")
+                artifact = selected / f"{symbol.upper()}_{timeframe.upper()}.csv"
+                if artifact.is_symlink() or not artifact.resolve().is_relative_to(root):
+                    raise DatasetError("dataset artifact outside workspace")
                 frames[symbol] = load_dataset(dataset_dir, symbol, timeframe)
             except DatasetError as exc:
                 if symbol in must_have:

@@ -140,6 +140,7 @@ class PaperBroker(BrokerAdapter):
         if symbol not in self._specs:
             raise BrokerError(f"symbol {symbol} not available on {self.label}")
         spec = self._specs[symbol].model_copy()
+        spec.account_currency = self.account_currency
         rate, source = self._quote_rate(spec)
         spec.quote_to_account_rate = rate
         spec.rate_source = source  # type: ignore[assignment]

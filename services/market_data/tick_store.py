@@ -19,7 +19,11 @@ from __future__ import annotations
 
 import gzip
 import hashlib
+import io
 import json
+import re
+import zlib
+from datetime import date
 from collections import OrderedDict
 from dataclasses import dataclass
 from pathlib import Path
@@ -54,29 +58,62 @@ def day_key(epoch: int) -> str:
 
 
 def symbol_dir(root: str | Path, symbol: str) -> Path:
-    return Path(root) / "ticks" / symbol.upper()
+    if (not isinstance(symbol, str)
+            or not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9_.-]{0,63}", symbol)
+            or symbol.endswith(".")
+            or symbol.split(".")[0].upper() in {
+                "CON", "PRN", "AUX", "NUL",
+                *(f"COM{i}" for i in range(1, 10)), *(f"LPT{i}" for i in range(1, 10)),
+            }):
+        raise TickStoreError("invalid tick symbol path")
+    return _checked_path(Path(root) / "ticks" / symbol.upper())
+
+
+def _checked_path(path: Path) -> Path:
+    if any(p.is_symlink() for p in (path, *path.parents)):
+        raise TickStoreError("tick artifact path is linked")
+    return path
 
 
 def day_path(root: str | Path, symbol: str, day: str, fmt: str) -> Path:
-    return symbol_dir(root, symbol) / f"{day}.{fmt}"
+    if not isinstance(day, str) or not re.fullmatch(r"\d{4}-\d{2}-\d{2}", day):
+        raise TickStoreError("invalid tick day path")
+    try:
+        date.fromisoformat(day)
+    except ValueError:
+        raise TickStoreError("invalid tick day path") from None
+    if fmt not in DAILY_FORMATS:
+        raise TickStoreError("invalid tick format path")
+    return _checked_path(symbol_dir(root, symbol) / f"{day}.{fmt}")
 
 
 # --------------------------------------------------------------------- writing
 def _write_day(path: Path, frame: pd.DataFrame) -> None:
+    _checked_path(path)
     path.parent.mkdir(parents=True, exist_ok=True)
-    tmp = path.with_suffix(path.suffix + ".tmp")
-    if path.suffix == ".parquet":
-        # Monotonic `t` packs to almost nothing as a delta and dictionary-encoding it
-        # would be the opposite; with that one change parquet is as small as the gzip
-        # CSV and reads roughly ten times faster.
-        frame.to_parquet(tmp, index=False, compression="zstd", compression_level=9,
-                         use_dictionary=False,
-                         column_encoding={"t": "DELTA_BINARY_PACKED"})
-    else:
-        tmp.write_bytes(gzip.compress(
-            frame.to_csv(index=False, float_format="%.5f", lineterminator="\n").encode(),
-            mtime=0))
-    tmp.replace(path)
+    tmp = _checked_path(path.with_suffix(path.suffix + ".tmp"))
+    try:
+        # Exclusive creation never truncates or follows an existing staging artifact.
+        with tmp.open("xb") as output:
+            if path.suffix == ".parquet":
+                frame.to_parquet(output, index=False, compression="zstd", compression_level=9,
+                                 use_dictionary=False,
+                                 column_encoding={"t": "DELTA_BINARY_PACKED"})
+            else:
+                output.write(gzip.compress(
+                    frame.to_csv(index=False, float_format="%.5f", lineterminator="\n").encode(),
+                    mtime=0))
+        _checked_path(path)
+        tmp.replace(path)
+    except OSError:
+        raise TickStoreError("tick staging write failed; refusing existing or incomplete artifact") from None
+
+
+def legacy_tick_path(root: str | Path, symbol: str, *, metadata: bool = False) -> Path:
+    """Use the same symbol/root guards for the older single-file layout."""
+    folder = symbol_dir(root, symbol)
+    suffix = "json" if metadata else "csv.gz"
+    return _checked_path(folder.parent / f"{folder.name}_ticks.{suffix}")
 
 
 def read_day(root: str | Path, symbol: str, day: str) -> tuple[pd.DataFrame, str] | None:
@@ -85,12 +122,30 @@ def read_day(root: str | Path, symbol: str, day: str) -> tuple[pd.DataFrame, str
         path = day_path(root, symbol, day, fmt)
         if not path.exists():
             continue
-        if fmt == "parquet":
-            frame = pd.read_parquet(path, columns=COLUMNS)
-        else:
-            frame = pd.read_csv(path)
-        frame = frame[COLUMNS].sort_values("t", kind="stable").reset_index(drop=True)
-        frame["t"] = frame["t"].astype("int64")
+        manifest = read_manifest(root, symbol)
+        entry = next((e for e in manifest.get("days", []) if e["day"] == day
+                      and e["format"] == fmt), None)
+        if entry is None:
+            raise TickStoreError("tick day is not registered in a valid manifest")
+        try:
+            raw = path.read_bytes()
+            if (len(raw) != entry["bytes"]
+                    or hashlib.sha256(raw).hexdigest() != entry["stored_sha256"]):
+                raise ValueError("size mismatch")
+            if fmt == "parquet":
+                frame = pd.read_parquet(io.BytesIO(raw), columns=COLUMNS)
+            else:
+                frame = pd.read_csv(io.BytesIO(gzip.decompress(raw)))
+            frame = frame[COLUMNS].sort_values("t", kind="stable").reset_index(drop=True)
+            frame["t"] = frame["t"].astype("int64")
+            digest = hashlib.sha256(frame.to_csv(index=False, float_format="%.5f",
+                                                 lineterminator="\n").encode()).hexdigest()
+            if (digest != entry["sha256"] or len(frame) != entry["rows"]
+                    or int(frame["t"].iloc[0]) != entry["first_t"]
+                    or int(frame["t"].iloc[-1]) != entry["last_t"]):
+                raise ValueError("content mismatch")
+        except (OSError, ValueError, EOFError, KeyError, IndexError, zlib.error):
+            raise TickStoreError("tick day integrity corrupted; refusing changed data") from None
         return frame, fmt
     return None
 
@@ -99,14 +154,67 @@ def available_days(root: str | Path, symbol: str) -> list[str]:
     folder = symbol_dir(root, symbol)
     if not folder.is_dir():
         return []
-    days = {p.name.rsplit(".", 1)[0] if p.suffix == ".gz" else p.stem
-            for p in folder.iterdir()
-            if p.name.endswith((".parquet", ".csv.gz")) and not p.name.endswith(".tmp")}
+    days = set()
+    for path in folder.iterdir():
+        for fmt in DAILY_FORMATS:
+            suffix = f".{fmt}"
+            if not path.name.endswith(suffix):
+                continue
+            day = path.name[:-len(suffix)]
+            checked = day_path(root, symbol, day, fmt)
+            if not checked.is_file():
+                raise TickStoreError("tick inventory path is not a regular file")
+            days.add(day)
+            break
     return sorted(days)
 
 
 def manifest_path(root: str | Path, symbol: str) -> Path:
-    return symbol_dir(root, symbol) / "manifest.json"
+    return _checked_path(symbol_dir(root, symbol) / "manifest.json")
+
+
+def read_manifest(root: str | Path, symbol: str) -> dict[str, Any]:
+    """Validate local index identity; this is not a signature or data verification."""
+    path = manifest_path(root, symbol)
+    if not path.exists():
+        return {}
+    try:
+        payload = json.loads(path.read_text("utf-8"))
+        if (not isinstance(payload, dict) or type(payload.get("schema")) is not int
+                or payload["schema"] != 1 or payload.get("symbol") != symbol.upper()
+                or payload.get("layout") != "daily"
+                or payload.get("dataset_root") != str(Path(root).resolve())
+                or not isinstance(payload.get("days"), list)):
+            raise ValueError("invalid identity")
+        seen = set()
+        for entry in payload["days"]:
+            if not isinstance(entry, dict):
+                raise ValueError("invalid entry")
+            day = entry["day"]
+            expected = day_path(root, symbol, day, entry["format"])
+            if (day in seen or entry.get("path") != str(expected)
+                    or any(type(entry.get(k)) is not int for k in ("rows", "bytes", "first_t", "last_t"))
+                    or entry["rows"] <= 0 or entry["bytes"] <= 0
+                    or entry["first_t"] > entry["last_t"]
+                    or day_key(entry["first_t"]) != day or day_key(entry["last_t"]) != day
+                    or not isinstance(entry.get("sha256"), str)
+                    or not re.fullmatch(r"[0-9a-f]{64}", entry["sha256"])
+                    or not isinstance(entry.get("stored_sha256"), str)
+                    or not re.fullmatch(r"[0-9a-f]{64}", entry["stored_sha256"])):
+                raise ValueError("invalid entry")
+            seen.add(day)
+        expected_totals = {
+            "rows": sum(e["rows"] for e in payload["days"]),
+            "days_covered": len(payload["days"]),
+            "first_t": min((e["first_t"] for e in payload["days"]), default=None),
+            "last_t": max((e["last_t"] for e in payload["days"]), default=None),
+        }
+        if any(type(payload.get(k)) is not type(v) or payload.get(k) != v
+               for k, v in expected_totals.items()):
+            raise ValueError("inconsistent aggregate")
+        return payload
+    except (OSError, ValueError, TypeError, KeyError, OverflowError):
+        raise TickStoreError("tick manifest provenance invalid; refusing untrusted index") from None
 
 
 def write_manifest(root: str | Path, symbol: str, *, source: dict[str, Any],
@@ -116,18 +224,19 @@ def write_manifest(root: str | Path, symbol: str, *, source: dict[str, Any],
     Importing October today and November next week must not make October disappear from
     the inventory — and a day whose file was pruned must not linger claiming rows.
     """
-    previous = {}
+    if extras and set(extras) & {
+        "schema", "dataset_root", "symbol", "layout", "source", "days", "rows",
+        "first_t", "last_t", "days_covered",
+    }:
+        raise TickStoreError("tick manifest identity cannot be overridden")
+    previous = {d["day"]: d for d in read_manifest(root, symbol).get("days", [])}
     path = manifest_path(root, symbol)
-    if path.exists():
-        try:
-            previous = {d["day"]: d for d in json.loads(path.read_text("utf-8")).get("days", [])
-                        if d.get("day")}
-        except (json.JSONDecodeError, KeyError, TypeError):
-            previous = {}
     on_disk = set(available_days(root, symbol))
     merged = {**previous, **{d["day"]: d for d in days}}
     days = [merged[k] for k in sorted(merged) if k in on_disk]
     payload = {
+        "schema": 1,
+        "dataset_root": str(Path(root).resolve()),
         "symbol": symbol.upper(),
         "layout": "daily",
         "source": source,
@@ -163,6 +272,7 @@ def write_days(root: str | Path, symbol: str, frame: pd.DataFrame, *,
         out.append({"day": day, "rows": int(len(rows)), "first_t": int(rows["t"].iloc[0]),
                     "last_t": int(rows["t"].iloc[-1]), "format": fmt,
                     "bytes": path.stat().st_size, "sha256": digest,
+                    "stored_sha256": hashlib.sha256(path.read_bytes()).hexdigest(),
                     "path": str(path)})
     return out
 
@@ -178,13 +288,7 @@ def coverage(root: str | Path, symbol: str) -> dict[str, Any]:
                 continue
             rows.append({"day": day, "format": fmt, "bytes": path.stat().st_size})
             break
-    manifest = None
-    path = manifest_path(root, symbol)
-    if path.exists():
-        try:
-            manifest = json.loads(path.read_text("utf-8"))
-        except json.JSONDecodeError:
-            manifest = None
+    manifest = read_manifest(root, symbol) or None
     by_day = {d["day"]: d for d in (manifest or {}).get("days", [])}
     out = []
     for row in rows:
@@ -238,6 +342,7 @@ class TickStore:
         self._total_rows = self._rows_from_manifest()
         self._rows_by_day = self._rows_by_day_from_manifest()
         self._bounds: dict[str, tuple[int, int]] = self._bounds_from_manifest()
+        self._index_identity = self._manifest()
         # A day with no manifest entry (files copied in by hand) has to be read once to
         # learn its range; everything the importer wrote is answered from the manifest,
         # so constructing a book over 30 days reads zero files.
@@ -253,13 +358,7 @@ class TickStore:
                 self._bounds[day] = (int(frame["t"].iloc[0]), int(frame["t"].iloc[-1]))
 
     def _manifest(self) -> dict[str, Any]:
-        path = manifest_path(self.root, self.symbol)
-        if not path.exists():
-            return {}
-        try:
-            return json.loads(path.read_text("utf-8"))
-        except json.JSONDecodeError:
-            return {}
+        return read_manifest(self.root, self.symbol)
 
     def _rows_by_day_from_manifest(self) -> dict[str, int]:
         return {str(d["day"]): int(d.get("rows") or 0)
@@ -272,13 +371,7 @@ class TickStore:
         return 0
 
     def _bounds_from_manifest(self) -> dict[str, tuple[int, int]]:
-        path = manifest_path(self.root, self.symbol)
-        if not path.exists():
-            return {}
-        try:
-            payload = json.loads(path.read_text("utf-8"))
-        except json.JSONDecodeError:
-            return {}
+        payload = self._manifest()
         out: dict[str, tuple[int, int]] = {}
         for entry in payload.get("days", []):
             if entry.get("day") and entry.get("first_t") is not None:
@@ -308,6 +401,8 @@ class TickStore:
         return int(coverage(self.root, self.symbol)["rows"] or 0)
 
     def day_frame(self, day: str) -> pd.DataFrame | None:
+        if self._manifest() != self._index_identity:
+            raise TickStoreError("tick manifest index changed; construct a fresh store")
         if day in self._cache:
             self._cache.move_to_end(day)
             return self._cache[day]
@@ -405,12 +500,24 @@ def prune_days(root: str | Path, symbol: str, keep_days: int) -> dict[str, Any]:
     days = available_days(root, symbol)
     if keep_days <= 0:
         raise TickStoreError("keep_days must be > 0")
+    manifest = read_manifest(root, symbol)
+    if days and not manifest:
+        raise TickStoreError("tick manifest missing; refusing prune of unregistered index")
     drop = days[:-keep_days] if len(days) > keep_days else []
+    # Preflight every selected destination before the first destructive operation.
+    targets = [(day, fmt, day_path(root, symbol, day, fmt))
+               for day in drop for fmt in DAILY_FORMATS]
+    for _, _, path in targets:
+        if path.exists() and not path.is_file():
+            raise TickStoreError("tick prune path is not a regular file")
     removed = []
-    for day in drop:
-        for fmt in DAILY_FORMATS:
-            path = day_path(root, symbol, day, fmt)
-            if path.exists():
-                path.unlink()
-                removed.append({"day": day, "format": fmt})
+    for day, fmt, path in targets:
+        if path.exists():
+            path.unlink()
+            removed.append({"day": day, "format": fmt})
+    if removed:
+        identity = {"schema", "dataset_root", "symbol", "layout", "source", "days",
+                    "rows", "first_t", "last_t", "days_covered"}
+        write_manifest(root, symbol, source=manifest.get("source", {}), days=[],
+                       extras={k: v for k, v in manifest.items() if k not in identity})
     return {"removed": removed, "kept": days[-keep_days:], "remaining": available_days(root, symbol)}

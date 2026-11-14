@@ -33,6 +33,7 @@ class ForecastPredictor:
     def __init__(self, settings: Settings, registry: ModelRegistry) -> None:
         self.settings = settings
         self.registry = registry
+        self._generation = 0
         self.horizons = [int(h) for h in settings.ai.get("horizons_minutes", [5, 15, 30, 60, 240])]
         self.deadband = float(settings.ai.get("forecast", {}).get("deadband_atr", 0.25))
         self.fan_points = int(settings.ai.get("forecast", {}).get("fan_points", 24))
@@ -50,6 +51,16 @@ class ForecastPredictor:
 
     # ------------------------------------------------------------------ load
     def load_latest(self) -> bool:
+        self._generation += 1
+        # Revalidation failure must not retain previously approved model state.
+        self.models = {}
+        self.path_table = None
+        self.version = "baseline-statistical"
+        self.symbol = ""
+        self.metrics = {}
+        self.approved = False
+        self.trained_at = 0
+        self.notes = "Statistical baseline only — model absent or quarantined by provenance checks."
         # Newest run, not newest approval: an unapproved model is never used for
         # gating (see `approved` checks below), but its metrics are the truth about
         # the current training state and the dashboard should show that, not the
@@ -65,6 +76,8 @@ class ForecastPredictor:
         return True
 
     def install_payload(self, payload: dict[str, Any], arrays: dict[str, np.ndarray]) -> None:
+        self._generation += 1
+        self.path_table = None
         self.models = {int(k): v for k, v in (payload.get("models") or {}).items()}
         self.version = payload.get("version", "unknown")
         self.symbol = payload.get("symbol", "")
@@ -85,16 +98,13 @@ class ForecastPredictor:
                 continue
 
     def install(self, result: TrainingResult, symbol: str) -> None:
-        path = self.registry.save(result, symbol)
-        payload = {
-            "version": result.version, "symbol": symbol, "models": result.models,
-            "feature_columns": result.feature_columns, "trained_at": result.trained_at,
-            "metrics": result.metrics, "approved": result.approved, "notes": result.notes,
-        }
-        self.install_payload(payload, result.path_table.arrays())
-        del path
+        self.registry.save(result, symbol)
+        # Training is not a privileged installation path: consume registered bytes
+        # and persisted approval exactly as on restart, not the in-memory result.
+        self.load_latest()
 
     def status(self) -> ModelInfo | None:
+        self.revalidate()
         if not self.models:
             return None
         return ModelInfo(
@@ -108,6 +118,27 @@ class ForecastPredictor:
             samples=int(self.metrics.get("samples", 0)),
             notes=self.notes,
         )
+
+    def revalidate(self) -> bool:
+        """Demote loaded evidence when persisted authority changes; never reload it."""
+        if not self.approved:
+            return False
+        generation = self._generation
+        version = self.version
+        self.approved = False
+        try:
+            valid = self.registry.inference_allowed(version)
+        except Exception:  # unavailable authority cannot retain approval
+            valid = False
+        if generation != self._generation or version != self.version:
+            return False
+        if valid:
+            self.approved = True
+        else:
+            self.models = {}
+            self.path_table = None
+            self.notes = "Model authority unavailable, revoked or quarantined; showing baseline."
+        return self.approved
 
     # -------------------------------------------------------------- forecast
     def _baseline(self, m5: pd.DataFrame) -> dict[int, dict[str, float]]:
@@ -134,6 +165,7 @@ class ForecastPredictor:
         return out
 
     def forecast(self, m5: pd.DataFrame, spec: SymbolSpec, symbol: str) -> ForecastBundle:
+        self.revalidate()
         if len(m5) < 260:
             raise ValueError("not enough M5 history for a forecast")
         X, _ = inference_vector(m5)
@@ -155,7 +187,7 @@ class ForecastPredictor:
             q10, q50, q90 = base["q10"], base["q50"], base["q90"]
             cov_note = "Unconditional distribution — not a validated edge."
             sample = int(base.get("samples", 0))
-            if model is not None and getattr(model, "approved", False):
+            if self.approved and model is not None and getattr(model, "approved", False):
                 try:
                     probs = model.predict_proba(X.reshape(1, -1))[0]
                     qs = model.predict_quantiles(X.reshape(1, -1))
@@ -181,7 +213,7 @@ class ForecastPredictor:
             tp_points, sl_points = self._reference_levels(atr_points)
             p_path, n_path = self.p_tp_before_sl(tp_points, sl_points, minutes, p_up,
                                                  atr_points=atr_points, direction=1)
-            if self.path_table is None or self.path_table.samples == 0:
+            if not self.approved or self.path_table is None or self.path_table.samples == 0:
                 p_path = 0.5 * p_up + 0.25
             confidence = self._confidence(calibrated, model, p_up, p_side)
 
@@ -267,7 +299,8 @@ class ForecastPredictor:
 
     def p_tp_before_sl(self, tp_points: float, sl_points: float, horizon_minutes: int,
                        p_up: float, atr_points: float, direction: int = 1) -> tuple[float, int]:
-        if self.path_table is None or self.path_table.samples == 0 or atr_points <= 0:
+        self.revalidate()
+        if not self.approved or self.path_table is None or self.path_table.samples == 0 or atr_points <= 0:
             return 0.0, 0
         tp_atr = tp_points / atr_points
         sl_atr = sl_points / atr_points

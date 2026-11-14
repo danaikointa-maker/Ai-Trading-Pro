@@ -65,7 +65,11 @@
               <th>P&L</th><th>R</th><th>Exit reason</th><th>Strategy</th><th>Mode</th></tr>
           </thead>
           <tbody>
-            <tr v-for="t in trades" :key="t.ticket" class="hover:bg-ink-800/40">
+            <tr v-for="t in trades" :key="t.ticket" tabindex="0" role="button"
+                :class="selectedTrade?.ticket === t.ticket ? 'bg-ink-800/70 ring-1 ring-gold/50' : ''"
+                :aria-label="`เปิดทบทวนไม้ ${t.symbol} ${t.direction === 'up' ? 'ซื้อ' : 'ขาย'} หมายเลข ${t.ticket}`"
+                :aria-expanded="selectedTrade?.ticket === t.ticket" class="cursor-pointer hover:bg-ink-800/40"
+                @click="selectTrade(t)" @keydown.enter.prevent="selectTrade(t)" @keydown.space.prevent="selectTrade(t)">
               <td class="num text-[10.5px] text-muted">{{ datetime(t.closed_at) }}</td>
               <td>{{ t.symbol }}</td>
               <td><span class="chip" :class="t.direction === 'up' ? 'chip-up' : 'chip-down'">{{ t.direction === 'up' ? 'BUY' : 'SELL' }}</span></td>
@@ -80,6 +84,61 @@
               <td class="text-[10.5px] text-muted">{{ t.mode }}</td>
             </tr>
             <tr v-if="!trades.length"><td colspan="12" class="py-6 text-center text-[11px] text-muted">ยังไม่มีไม้ที่ปิดแล้ว</td></tr>
+          </tbody>
+        </table>
+      </div>
+    </section>
+
+    <section v-if="selectedTrade" class="panel" aria-live="polite">
+      <div class="panel-head">
+        <div><div class="panel-title">ทบทวนไม้ {{ selectedTrade.symbol }} · {{ selectedTrade.direction === 'up' ? 'ซื้อ' : 'ขาย' }}</div>
+          <p class="text-[10px] text-muted">{{ datetime(selectedTrade.opened_at) }} → {{ datetime(selectedTrade.closed_at) }} · ticket {{ selectedTrade.ticket }}</p></div>
+        <button class="btn py-1.5" @click="selectedTrade = null">ปิดรายละเอียด</button>
+      </div>
+      <div v-if="reviewLoading" class="px-4 py-5 text-sm text-muted">กำลังอ่านบันทึกไม้…</div>
+      <p v-else-if="reviewError" class="px-4 py-5 text-sm text-down">{{ reviewError }} <button class="btn ml-2" @click="selectTrade(selectedTrade)">ลองอีกครั้ง</button></p>
+      <div v-else-if="review" class="grid gap-3 p-4 md:grid-cols-2">
+        <article class="rounded-lg border border-ink-700 p-3">
+          <h2 class="text-sm font-semibold">ตอนเข้าไม้ · ข้อมูลที่บันทึกไว้</h2>
+          <p v-if="review.entry_snapshot" class="mt-2 text-xs leading-relaxed text-slate-300">สัญญาณ {{ review.entry_snapshot.action }} · คะแนน {{ fmt(review.entry_snapshot.score, 0) }} · กลยุทธ์ {{ review.entry_snapshot.strategy }} · ภาวะตลาด {{ review.entry_snapshot.regime }}</p>
+          <p v-else class="mt-2 text-xs text-amber-300">ไม่มี snapshot สัญญาณที่เชื่อมกับไม้ จึงไม่สรุปเหตุผลตอนเข้า</p>
+          <p v-if="review.entry_snapshot?.reasons?.length" class="mt-2 text-xs text-muted">เหตุผล: {{ review.entry_snapshot.reasons.join(' · ') }}</p>
+          <p v-if="review.entry_snapshot?.plan" class="mt-2 text-xs text-muted">แผนเดิม: SL {{ fmt(review.entry_snapshot.plan.sl) }} · เป้าหมาย {{ fmt(review.entry_snapshot.plan.tp3) }} · ความเสี่ยงตามแผน {{ money(review.entry_snapshot.plan.risk_amount) }}</p>
+        </article>
+        <article class="rounded-lg border border-ink-700 p-3">
+          <h2 class="text-sm font-semibold">หลังปิด · ผลจริงและทบทวน</h2>
+          <p class="mt-2 text-xs text-slate-300">ผล: {{ review.retrospective.outcome === 'profitable' ? 'กำไร' : review.retrospective.outcome === 'loss' ? 'ขาดทุน' : 'เท่าทุน' }} · {{ money(review.retrospective.pnl) }} · {{ fmt(review.retrospective.points, 0) }} จุด · {{ fmt(review.retrospective.r_multiple, 2) }}R</p>
+          <p class="mt-2 text-xs leading-relaxed text-muted">ข้อชวนทบทวน: {{ review.retrospective.suggestions[0] || 'ข้อมูลที่บันทึกยังไม่พอสำหรับข้อเสนอแนะเฉพาะไม้' }}</p>
+          <p class="mt-2 text-[10px] text-amber-300">{{ review.retrospective.basis }} · ไม่ใช่คำทำนายหรือคำแนะนำลงทุน</p>
+        </article>
+        <p class="text-[10px] leading-relaxed text-muted md:col-span-2">ข้อมูลนี้อ่านจากประวัติที่บันทึกในระบบ จึงดูได้เมื่อตลาดปิด แต่ต้องมีแอป/API และฐานข้อมูลที่เก็บประวัติพร้อมใช้งาน; ไม่รับประกันเมื่อเครื่องหรือเซิร์ฟเวอร์หยุดทำงาน</p>
+      </div>
+    </section>
+
+    <section class="panel">
+      <div class="panel-head">
+        <div>
+          <div class="panel-title">Broker deals / fills</div>
+          <p class="text-[10px] text-muted">หลักฐานการ fill จากบัญชี broker · ไม่ใช่การยืนยัน ownership ของ strategy</p>
+        </div>
+        <span class="chip">{{ deals.length }} records · {{ dealAccount || 'account unresolved' }}</span>
+      </div>
+      <div class="overflow-x-auto">
+        <table class="table-base">
+          <thead><tr><th>Time</th><th>Deal / Order / Position</th><th>Symbol</th><th>Side</th><th>Entry</th><th>Volume</th><th>Price</th><th>Costs</th><th>Profit</th></tr></thead>
+          <tbody>
+            <tr v-for="d in deals" :key="d.deal_id">
+              <td class="num text-[10px]">{{ datetime(d.time_msc / 1000) }}</td>
+              <td class="text-[10px]">{{ d.deal_id }} / {{ d.order_id }} / {{ d.position_id }}</td>
+              <td>{{ d.symbol }}</td>
+              <td>{{ d.side.toUpperCase() }}</td>
+              <td>{{ d.entry }}</td>
+              <td class="num">{{ fmt(d.volume, 2) }}</td>
+              <td class="num">{{ fmt(d.price, 2) }}</td>
+              <td class="num">{{ money(d.commission + d.swap + d.fee) }}</td>
+              <td class="num">{{ money(d.profit) }}</td>
+            </tr>
+            <tr v-if="!deals.length"><td colspan="9" class="py-5 text-center text-[11px] text-muted">ยังไม่มี broker deal ที่บันทึกไว้ — กด Refresh เพื่อดึงประวัติ</td></tr>
           </tbody>
         </table>
       </div>
@@ -101,6 +160,13 @@ const perms = computed(() => permissions.value)
 
 const payload = ref(null)
 const trades = ref([])
+const deals = ref([])
+const dealAccount = ref('')
+const selectedTrade = ref(null)
+const review = ref(null)
+const reviewLoading = ref(false)
+const reviewError = ref('')
+let reviewRequest = 0
 const startingBalance = 10000
 
 const m = computed(() => payload.value?.metrics || {})
@@ -109,14 +175,34 @@ const byExit = computed(() => payload.value?.by_exit_reason || {})
 
 async function load() {
   try {
-    const [perf, hist] = await Promise.all([
-      api.get('/api/trading/performance'),
-      api.get('/api/trading/trades?limit=100'),
-    ])
+    const [perf, hist] = await Promise.all([api.get('/api/trading/performance'), api.get('/api/trading/trades?limit=100')])
     payload.value = perf
     trades.value = hist.trades || []
   } catch (err) {
     toast(err.message, 'error')
+  }
+  try {
+    const dealHistory = await api.get('/api/trading/deals?limit=500')
+    deals.value = dealHistory.deals || []
+    dealAccount.value = dealHistory.account_key || ''
+  } catch {
+    deals.value = []
+    dealAccount.value = 'บัญชียังยืนยันไม่ได้'
+  }
+}
+async function selectTrade(trade) {
+  const requestId = ++reviewRequest
+  selectedTrade.value = trade
+  review.value = null
+  reviewError.value = ''
+  reviewLoading.value = true
+  try {
+    const result = await api.get(`/api/trading/trades/${encodeURIComponent(trade.ticket)}/review`)
+    if (requestId === reviewRequest) review.value = result
+  } catch (err) {
+    if (requestId === reviewRequest) reviewError.value = err.message || 'อ่านรายละเอียดไม้ไม่ได้'
+  } finally {
+    if (requestId === reviewRequest) reviewLoading.value = false
   }
 }
 async function closeAll() {

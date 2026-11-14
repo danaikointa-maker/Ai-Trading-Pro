@@ -175,14 +175,16 @@ class TradePlanner:
         def block(code: str, text: str) -> None:
             codes.append(code)
             blockers.append(text)
+
         spec = ctx.spec
         direction = ctx.direction
         if spec.sizing_blocked:
             # No FX rate for the profit currency: sizing would be wrong by the
             # whole exchange rate, so refuse rather than guess.
             block("no_fx_rate",
-                  f"no FX rate to value {spec.profit_currency} P&L in the account currency; "
-                  "size this symbol on the broker terminal instead")
+                  f"invalid/incomplete symbol spec or no FX rate to value {spec.profit_currency} "
+                  f"P&L in {spec.account_currency}; size this symbol on the broker terminal instead")
+            return PlanResult(plan=None, blockers=blockers, blocker_codes=codes, notes=notes)
         sign = 1 if direction == Direction.up else -1
         costs = self.cost_points(spec, ctx.spread_points)
 

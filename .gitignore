@@ -21,6 +21,7 @@ npm-debug.log*
 config/*.local.yaml
 
 # Runtime state (datasets, trained models, DB, logs stay out of git)
+storage/local-dev/
 storage/datasets/*
 storage/models/*
 storage/backtests/*
@@ -31,3 +32,4 @@ storage/db/*
 # OS
 .DS_Store
 Thumbs.db
+bridge/*.ex5

@@ -16,6 +16,9 @@
     <div v-if="!analysis?.data_quality?.ok" class="rounded-xl border border-down/30 bg-down/10 px-4 py-2.5 text-[11.5px] text-down">
       <strong>Data quality:</strong> {{ analysis?.data_quality?.reason }} — ห้ามเปิดออร์เดอร์เมื่อข้อมูลไม่สด
     </div>
+    <div v-if="live?.ticker_stale" class="rounded-xl border border-amber-400/30 bg-amber-400/10 px-4 py-2.5 text-[11.5px] text-amber-200">
+      <strong>Last-known quote:</strong> {{ fmt(live?.ticker?.last, digits) }} · {{ live?.ticker?.t ? new Date(live.ticker.t * 1000).toLocaleString() : 'ไม่ทราบเวลา' }} · ตลาด/ฟีดไม่สด ข้อมูลนี้ใช้ดูย้อนหลังเท่านั้น
+    </div>
 
     <div class="grid grid-cols-2 gap-2 lg:grid-cols-4">
       <Stat label="Equity" :value="money(account?.equity)" :hint="`Balance ${money(account?.balance)}`" />

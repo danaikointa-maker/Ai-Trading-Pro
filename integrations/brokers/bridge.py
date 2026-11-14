@@ -11,6 +11,7 @@ quote that looks live.
 """
 from __future__ import annotations
 
+import math
 import time
 from typing import Any
 
@@ -119,8 +120,22 @@ class BridgeBroker(BrokerAdapter):
         snapshot = self.relay.snapshot(self.account_id)
         reported = (snapshot.get("symbols") or {}).get(symbol) or {}
         declared = self.declared.get(symbol) or {}
+        if not reported and not declared:
+            raise BrokerError(f"symbol spec unavailable for {symbol}")
         merged = {**declared, **{k: v for k, v in reported.items() if v is not None}}
         merged.setdefault("symbol", symbol)
+        required = {"digits", "point", "tick_size", "contract_size", "min_lot",
+                    "max_lot", "lot_step", "profit_currency"}
+        merged["spec_complete"] = required.issubset(merged)
+        merged["source"] = "broker" if reported else "declared"
+        account_currency = str((snapshot.get("account") or {}).get("currency") or "").strip().upper()
+        rate_currency = str(merged.get("account_currency") or "USD").strip().upper()
+        merged["account_currency"] = account_currency
+        profit = str(merged.get("profit_currency") or "").strip().upper()
+        if profit and account_currency and profit == account_currency:
+            merged.update(quote_to_account_rate=1.0, rate_source="identity")
+        elif not account_currency or rate_currency != account_currency:
+            merged.update(quote_to_account_rate=1.0, rate_source="unknown")
         return SymbolSpec(**merged)
 
     def ticker(self, symbol: str) -> Tick:
@@ -215,30 +230,58 @@ class BridgeBroker(BrokerAdapter):
 
     def close_position(self, ticket: str, volume: float | None = None,
                        comment: str = "") -> OrderResult:
-        result = self._run_command("close", {"ticket": str(ticket), "volume": volume,
-                                            "comment": (comment or "")[:31]})
+        if volume is not None and (type(volume) not in (int, float)
+                                   or not math.isfinite(volume) or volume <= 0):
+            raise BrokerError("invalid close volume; no command queued")
+        try:
+            result = self._run_command("close", {"ticket": str(ticket), "volume": volume,
+                                                "comment": (comment or "")[:31]})
+        except Exception:
+            # Transport exceptions and EA error payloads may contain account
+            # details; neither is authoritative rejection evidence.
+            raise BrokerError("close outcome unknown; reconcile before resending") from None
+        # A command receipt is not a fresh exposure read. Never synthesize closure
+        # or fill volume from missing fields or the requested amount.
+        if not isinstance(result, dict) or type(result.get("status")) is not str:
+            raise BrokerError("close acknowledgement malformed; outcome unknown, reconcile before resending")
+        status = {"closed": OrderState.closed, "filled": OrderState.filled}.get(result.get("status"))
+        reported_volume = result.get("volume")
+        reported_price = result.get("price")
+        retcode = result.get("retcode")
+        if (result.get("ok") is not True or status is None
+                or str(result.get("ticket", "")) != str(ticket)
+                or type(reported_volume) not in (int, float)
+                or not math.isfinite(reported_volume) or reported_volume <= 0
+                or (volume is not None and reported_volume > volume + 1e-9)
+                or type(reported_price) not in (int, float) or not math.isfinite(reported_price)
+                or reported_price <= 0
+                or (retcode is not None and (type(retcode) is not int or retcode != 10009))):
+            raise BrokerError("close acknowledgement incomplete or inconsistent; outcome unknown, reconcile before resending")
         return OrderResult(
             order_id=str(result.get("ticket") or ticket),
             idempotency_key=str(result.get("idempotency_key") or ""),
-            status=STATE_MAP.get(str(result.get("status") or "").lower(), OrderState.closed),
+            status=status,
             retcode=int(result.get("retcode") or 0),
-            message=str(result.get("message") or "closed by the EA bridge"),
+            message="Close acknowledgement received; remaining exposure not verified",
             ticket=str(result.get("ticket") or ticket),
-            filled_volume=float(result.get("volume") or volume or 0.0),
-            fill_price=float(result["price"]) if result.get("price") is not None else None,
-            verified=bool(result.get("ok", True)),
+            filled_volume=float(reported_volume),
+            fill_price=float(reported_price),
+            verified=False,
             created_at=time.time(),
         )
 
     def positions(self) -> list[Position]:
         """The EA's snapshot *is* the position list — replaced, never merged."""
-        rows = self._snapshot().get("positions") or []
+        rows = self._snapshot().get("positions")
+        if not isinstance(rows, list):
+            raise BrokerError("bridge snapshot has no valid positions list")
         out: list[Position] = []
         for row in rows:
             direction = Direction.up if str(row.get("direction", "buy")).lower() in (
                 "buy", "up", "long") else Direction.down
             out.append(Position(
                 ticket=str(row.get("ticket")),
+                broker_id=self.id,
                 symbol=str(row.get("symbol")),
                 direction=direction,
                 volume=float(row.get("volume") or 0.0),

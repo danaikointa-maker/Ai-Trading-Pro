@@ -39,7 +39,10 @@ def candles(symbol: str = "XAUUSD", timeframe: str = "M5", limit: int = Query(40
 @router.get("/ticker")
 def ticker(symbol: str = "XAUUSD", runtime: TradingRuntime = Depends(get_runtime),
            user=Depends(current_user)):
-    return runtime.market.ticker(symbol).model_dump()
+    quote = runtime.market.latest_quote(symbol)
+    if quote is None:
+        raise HTTPException(status_code=503, detail="no quote available")
+    return quote
 
 
 @router.get("/spec")

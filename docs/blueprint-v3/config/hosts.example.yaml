@@ -1,0 +1,47 @@
+version: 3
+project: TradeAi
+repository: https://github.com/danaikointa-maker/TradeAi.git
+environment: demo
+timezone_storage: UTC
+timezone_display_default: Asia/Bangkok
+nodes:
+  dev_pc:
+    os: Windows
+    workspace: 'C:\workspace\TradeAi'
+    role: [git, vscode, ci, tests, release, ssh]
+    ip: null
+  proxmox:
+    ip: 192.168.1.254
+    role: [hypervisor, vm, storage, backup]
+    app_runtime_forbidden: true
+  ubuntu_vm100:
+    vmid: 100
+    ip: null       # discover with hostname -I; never assume
+    ssh_alias: no7-ai
+    runtime_root: /opt/no7-ai-trading-pro
+    role: [fastapi, vue, quant, ai_research, risk, data, report]
+    ram_gb_target: 16
+    vcpu_target: 2
+  windows_vm200:
+    vmid: 200
+    ip: null       # discover with ipconfig
+    ssh_alias: no7-mt5
+    runtime_root: 'C:\app\app\No7-Ai-Trading-Pro'
+    role: [mt5_demo, mql5_bridge, execution_guard, reconciliation]
+    ram_gb_target: 8
+    vcpu_target: 2
+network:
+  direction: windows_outbound_to_ubuntu
+  protocol: HTTPS
+  authentication: scoped_service_identity_or_mtls
+  public_order_api: false
+  public_database: false
+  clock_sync: required
+trading:
+  environment: demo
+  live_order_enabled: false
+  unique_executor_per_account: true
+  unknown_order_policy: BLOCK_NEW_ORDERS
+storage:
+  external_seagate_3tb: QUARANTINED_IO_ERRORS
+  destructive_changes_allowed: false

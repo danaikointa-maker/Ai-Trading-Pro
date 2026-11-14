@@ -121,7 +121,7 @@ const signal = computed(() => liveSignal.value)
 const plan = computed(() => signal.value?.plan || null)
 const digits = computed(() => state.live?.analysis?.spec?.digits ?? 2)
 const modeLabel = computed(() => ({ manual: 'Manual', semi_auto: 'Semi-Auto', full_auto: 'Full Auto' }[mode.value] || mode.value))
-const canApprove = computed(() => ['BUY', 'SELL'].includes(signal.value?.action) && (signal.value?.score || 0) >= 50 && !signal.value?.executed_order_id)
+const canApprove = computed(() => perms.value.canTrade && ['BUY', 'SELL'].includes(signal.value?.action) && (signal.value?.score || 0) >= 70 && !signal.value?.executed_order_id)
 const reasons = computed(() => signal.value?.reasons || [])
 const headline = computed(() => {
   if (!signal.value) return 'รอรอบวิเคราะห์ถัดไป…'
@@ -151,7 +151,7 @@ async function manual(direction) {
     const res = await api.post('/api/trading/order', { symbol: state.symbol, direction })
     toast(`เปิดไม้ ${direction === 'up' ? 'BUY' : 'SELL'} สำเร็จ · ticket ${res.order?.ticket}`, 'success')
   } catch (err) {
-    toast(err.message, 'error')
+    showOrderError(err)
   } finally {
     busy.value = false
   }
@@ -164,9 +164,17 @@ async function approve() {
     await api.post(`/api/signals/${signal.value.id}/approve`)
     toast('อนุมัติสัญญาณและส่งคำสั่งแล้ว', 'success')
   } catch (err) {
-    toast(err.message, 'error')
+    showOrderError(err)
   } finally {
     busy.value = false
+  }
+}
+
+function showOrderError(err) {
+  if (err.detail?.reconciliation_required) {
+    toast(`โบรกเกอร์รายงาน fill แต่ยังยืนยันไม่ได้ · ticket ${err.detail.order?.ticket || 'ไม่ทราบ'} · ห้ามส่งซ้ำ กรุณาตรวจสอบบัญชี`, 'warning')
+  } else {
+    toast(err.message, 'error')
   }
 }
 </script>

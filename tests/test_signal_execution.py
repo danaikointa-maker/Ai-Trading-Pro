@@ -67,6 +67,7 @@ def _order_count(runtime) -> int:
 def registered(runtime):
     """Put a signal where `execute_signal` looks for it, and clean up after."""
     created: list[str] = []
+    original_orders = {row["id"] for row in runtime.db.query("SELECT id FROM orders")}
 
     def _register(signal: Signal) -> Signal:
         with runtime.lock:
@@ -78,6 +79,9 @@ def registered(runtime):
     with runtime.lock:
         for sid in created:
             runtime.plans.pop(sid, None)
+    for row in runtime.db.query("SELECT id FROM orders"):
+        if row["id"] not in original_orders:
+            runtime.db.execute("DELETE FROM orders WHERE id=?", (row["id"],))
 
 
 def test_unknown_signal_is_refused(runtime):
@@ -86,10 +90,77 @@ def test_unknown_signal_is_refused(runtime):
     assert "not found" in result["error"]
 
 
+@pytest.mark.parametrize("fails", [False, True])
+def test_submit_invalidates_position_disclosure_before_io(runtime, registered, monkeypatch, fails):
+    from types import SimpleNamespace
+    from unittest.mock import Mock
+    from integrations.brokers.base import BrokerError
+    from packages.shared_schemas.models import OrderResult
+
+    sig = registered(_signal(runtime, id=f"TEST-CACHE-SUBMIT-{fails}"))
+    monkeypatch.setattr(runtime.gateway, "unresolved_orders", Mock(return_value=[]))
+    monkeypatch.setattr(runtime.strategy, "evaluate_gate", Mock(return_value=SimpleNamespace(allow=True)))
+    monkeypatch.setattr(runtime.risk, "state", Mock(return_value=SimpleNamespace()))
+    runtime._positions_available = True
+
+    def submit(*args, **kwargs):
+        assert runtime._positions_available is False
+        if fails:
+            raise BrokerError("outcome unknown")
+        return OrderResult(order_id="cache-test", idempotency_key="cache-test", status=OrderState.rejected,
+                           message="rejected", broker_id=runtime.adapter.id)
+
+    monkeypatch.setattr(runtime.gateway, "submit", submit)
+    result = runtime.execute_signal(sig.id)
+    assert result["ok"] is False
+    assert runtime._positions_available is False
+
+
+@pytest.mark.parametrize("failure", [RuntimeError, ValueError])
+def test_risk_state_failure_refuses_before_gateway(runtime, registered, monkeypatch, failure):
+    from unittest.mock import Mock
+
+    sig = registered(_signal(runtime, id=f"TEST-RISK-FAIL-{failure.__name__}", score=75.0))
+    monkeypatch.setattr(runtime.risk, "state", Mock(side_effect=failure("risk storage unavailable")))
+    submit = Mock()
+    monkeypatch.setattr(runtime.gateway, "submit", submit)
+    result = runtime.execute_signal(sig.id)
+    assert result["ok"] is False
+    assert "risk state unavailable" in result["error"].lower()
+    submit.assert_not_called()
+
+
 def test_signal_without_a_plan_is_refused(runtime, registered):
     result = runtime.execute_signal(registered(_signal(runtime, plan=None)).id)
     assert result["ok"] is False
     assert "no trade plan" in result["error"]
+
+
+@pytest.mark.parametrize("failure", ["positions", "spec", "rate"])
+def test_exposure_failure_refuses_before_gateway(runtime, registered, monkeypatch, failure):
+    from types import SimpleNamespace
+    from unittest.mock import Mock
+
+    sig = registered(_signal(runtime, id=f"TEST-EXPOSURE-{failure}", score=75.0))
+    if failure == "positions":
+        monkeypatch.setattr(runtime.adapter, "positions", Mock(side_effect=RuntimeError("unavailable")))
+    else:
+        monkeypatch.setattr(runtime.adapter, "positions", lambda: [SimpleNamespace(
+            symbol="XAUUSD", volume=0.1, current_price=2000.0, unrealized=0.0)])
+        if failure == "spec":
+            monkeypatch.setattr(runtime.adapter, "symbol_spec", Mock(side_effect=RuntimeError("unavailable")))
+        else:
+            spec = runtime.adapter.symbol_spec("XAUUSD").model_copy(update={
+                "profit_currency": "JPY", "rate_source": "unknown"})
+            monkeypatch.setattr(runtime.adapter, "symbol_spec", lambda _: spec)
+    submit = Mock()
+    monkeypatch.setattr(runtime.gateway, "submit", submit)
+    kill_before = runtime.db.kv_get("kill_switch", None)
+    result = runtime.execute_signal(sig.id)
+    assert result["ok"] is False
+    assert "risk state unavailable" in result["error"]
+    submit.assert_not_called()
+    assert runtime.db.kv_get("kill_switch", None) == kill_before
 
 
 def test_non_actionable_signal_is_refused(runtime, registered):
@@ -151,7 +222,9 @@ def test_broken_plan_never_becomes_a_position(runtime, registered):
     result = runtime.execute_signal(sig.id, actor="demo@no7.ai")
     assert result["ok"] is False
     assert "wrong side" in result["error"] or "rejected" in str(result.get("order", {})), result
-    assert result["order"]["status"] == OrderState.rejected, result
+    # An adapter exception is not a broker rejection receipt. Keep the attempt
+    # unresolved/reserved even when this paper adapter reports invalid geometry.
+    assert result["order"]["status"] == OrderState.pending, result
     assert len(runtime.gateway.open_positions()) == before
 
 
@@ -162,3 +235,55 @@ def test_approve_endpoint_surfaces_the_refusal(client, token, runtime, registere
                       headers={"Authorization": f"Bearer {token}"})
     assert res.status_code == 400
     assert "execution threshold" in res.json()["detail"]["error"]
+
+
+@pytest.mark.parametrize("verified", [False, True])
+def test_fill_response_distinguishes_verification(runtime, registered, monkeypatch, verified):
+    from unittest.mock import Mock
+
+    from packages.shared_schemas.models import OrderResult
+    from services.risk_engine.engine import RiskGate
+
+    sig = registered(_signal(runtime, id=f"TEST-FILL-VERIFIED-{verified}", score=75.0))
+    monkeypatch.setattr(runtime.strategy, "evaluate_gate", lambda *a, **kw: RiskGate(allow=True))
+    monkeypatch.setattr(runtime.gateway, "submit", Mock(return_value=OrderResult(
+        order_id=f"ORD-VERIFY-{verified}", idempotency_key=f"sig-{sig.id}",
+        status=OrderState.filled, ticket="fill-test", filled_volume=0.1,
+        fill_price=2000, verified=verified,
+    )))
+    notify = Mock()
+    monkeypatch.setattr(runtime.notifier, "emit", notify)
+    monkeypatch.setattr(runtime, "_check_fill_risk", Mock(return_value={"ok": True}))
+    result = runtime.execute_signal(sig.id)
+    assert result["ok"] is verified
+    assert result["execution_state"] == ("verified" if verified else "filled_unverified")
+    assert sig.executed_order_id == f"ORD-VERIFY-{verified}"
+    assert notify.call_args.args[0] == ("success" if verified else "warning")
+    if not verified:
+        assert result["reconciliation_required"] is True
+        assert "do not resend" in result["error"]
+
+
+def test_signal_for_another_broker_never_reaches_gateway(runtime, registered, monkeypatch):
+    from unittest.mock import Mock
+
+    sig = registered(_signal(runtime, id="TEST-OTHER-BROKER", broker_id="another-account"))
+    submit = Mock()
+    monkeypatch.setattr(runtime.gateway, "submit", submit)
+    result = runtime.execute_signal(sig.id)
+    assert result["ok"] is False
+    assert "broker" in result["error"]
+    submit.assert_not_called()
+
+
+def test_unresolved_execution_blocks_new_signal(runtime, registered, monkeypatch):
+    from unittest.mock import Mock
+
+    sig = registered(_signal(runtime, id="TEST-UNRESOLVED-GATE"))
+    monkeypatch.setattr(runtime.gateway, "unresolved_orders", lambda broker_id: [{"id": "unknown"}], raising=False)
+    submit = Mock()
+    monkeypatch.setattr(runtime.gateway, "submit", submit)
+    result = runtime.execute_signal(sig.id)
+    assert result["ok"] is False
+    assert result["reconciliation_required"] is True
+    submit.assert_not_called()

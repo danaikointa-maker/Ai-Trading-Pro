@@ -142,4 +142,7 @@ def test_gold_notional_stays_contract_times_price():
 def test_unresolved_rate_is_not_valued_at_one():
     spec = jpy_spec(rate=1.0, source="unknown")
     pos = SimpleNamespace(symbol="USDJPY", volume=0.50, entry=157.00, current_price=157.20)
-    assert RiskEngine._notional(_adapter({"USDJPY": spec}, [pos]), [pos]) == 0.0
+    from integrations.brokers.base import BrokerError
+
+    with pytest.raises(BrokerError, match="exposure"):
+        RiskEngine._notional(_adapter({"USDJPY": spec}, [pos]), [pos])

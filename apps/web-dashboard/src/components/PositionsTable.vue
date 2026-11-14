@@ -3,9 +3,9 @@
     <div class="panel-head">
       <div>
         <div class="panel-title">Open Positions</div>
-        <div class="panel-sub">{{ positions.length }} ไม้ · จัดการ SL/TP อัตโนมัติโดย Risk Engine</div>
+        <div class="panel-sub" role="status">{{ positionsAvailable ? `${positions.length} ไม้ · ข้อมูล positions ที่ยืนยันล่าสุด` : 'ยืนยันสถานะ positions ไม่ได้' }}</div>
       </div>
-      <button class="btn py-1" :disabled="!positions.length || !perms.canTrade" :title="perms.reason" @click="closeAll">Close all</button>
+      <button class="btn py-1" :disabled="!positionsAvailable || !positions.length || !permissions.canTrade" :title="permissions.reason" @click="closeAll">Close all</button>
     </div>
     <div class="overflow-x-auto">
       <table class="table-base">
@@ -29,10 +29,13 @@
             <td class="num" :class="p.unrealized >= 0 ? 'text-up' : 'text-down'">{{ money(p.unrealized) }}</td>
             <td><span class="chip" :class="p.breakeven_done ? 'chip-up' : ''">{{ p.breakeven_done ? 'BE' : '—' }}</span></td>
             <td class="text-right">
-              <button class="btn px-2 py-1 text-[10.5px]" @click="close(p.ticket)">Close</button>
+              <button class="btn px-2 py-1 text-[10.5px]" :disabled="!permissions.canTrade" :title="permissions.reason" @click="close(p.ticket)">Close</button>
             </td>
           </tr>
-          <tr v-if="!positions.length">
+          <tr v-if="!positionsAvailable">
+            <td colspan="12" class="py-6 text-center text-[11.5px] text-warn">ไม่ทราบ exposure ปัจจุบัน — ข้อมูลขาดหาย หมดอายุ หรือยังยืนยันเจ้าของบัญชีไม่ได้ ไม่ได้หมายความว่าไม่มีไม้เปิดอยู่</td>
+          </tr>
+          <tr v-else-if="!positions.length">
             <td colspan="12" class="py-6 text-center text-[11.5px] text-muted">ยังไม่มีไม้ที่เปิดอยู่</td>
           </tr>
         </tbody>
@@ -44,26 +47,30 @@
 <script setup>
 import { api } from '../lib/api'
 import { fmt, money } from '../lib/format'
-import { permissions, positions, toast } from '../lib/store'
-
-// Read-only accounts see the buttons disabled — the server refuses them anyway.
-const perms = computed(() => permissions.value)
+import { closeAllFeedback, closeFeedback } from '../lib/close-results'
+import { permissions, positions, positionsAvailable, toast } from '../lib/store'
 
 async function close(ticket) {
+  if (!positionsAvailable.value || !permissions.value.canTrade) return
   try {
-    await api.post('/api/trading/close', { ticket })
-    toast(`ปิดไม้ ${ticket} แล้ว`, 'success')
+    const res = await api.post('/api/trading/close', { ticket })
+    const feedback = closeFeedback(res)
+    toast(feedback.message, feedback.type)
   } catch (err) {
-    toast(err.message, 'error')
+    const feedback = closeFeedback(err.detail)
+    toast(feedback.message, feedback.type)
   }
 }
 async function closeAll() {
+  if (!positionsAvailable.value || !permissions.value.canTrade || !positions.value.length) return
   if (!confirm('ปิดทุกไม้ที่เปิดอยู่?')) return
   try {
     const res = await api.post('/api/trading/close-all')
-    toast(`ปิด ${res.closed?.length || 0} ไม้`, 'success')
+    const feedback = closeAllFeedback(res)
+    toast(feedback.message, feedback.type)
   } catch (err) {
-    toast(err.message, 'error')
+    const feedback = closeAllFeedback()
+    toast(feedback.message, feedback.type)
   }
 }
 </script>

@@ -37,6 +37,7 @@ def _run_job(job_id: str, runtime: TradingRuntime, request: BacktestRequest, act
     with _LOCK:
         _prune_jobs()
         JOBS[job_id] = {"state": "running", "pct": 10, "message": "loading history",
+                        "workspace_id": runtime.db.workspace_id,
                         "started_at": time.time()}
     try:
         broker_id = request.broker_id or runtime.adapter.id
@@ -70,9 +71,8 @@ def _run_job(job_id: str, runtime: TradingRuntime, request: BacktestRequest, act
         if request.use_ticks:
             try:
                 tick_book = TickBook.load(datasets_dir, symbol)
-            except Exception as exc:  # noqa: BLE001 - bad ticks must not kill a backtest
-                with _LOCK:
-                    JOBS[job_id].update(message=f"tick data ignored: {exc}")
+            except Exception:  # noqa: BLE001 - never downgrade a refused tick artifact
+                raise ValueError("requested tick data could not be validated; backtest refused") from None
         report = engine.run(m1, spec, request, broker_id,
                             ticks=tick_book,
                             data_note=bar_data_note(source),
@@ -89,12 +89,14 @@ def _run_job(job_id: str, runtime: TradingRuntime, request: BacktestRequest, act
                                                 "trades": report.metrics.trades})
         with _LOCK:
             JOBS[job_id] = {"state": "done", "pct": 100, "message": "finished",
+                            "workspace_id": runtime.db.workspace_id,
                             "started_at": JOBS.get(job_id, {}).get("started_at", time.time()),
                             "report_id": report.id, "metrics": report.metrics.model_dump(),
                             "verdict": report.verdict}
     except Exception as exc:  # noqa: BLE001
         with _LOCK:
-            JOBS[job_id] = {"state": "error", "pct": 0, "message": str(exc)}
+            JOBS[job_id] = {"state": "error", "pct": 0, "message": str(exc),
+                            "workspace_id": runtime.db.workspace_id}
 
 
 @router.post("")
@@ -121,7 +123,7 @@ def run(request: BacktestRequest, runtime: TradingRuntime = Depends(get_runtime)
 def job(job_id: str, runtime: TradingRuntime = Depends(get_runtime), user=Depends(current_user)):
     with _LOCK:
         data = JOBS.get(job_id)
-    if data is None:
+    if data is None or data.get("workspace_id") != runtime.db.workspace_id:
         raise HTTPException(status_code=404, detail="job not found")
     return data
 

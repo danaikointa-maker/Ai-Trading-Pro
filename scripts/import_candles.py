@@ -20,7 +20,8 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from services.market_data.dataset import DatasetError, import_candles  # noqa: E402
+from packages.shared_schemas.settings import get_settings  # noqa: E402
+from services.market_data.dataset import DatasetError, import_candles, workspace_dataset_dir  # noqa: E402
 
 
 def main() -> int:
@@ -32,10 +33,11 @@ def main() -> int:
                         help="timezone of the file's timestamps (MT5 exports server time)")
     parser.add_argument("--timeframe", default="M1", choices=["M1", "M5", "M15", "M30", "H1", "H4", "D1"])
     parser.add_argument("--digits", type=int, default=None, help="round prices to this many decimals")
-    parser.add_argument("--out-dir", default="storage/datasets")
+    parser.add_argument("--out-dir", default=None, help="directory within configured workspace datasets")
     args = parser.parse_args()
 
     try:
+        args.out_dir = workspace_dataset_dir(get_settings().paths["datasets"], args.out_dir)
         meta = import_candles(args.csv, args.symbol, args.out_dir, tz=args.tz,
                               digits=args.digits, timeframe=args.timeframe)
     except DatasetError as exc:

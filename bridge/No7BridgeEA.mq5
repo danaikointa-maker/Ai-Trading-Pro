@@ -30,7 +30,7 @@
 #property copyright "No7 AI Trading Pro"
 #property version   "1.00"
 #property strict
-#property description "Polls the No7 API, executes orders/close/modify, reports back."
+#property description "Demo identity-bound bridge; read-only by default."
 
 //--- inputs -------------------------------------------------------------
 input string InpServerUrl   = "http://127.0.0.1:8000";  // API base (no trailing slash)
@@ -42,6 +42,9 @@ input int    InpRatesBars   = 60;                        // M1 bars to push (0 =
 input int    InpMagic       = 70707;                     // magic number for our orders
 input int    InpSlippage    = 20;                        // deviation, in points
 input bool   InpVerbose     = true;
+input bool   InpReadOnly     = true;                    // no order/close/modify
+input long   InpExpectedLogin = 0;                      // mandatory Demo login
+input string InpExpectedServer = "";                   // exact broker server
 
 //--- state --------------------------------------------------------------
 string   g_session = "";
@@ -50,19 +53,38 @@ datetime g_last_poll = 0;
 string   g_pending_ids[];      // executed, result not yet delivered
 string   g_pending_json[];     // the json body for each pending result
 string   g_executed_ids[];     // ids ever executed here — never run twice
+string   g_executed_results[];
+bool     g_executed_outcomes[];
+int      g_journal = INVALID_HANDLE;
+bool     g_journal_ok = false;
 int      g_generation = 0;
+
+bool DemoIdentityValid()
+  {
+   return(InpExpectedLogin > 0 && StringLen(InpExpectedServer) > 0 &&
+          TerminalInfoInteger(TERMINAL_CONNECTED) &&
+          AccountInfoInteger(ACCOUNT_TRADE_MODE) == ACCOUNT_TRADE_MODE_DEMO &&
+          AccountInfoInteger(ACCOUNT_LOGIN) == InpExpectedLogin &&
+          AccountInfoString(ACCOUNT_SERVER) == InpExpectedServer);
+  }
 
 //+------------------------------------------------------------------+
 int OnInit()
   {
+   if(!DemoIdentityValid())
+     {
+      Print("No7BridgeEA: connected Demo identity must match expected login/server. Aborting.");
+      return(INIT_PARAMETERS_INCORRECT);
+     }
    if(StringLen(InpToken) == 0)
      {
       Print("No7BridgeEA: InpToken is empty — the server will refuse the bridge. Aborting.");
       return(INIT_PARAMETERS_INCORRECT);
      }
-   if(StringLen(InpServerUrl) == 0 || StringFind(InpServerUrl, "http") != 0)
+   if(StringFind(InpServerUrl, "https://") != 0 &&
+      StringFind(InpServerUrl, "http://127.0.0.1:") != 0)
      {
-      Print("No7BridgeEA: InpServerUrl must start with http:// or https://");
+      Print("No7BridgeEA: HTTPS required except explicit loopback http://127.0.0.1:port");
       return(INIT_PARAMETERS_INCORRECT);
      }
    SplitSymbols(InpSymbols);
@@ -71,7 +93,12 @@ int OnInit()
       Print("No7BridgeEA: no symbols configured");
       return(INIT_PARAMETERS_INCORRECT);
      }
-   // One EA per account: the server keeps a single session per account id.
+   if(!LoadCommandJournal())
+     {
+      Print("No7BridgeEA: durable command journal unavailable or corrupt; refusing startup.");
+      return(INIT_FAILED);
+     }
+   // One EA per account: the journal is held exclusively for this EA lifetime.
    if(!Register())
       return(INIT_FAILED);
    EventSetMillisecondTimer(MathMax(250, InpPollMs));
@@ -83,10 +110,19 @@ int OnInit()
 void OnDeinit(const int reason)
   {
    EventKillTimer();
+   if(g_journal != INVALID_HANDLE)
+      FileClose(g_journal);
+   g_journal = INVALID_HANDLE;
+   g_journal_ok = false;
   }
 
 void OnTimer()
   {
+   if(!DemoIdentityValid())
+     {
+      g_session = "";
+      return;
+     }
    if(StringLen(g_session) == 0)
      {
       Register();
@@ -126,18 +162,119 @@ bool AlreadyExecuted(const string id)
    return(false);
   }
 
+int CommandIndex(const string id)
+  {
+   for(int i = 0; i < ArraySize(g_executed_ids); i++)
+      if(g_executed_ids[i] == id)
+         return(i);
+   return(-1);
+  }
+
+bool ValidCommandId(const string id)
+  {
+   if(StringLen(id) != 14 || StringSubstr(id, 0, 4) != "CMD-")
+      return(false);
+   for(int i = 4; i < StringLen(id); i++)
+      if(StringFind("0123456789ABCDEF", StringSubstr(id, i, 1)) < 0)
+         return(false);
+   return(true);
+  }
+
 void RememberExecuted(const string id)
   {
    int size = ArraySize(g_executed_ids);
    ArrayResize(g_executed_ids, size + 1);
+   ArrayResize(g_executed_results, size + 1);
+   ArrayResize(g_executed_outcomes, size + 1);
+   g_executed_outcomes[size] = false;
    g_executed_ids[size] = id;
-   // keep the last 200 ids; a repeat older than that is already expired server-side
-   if(ArraySize(g_executed_ids) > 200)
+   g_executed_results[size] = "\"ok\":false,\"status\":\"pending\",\"error\":\"durable claim without confirmed outcome; manual reconciliation required; do not resend\"";
+  }
+
+bool LoadCommandJournal()
+  {
+   // Deliberately no FILE_SHARE_* flags: a second EA cannot claim concurrently.
+   // One journal per actual Demo login; no untrusted account-id path component.
+   string name = StringFormat("No7Bridge\\claims-%I64d.log", InpExpectedLogin);
+   g_journal = FileOpen(name, FILE_READ|FILE_WRITE|FILE_TXT|FILE_UNICODE|FILE_COMMON);
+   if(g_journal == INVALID_HANDLE)
+      return(false);
+   while(!FileIsEnding(g_journal))
      {
-      for(int i = 1; i < ArraySize(g_executed_ids); i++)
-         g_executed_ids[i - 1] = g_executed_ids[i];
-      ArrayResize(g_executed_ids, 199);
+      ResetLastError();
+      string line = FileReadString(g_journal);
+      if(GetLastError() != 0)
+         return(false);
+      if(StringLen(line) == 0)
+         return(false);
+      if(StringSubstr(line, 0, 2) == "C\t")
+        {
+         string id = StringSubstr(line, 2);
+         if(!ValidCommandId(id) || AlreadyExecuted(id) || ArraySize(g_executed_ids) >= 100000)
+            return(false);
+         RememberExecuted(id);
+        }
+      else if(StringSubstr(line, 0, 2) == "R\t")
+        {
+         int split = StringFind(line, "\t", 2);
+         if(split < 0)
+            return(false);
+         string id = StringSubstr(line, 2, split - 2);
+         int index = CommandIndex(id);
+         if(index < 0 || StringLen(line) <= split + 1)
+            return(false);
+         if(g_executed_outcomes[index])
+            return(false);
+         g_executed_results[index] = StringSubstr(line, split + 1);
+         g_executed_outcomes[index] = true;
+        }
+      else
+         return(false);
      }
+   g_journal_ok = FileSeek(g_journal, 0, SEEK_END);
+   return(g_journal_ok);
+  }
+
+bool WriteJournal(const string record)
+  {
+   if(!g_journal_ok || g_journal == INVALID_HANDLE)
+      return(false);
+   ResetLastError();
+   string text = record + "\r\n";
+   uint expected_bytes = (uint)(StringLen(text) * 2); // FILE_UNICODE
+   uint written = FileWriteString(g_journal, text);
+   FileFlush(g_journal);
+   if(written != expected_bytes || GetLastError() != 0)
+     {
+      g_journal_ok = false;
+      return(false);
+     }
+   return(true);
+  }
+
+bool ClaimCommand(const string id)
+  {
+   if(!ValidCommandId(id) || AlreadyExecuted(id) || ArraySize(g_executed_ids) >= 100000)
+      return(false);
+   if(!WriteJournal("C\t" + id))
+      return(false);
+   RememberExecuted(id);
+   return(true);
+  }
+
+bool SaveCommandOutcome(const string id, string outcome)
+  {
+   StringReplace(outcome, "\r", " ");
+   StringReplace(outcome, "\n", " ");
+   StringReplace(outcome, "\t", " ");
+   int index = CommandIndex(id);
+   if(index < 0)
+      return(false);
+   if(g_executed_outcomes[index] || !WriteJournal("R\t" + id + "\t" + outcome))
+      return(false);
+   g_executed_results[index] = outcome;
+   g_executed_outcomes[index] = true;
+   return(true);
   }
 
 //+------------------------------------------------------------------+
@@ -145,6 +282,8 @@ void RememberExecuted(const string id)
 //+------------------------------------------------------------------+
 bool HttpPost(const string path, const string body, string &response, int &status_code)
   {
+   if(!DemoIdentityValid())
+      return(false);
    string url = InpServerUrl + path;
    // Every bridge call carries the token: register checks it, and poll checks it again
    // because a poll can inject quotes and acknowledge orders.
@@ -159,6 +298,11 @@ bool HttpPost(const string path, const string body, string &response, int &statu
    // WebRequest must be allowed for this URL: Tools -> Options -> Expert Advisors ->
    // "Allow WebRequest for listed URL" and add InpServerUrl.
    int code = WebRequest("POST", url, headers, 5000, data, result, result_headers);
+   if(!DemoIdentityValid())
+     {
+      g_session = "";
+      return(false);
+     }
    if(code == -1)
      {
       PrintFormat("No7BridgeEA: WebRequest failed (%d). Add %s to the allowed URLs "
@@ -186,10 +330,12 @@ bool Register()
 
    string body = StringFormat(
                     "{\"account_id\":\"%s\",\"session_id\":\"%s\","
-                    "\"terminal\":{\"build\":%d,\"company\":\"%s\",\"name\":\"No7BridgeEA\"},"
+                     "\"terminal\":{\"build\":%d,\"company\":\"%s\",\"name\":\"No7BridgeEA\","
+                     "\"login\":\"%I64d\",\"server\":\"%s\",\"trade_mode\":\"demo\",\"connected\":true},"
                     "\"symbols\":%s}",
                     InpAccountId, g_session, TerminalInfoInteger(TERMINAL_BUILD),
-                    TerminalInfoString(TERMINAL_COMPANY), symbols_json);
+                     TerminalInfoString(TERMINAL_COMPANY), AccountInfoInteger(ACCOUNT_LOGIN),
+                     AccountInfoString(ACCOUNT_SERVER), symbols_json);
 
    string response;
    int status = 0;
@@ -271,7 +417,7 @@ string BuildSnapshot()
    string account = StringFormat(
                        "\"account\":{\"login\":\"%I64d\",\"balance\":%.2f,\"equity\":%.2f,"
                        "\"margin\":%.2f,\"free_margin\":%.2f,\"currency\":\"%s\",\"leverage\":%d,"
-                       "\"server\":\"%s\"}",
+                       "\"server\":\"%s\",\"trade_mode\":\"demo\",\"connected\":true}",
                        AccountInfoInteger(ACCOUNT_LOGIN),
                        AccountInfoDouble(ACCOUNT_BALANCE), AccountInfoDouble(ACCOUNT_EQUITY),
                        AccountInfoDouble(ACCOUNT_MARGIN), AccountInfoDouble(ACCOUNT_MARGIN_FREE),
@@ -282,6 +428,7 @@ string BuildSnapshot()
    //--- quotes + specs
    string quotes = "\"quotes\":{";
    string specs = "\"symbols\":{";
+   bool first_quote = true;
    for(int i = 0; i < ArraySize(g_symbols); i++)
      {
       string sym = g_symbols[i];
@@ -291,11 +438,15 @@ string BuildSnapshot()
       if(!SymbolInfoTick(sym, tick))
          continue;
       double point = SymbolInfoDouble(sym, SYMBOL_POINT);
-      if(i > 0)
+      if(!MathIsValidNumber(tick.bid) || !MathIsValidNumber(tick.ask) ||
+         tick.bid <= 0 || tick.ask < tick.bid || point <= 0)
+         continue;
+      if(!first_quote)
         {
          quotes += ",";
          specs += ",";
         }
+      first_quote = false;
       quotes += StringFormat(
                    "\"%s\":{\"t\":%I64d,\"bid\":%.*f,\"ask\":%.*f,\"last\":%.*f}",
                    sym, (long)tick.time, (int)SymbolInfoInteger(sym, SYMBOL_DIGITS), tick.bid,
@@ -304,7 +455,7 @@ string BuildSnapshot()
       specs += StringFormat(
                   "\"%s\":{\"digits\":%d,\"point\":%.*f,\"contract_size\":%.2f,\"min_lot\":%.2f,"
                   "\"max_lot\":%.2f,\"lot_step\":%.2f,\"stops_level_points\":%.0f,"
-                  "\"spread_typical_points\":%.0f,\"tick_size\":%.*f}",
+                  "\"spread_typical_points\":%.0f,\"tick_size\":%.*f,\"profit_currency\":\"%s\"}",
                   sym, (int)SymbolInfoInteger(sym, SYMBOL_DIGITS), 8, point,
                   SymbolInfoDouble(sym, SYMBOL_TRADE_CONTRACT_SIZE),
                   SymbolInfoDouble(sym, SYMBOL_VOLUME_MIN),
@@ -312,7 +463,8 @@ string BuildSnapshot()
                   SymbolInfoDouble(sym, SYMBOL_VOLUME_STEP),
                   (double)SymbolInfoInteger(sym, SYMBOL_TRADE_STOPS_LEVEL),
                   (double)((tick.ask - tick.bid) / (point > 0 ? point : 1)),
-                  (int)SymbolInfoInteger(sym, SYMBOL_DIGITS), SymbolInfoDouble(sym, SYMBOL_TRADE_TICK_SIZE));
+                  (int)SymbolInfoInteger(sym, SYMBOL_DIGITS), SymbolInfoDouble(sym, SYMBOL_TRADE_TICK_SIZE),
+                  SymbolInfoString(sym, SYMBOL_CURRENCY_PROFIT));
      }
    quotes += "}";
    specs += "}";
@@ -331,7 +483,7 @@ string BuildSnapshot()
       long magic = PositionGetInteger(POSITION_MAGIC);
       string comment = PositionGetString(POSITION_COMMENT);
       // Only our own trades: another EA's positions must never be adopted or closed.
-      if(magic != InpMagic && StringFind(comment, "no7") < 0)
+      if(!InpReadOnly && magic != InpMagic)
          continue;
       long type = PositionGetInteger(POSITION_TYPE);
       if(!first)
@@ -415,12 +567,20 @@ void ProcessCommands(const string commands)
          continue;
       if(AlreadyExecuted(id))
         {
+         int known = CommandIndex(id);
+         AppendResult(id, g_executed_results[known]);
          if(InpVerbose)
             PrintFormat("No7BridgeEA: skipping %s — already executed here", id);
          continue;
         }
-      RememberExecuted(id);
+      if(!ClaimCommand(id))
+        {
+         AppendResult(id, "\"ok\":false,\"status\":\"pending\",\"error\":\"durable claim failed; manual reconciliation required\"");
+         continue;
+        }
       string outcome = ExecuteCommand(kind, object);
+      if(!SaveCommandOutcome(id, outcome))
+         outcome = g_executed_results[CommandIndex(id)];
       AppendResult(id, outcome);
      }
   }
@@ -470,6 +630,8 @@ void AppendResult(const string id, const string outcome_json)
 
 string ExecuteCommand(const string kind, const string command)
   {
+   if(InpReadOnly || !DemoIdentityValid())
+      return("\"ok\":false,\"error\":\"read-only or invalid Demo identity\"");
    if(kind == "ping")
       return("\"ok\":true,\"status\":\"pong\"");
    if(kind == "order")
@@ -483,6 +645,8 @@ string ExecuteCommand(const string kind, const string command)
 
 string DoOrder(const string command)
   {
+   if(InpReadOnly || !DemoIdentityValid())
+      return("\"ok\":false,\"error\":\"read-only or invalid Demo identity\"");
    string symbol = JsonString(command, "symbol");
    string side = JsonString(command, "side");
    double volume = JsonNumber(command, "volume");
@@ -513,7 +677,9 @@ string DoOrder(const string command)
    request.comment = "no7 bridge";
    request.type_filling = FillingMode(symbol);
 
-   if(!OrderSend(request, result))
+    if(InpReadOnly || !DemoIdentityValid())
+       return("\"ok\":false,\"error\":\"read-only or invalid Demo identity\"");
+    if(!OrderSend(request, result))
       return(StringFormat("\"ok\":false,\"error\":\"OrderSend failed %d: %s\",\"retcode\":%d",
                           GetLastError(), result.comment, (int)result.retcode));
    if(result.retcode != TRADE_RETCODE_DONE && result.retcode != TRADE_RETCODE_PLACED)
@@ -531,11 +697,15 @@ string DoOrder(const string command)
 
 string DoClose(const string command)
   {
+   if(InpReadOnly || !DemoIdentityValid())
+      return("\"ok\":false,\"error\":\"read-only or invalid Demo identity\"");
    string ticket_text = JsonString(command, "ticket");
    ulong ticket = (ulong)StringToInteger(ticket_text);
    if(ticket == 0 || !PositionSelectByTicket(ticket))
       return("\"ok\":false,\"error\":\"no such position " + ticket_text + "\"");
    string symbol = PositionGetString(POSITION_SYMBOL);
+   if(PositionGetInteger(POSITION_MAGIC) != InpMagic)
+      return("\"ok\":false,\"error\":\"position ownership mismatch\"");
    double volume = PositionGetDouble(POSITION_VOLUME);
    double requested = JsonNumber(command, "volume");
    if(requested > 0 && requested < volume)
@@ -559,23 +729,32 @@ string DoClose(const string command)
    request.comment = "no7 bridge close";
    request.type_filling = FillingMode(symbol);
 
-   if(!OrderSend(request, result) || result.retcode != TRADE_RETCODE_DONE)
-      return(StringFormat("\"ok\":false,\"error\":\"close failed %d %s\",\"retcode\":%d",
-                          GetLastError(), result.comment, (int)result.retcode));
+   if(InpReadOnly || !DemoIdentityValid())
+      return("\"ok\":false,\"error\":\"read-only or invalid Demo identity\"");
+   bool sent = OrderSend(request, result);
+   if(!sent || (result.retcode != TRADE_RETCODE_DONE && result.retcode != TRADE_RETCODE_DONE_PARTIAL))
+      return(StringFormat("\"ok\":false,\"status\":\"unknown\","
+                          "\"error\":\"close outcome unknown; reconcile before resending\",\"retcode\":%d",
+                          (int)result.retcode));
+   string close_status = result.retcode == TRADE_RETCODE_DONE_PARTIAL ? "partially_filled" : "closed";
    if(InpVerbose)
-      PrintFormat("No7BridgeEA: closed %I64u %.2f %s @ %.5f", ticket, request.volume, symbol,
+      PrintFormat("No7BridgeEA: close acknowledgement %I64u %.8f %s @ %.5f", ticket, result.volume, symbol,
                   result.price);
-   return StringFormat("\"ok\":true,\"status\":\"closed\",\"ticket\":\"%I64u\","
-                       "\"price\":%.5f,\"volume\":%.2f,\"retcode\":%d",
-                       ticket, result.price, request.volume, (int)result.retcode);
+   return StringFormat("\"ok\":true,\"status\":\"%s\",\"ticket\":\"%I64u\","
+                       "\"price\":%.8f,\"volume\":%.8f,\"retcode\":%d",
+                       close_status, ticket, result.price, result.volume, (int)result.retcode);
   }
 
 string DoModify(const string command)
   {
+   if(InpReadOnly || !DemoIdentityValid())
+      return("\"ok\":false,\"error\":\"read-only or invalid Demo identity\"");
    string ticket_text = JsonString(command, "ticket");
    ulong ticket = (ulong)StringToInteger(ticket_text);
    if(ticket == 0 || !PositionSelectByTicket(ticket))
       return("\"ok\":false,\"error\":\"no such position " + ticket_text + "\"");
+   if(PositionGetInteger(POSITION_MAGIC) != InpMagic)
+      return("\"ok\":false,\"error\":\"position ownership mismatch\"");
    double sl = JsonNumber(command, "sl");
    double tp = JsonNumber(command, "tp");
    if(sl <= 0)
@@ -594,7 +773,9 @@ string DoModify(const string command)
    request.tp = tp;
    request.magic = InpMagic;
 
-   if(!OrderSend(request, result) || result.retcode != TRADE_RETCODE_DONE)
+    if(InpReadOnly || !DemoIdentityValid())
+       return("\"ok\":false,\"error\":\"read-only or invalid Demo identity\"");
+    if(!OrderSend(request, result) || result.retcode != TRADE_RETCODE_DONE)
       return(StringFormat("\"ok\":false,\"error\":\"modify failed %d %s\",\"retcode\":%d",
                           GetLastError(), result.comment, (int)result.retcode));
    return StringFormat("\"ok\":true,\"status\":\"modified\",\"ticket\":\"%I64u\"", ticket);

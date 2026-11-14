@@ -126,5 +126,6 @@ def my_session(runtime: TradingRuntime = Depends(get_runtime), user=Depends(curr
             "snapshot_age_seconds": relay.snapshot_age(account),
             "symbols": getattr(adapter, "symbol_names", lambda: [])(),
         })
-    return {"enabled": relay.enabled, "fresh_seconds": relay.fresh_seconds,
+    return {"enabled": relay.enabled, "read_only": relay.read_only,
+            "require_demo_identity": relay.require_demo_identity, "fresh_seconds": relay.fresh_seconds,
             "stale_seconds": relay.stale_seconds, "bridges": rows}

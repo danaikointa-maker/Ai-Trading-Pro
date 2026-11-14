@@ -32,7 +32,7 @@
 import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { createChart } from 'lightweight-charts'
 import { api } from '../lib/api'
-import { state } from '../lib/store'
+import { positions, state } from '../lib/store'
 
 const container = ref(null)
 const loading = ref(false)
@@ -214,8 +214,7 @@ function drawOverlays() {
       addLine(z.mid, 'rgba(52,211,153,0.35)', `S ${z.quality[0].toUpperCase()}`, 3),
     )
   }
-  const positions = state.live?.positions || []
-  positions.forEach((p) => {
+  positions.value.forEach((p) => {
     addLine(p.entry, 'rgba(96,165,250,0.8)', `#${p.ticket}`, 1, 1)
     addLine(p.sl, 'rgba(248,113,113,0.6)', 'pos SL', 1, 1)
     addLine(p.tp, 'rgba(52,211,153,0.6)', 'pos TP', 1, 1)
@@ -247,6 +246,7 @@ watch(() => state.live?.version, () => {
   drawOverlays()
 })
 watch(() => state.live?.ticker?.last, updateLast)
+watch(positions, drawOverlays)
 
 onMounted(async () => {
   try {

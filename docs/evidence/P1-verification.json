@@ -1,0 +1,506 @@
+{
+  "schema_version": 1,
+  "baseline_id": "P1-local-46438d7",
+  "head": "46438d71e16dfaa5dc58e88d997ca0ed43be2aff",
+  "source_manifest_sha256": "2b914a7cf65602bc96bd454b566eba2093275728ba6bb9cced8ca87ce1dfbed4",
+  "captured_at": "2026-11-09T05:35:57.035339+00:00",
+  "release_approved": false,
+  "remote_retention": "not performed; docs/evidence remains uncommitted",
+  "external_acceptance": "Redis/VM/MT5/crash/browser not run",
+  "runs": [
+    {
+      "id": "history-final-full",
+      "scope": "local only; mocked/source checks do not prove external acceptance",
+      "junit": {
+        "cases": 734,
+        "failures": 0,
+        "errors": 0,
+        "skipped": 39,
+        "passed": 695
+      },
+      "exit_code": 0,
+      "artifacts": [
+        {
+          "path": "storage/local-dev/qa/safety/history-final-full.log",
+          "bytes": 4136,
+          "sha256": "e464becd0d117dd62591175c6037f7dbc93939a75346e75f97eb3875dfb4505f"
+        },
+        {
+          "path": "storage/local-dev/qa/safety/history-final-full.err",
+          "bytes": 0,
+          "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+        },
+        {
+          "path": "storage/local-dev/qa/safety/history-final-full.exit",
+          "bytes": 1,
+          "sha256": "5feceb66ffc86f38d952786c6d696c79c2dbc239dd4e91b46729d73a27fb57e9"
+        },
+        {
+          "path": "storage/local-dev/qa/safety/history-final-full.xml",
+          "bytes": 93096,
+          "sha256": "75ec0cda755b45cb3cdbac6d455161c5bd54ba5db4a5abf47ddcd865b8b38b99"
+        }
+      ]
+    },
+    {
+      "id": "atomic-final-full",
+      "scope": "local only; mocked/source checks do not prove external acceptance",
+      "junit": {
+        "cases": 744,
+        "failures": 0,
+        "errors": 0,
+        "skipped": 40,
+        "passed": 704
+      },
+      "exit_code": 0,
+      "artifacts": [
+        {
+          "path": "storage/local-dev/qa/safety/atomic-final-full.log",
+          "bytes": 4194,
+          "sha256": "cc57bcf331722767c8e26007f39a53a39a1dce3bcc596e1f691731cdfd577953"
+        },
+        {
+          "path": "storage/local-dev/qa/safety/atomic-final-full.err",
+          "bytes": 0,
+          "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+        },
+        {
+          "path": "storage/local-dev/qa/safety/atomic-final-full.exit",
+          "bytes": 1,
+          "sha256": "5feceb66ffc86f38d952786c6d696c79c2dbc239dd4e91b46729d73a27fb57e9"
+        },
+        {
+          "path": "storage/local-dev/qa/safety/atomic-final-full.xml",
+          "bytes": 94683,
+          "sha256": "8b076b43714cba54b02a5751ea1c188691db65a74b2411c7026e6324eda93047"
+        }
+      ]
+    },
+    {
+      "id": "p13-final",
+      "scope": "local only; mocked/source checks do not prove external acceptance",
+      "started_at": "2026-11-09T05:19:04.153827+00:00",
+      "finished_at": "2026-11-09T05:23:47.126732+00:00",
+      "junit": {
+        "cases": 756,
+        "failures": 0,
+        "errors": 0,
+        "skipped": 39,
+        "passed": 717
+      },
+      "exit_code": 0,
+      "artifacts": [
+        {
+          "path": "storage/local-dev/qa/safety/p13-final/summary.json",
+          "bytes": 1924,
+          "sha256": "8320181ccd4311c5fdd41281b3e17997fb3761f6c83608760a0152019ae043c3"
+        },
+        {
+          "path": "storage/local-dev/qa/safety/p13-final/tests.xml",
+          "bytes": 95975,
+          "sha256": "89bbf2b4a800642da08308dabcf570c29f5ccd2b58b390bcbea5e30024be6157"
+        },
+        {
+          "path": "storage/local-dev/qa/safety/p13-final/node-version.log",
+          "bytes": 10,
+          "sha256": "00c8158eb097d27ae16774d820ae2feb3526c7057b57b63426401bfba18be8a8"
+        },
+        {
+          "path": "storage/local-dev/qa/safety/p13-final/node-version.err",
+          "bytes": 0,
+          "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+        },
+        {
+          "path": "storage/local-dev/qa/safety/p13-final/node-version.exit",
+          "bytes": 1,
+          "sha256": "5feceb66ffc86f38d952786c6d696c79c2dbc239dd4e91b46729d73a27fb57e9"
+        },
+        {
+          "path": "storage/local-dev/qa/safety/p13-final/git-version.log",
+          "bytes": 29,
+          "sha256": "4ad4cdf2b4512c97f9a0065cea36f707653e5bbfb275caf8e016aedd2c0a068f"
+        },
+        {
+          "path": "storage/local-dev/qa/safety/p13-final/git-version.err",
+          "bytes": 0,
+          "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+        },
+        {
+          "path": "storage/local-dev/qa/safety/p13-final/git-version.exit",
+          "bytes": 1,
+          "sha256": "5feceb66ffc86f38d952786c6d696c79c2dbc239dd4e91b46729d73a27fb57e9"
+        },
+        {
+          "path": "storage/local-dev/qa/safety/p13-final/dependencies.log",
+          "bytes": 31,
+          "sha256": "672aec65a45bed50e70229c70934a7eebf0462595c459b83023027645d57cccf"
+        },
+        {
+          "path": "storage/local-dev/qa/safety/p13-final/dependencies.err",
+          "bytes": 0,
+          "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+        },
+        {
+          "path": "storage/local-dev/qa/safety/p13-final/dependencies.exit",
+          "bytes": 1,
+          "sha256": "5feceb66ffc86f38d952786c6d696c79c2dbc239dd4e91b46729d73a27fb57e9"
+        },
+        {
+          "path": "storage/local-dev/qa/safety/p13-final/lint.log",
+          "bytes": 19,
+          "sha256": "82b3e6a6c090a57601d22943bd23fca9218d1031dbe5a7b754092f9a156b4f18"
+        },
+        {
+          "path": "storage/local-dev/qa/safety/p13-final/lint.err",
+          "bytes": 0,
+          "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+        },
+        {
+          "path": "storage/local-dev/qa/safety/p13-final/lint.exit",
+          "bytes": 1,
+          "sha256": "5feceb66ffc86f38d952786c6d696c79c2dbc239dd4e91b46729d73a27fb57e9"
+        },
+        {
+          "path": "storage/local-dev/qa/safety/p13-final/build.log",
+          "bytes": 3068,
+          "sha256": "0f60c3b3473d3620a1e60269e12f585ca09238abe62e83ea084bad24d7eddbaf"
+        },
+        {
+          "path": "storage/local-dev/qa/safety/p13-final/build.err",
+          "bytes": 0,
+          "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+        },
+        {
+          "path": "storage/local-dev/qa/safety/p13-final/build.exit",
+          "bytes": 1,
+          "sha256": "5feceb66ffc86f38d952786c6d696c79c2dbc239dd4e91b46729d73a27fb57e9"
+        },
+        {
+          "path": "storage/local-dev/qa/safety/p13-final/tests.log",
+          "bytes": 4136,
+          "sha256": "e127ba837ffa6282b2a15c9b9221d1fc3dfab7ddb1df3ba383486936f18ccd60"
+        },
+        {
+          "path": "storage/local-dev/qa/safety/p13-final/tests.err",
+          "bytes": 0,
+          "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+        },
+        {
+          "path": "storage/local-dev/qa/safety/p13-final/tests.exit",
+          "bytes": 1,
+          "sha256": "5feceb66ffc86f38d952786c6d696c79c2dbc239dd4e91b46729d73a27fb57e9"
+        },
+        {
+          "path": "storage/local-dev/qa/safety/p13-final/diff.log",
+          "bytes": 0,
+          "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+        },
+        {
+          "path": "storage/local-dev/qa/safety/p13-final/diff.err",
+          "bytes": 0,
+          "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+        },
+        {
+          "path": "storage/local-dev/qa/safety/p13-final/diff.exit",
+          "bytes": 1,
+          "sha256": "5feceb66ffc86f38d952786c6d696c79c2dbc239dd4e91b46729d73a27fb57e9"
+        }
+      ],
+      "skip_reasons": [
+        {
+          "category": "dependency",
+          "reason": "needs bash",
+          "count": 13
+        },
+        {
+          "category": "dependency",
+          "reason": "no redis-server binary — run ./scripts/fetch_redis_server.sh",
+          "count": 20
+        },
+        {
+          "category": "policy",
+          "reason": "creates the venv itself, or runs no Python at all",
+          "count": 3
+        },
+        {
+          "category": "policy",
+          "reason": "runs no Python",
+          "count": 2
+        },
+        {
+          "category": "policy",
+          "reason": "sourced, never executed directly",
+          "count": 1
+        }
+      ],
+      "node_pwa": "passed",
+      "jobs": [
+        {
+          "name": "node-version",
+          "status": "passed",
+          "exit_code": 0
+        },
+        {
+          "name": "git-version",
+          "status": "passed",
+          "exit_code": 0
+        },
+        {
+          "name": "dependencies",
+          "status": "passed",
+          "exit_code": 0
+        },
+        {
+          "name": "lint",
+          "status": "passed",
+          "exit_code": 0
+        },
+        {
+          "name": "build",
+          "status": "passed",
+          "exit_code": 0
+        },
+        {
+          "name": "tests",
+          "status": "passed",
+          "exit_code": 0
+        },
+        {
+          "name": "diff",
+          "status": "passed",
+          "exit_code": 0
+        }
+      ],
+      "tool_versions": {
+        "python": "3.13.17",
+        "node": "v26.13.0",
+        "git": "git version 2.56.0.windows.4",
+        "pytest": "9.2.0",
+        "ruff": "0.17.4",
+        "fastapi": "0.162.2",
+        "starlette": "1.10.0"
+      },
+      "warnings": "1 existing Starlette/httpx TestClient deprecation",
+      "tools": {
+        "python": "repository .venv",
+        "node": "explicit installed portable Node",
+        "git": "explicit installed Git",
+        "bash": "absent",
+        "redis_server": "absent"
+      }
+    },
+    {
+      "id": "p1-close-verification",
+      "scope": "local only; mocked/source checks do not prove external acceptance",
+      "started_at": "2026-11-09T05:29:38.592284+00:00",
+      "finished_at": "2026-11-09T05:33:46.209654+00:00",
+      "junit": {
+        "cases": 756,
+        "failures": 0,
+        "errors": 0,
+        "skipped": 39,
+        "passed": 717
+      },
+      "exit_code": 0,
+      "artifacts": [
+        {
+          "path": "storage/local-dev/qa/safety/p1-close-verification/summary.json",
+          "bytes": 1924,
+          "sha256": "e5b33b2a0c502d35434cf0b018557041eb5d735bf8f130267889fdd30e84ed80"
+        },
+        {
+          "path": "storage/local-dev/qa/safety/p1-close-verification/tests.xml",
+          "bytes": 95974,
+          "sha256": "4a033fed35cb66279655272fbccc6471a636e28ad376eb8ccb53c0dbd9453b96"
+        },
+        {
+          "path": "storage/local-dev/qa/safety/p1-close-verification/node-version.log",
+          "bytes": 10,
+          "sha256": "00c8158eb097d27ae16774d820ae2feb3526c7057b57b63426401bfba18be8a8"
+        },
+        {
+          "path": "storage/local-dev/qa/safety/p1-close-verification/node-version.err",
+          "bytes": 0,
+          "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+        },
+        {
+          "path": "storage/local-dev/qa/safety/p1-close-verification/node-version.exit",
+          "bytes": 1,
+          "sha256": "5feceb66ffc86f38d952786c6d696c79c2dbc239dd4e91b46729d73a27fb57e9"
+        },
+        {
+          "path": "storage/local-dev/qa/safety/p1-close-verification/git-version.log",
+          "bytes": 29,
+          "sha256": "4ad4cdf2b4512c97f9a0065cea36f707653e5bbfb275caf8e016aedd2c0a068f"
+        },
+        {
+          "path": "storage/local-dev/qa/safety/p1-close-verification/git-version.err",
+          "bytes": 0,
+          "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+        },
+        {
+          "path": "storage/local-dev/qa/safety/p1-close-verification/git-version.exit",
+          "bytes": 1,
+          "sha256": "5feceb66ffc86f38d952786c6d696c79c2dbc239dd4e91b46729d73a27fb57e9"
+        },
+        {
+          "path": "storage/local-dev/qa/safety/p1-close-verification/dependencies.log",
+          "bytes": 31,
+          "sha256": "672aec65a45bed50e70229c70934a7eebf0462595c459b83023027645d57cccf"
+        },
+        {
+          "path": "storage/local-dev/qa/safety/p1-close-verification/dependencies.err",
+          "bytes": 0,
+          "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+        },
+        {
+          "path": "storage/local-dev/qa/safety/p1-close-verification/dependencies.exit",
+          "bytes": 1,
+          "sha256": "5feceb66ffc86f38d952786c6d696c79c2dbc239dd4e91b46729d73a27fb57e9"
+        },
+        {
+          "path": "storage/local-dev/qa/safety/p1-close-verification/lint.log",
+          "bytes": 19,
+          "sha256": "82b3e6a6c090a57601d22943bd23fca9218d1031dbe5a7b754092f9a156b4f18"
+        },
+        {
+          "path": "storage/local-dev/qa/safety/p1-close-verification/lint.err",
+          "bytes": 0,
+          "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+        },
+        {
+          "path": "storage/local-dev/qa/safety/p1-close-verification/lint.exit",
+          "bytes": 1,
+          "sha256": "5feceb66ffc86f38d952786c6d696c79c2dbc239dd4e91b46729d73a27fb57e9"
+        },
+        {
+          "path": "storage/local-dev/qa/safety/p1-close-verification/build.log",
+          "bytes": 3068,
+          "sha256": "f22c7d5081e5f17c672c219e34846a93f5de7449c01c9f43e344d228e7a2b50b"
+        },
+        {
+          "path": "storage/local-dev/qa/safety/p1-close-verification/build.err",
+          "bytes": 0,
+          "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+        },
+        {
+          "path": "storage/local-dev/qa/safety/p1-close-verification/build.exit",
+          "bytes": 1,
+          "sha256": "5feceb66ffc86f38d952786c6d696c79c2dbc239dd4e91b46729d73a27fb57e9"
+        },
+        {
+          "path": "storage/local-dev/qa/safety/p1-close-verification/tests.log",
+          "bytes": 4136,
+          "sha256": "d79f5fbe509ddeec91f10f6ee9b38753e44e59b8e93c741ba7d3a49694478f2d"
+        },
+        {
+          "path": "storage/local-dev/qa/safety/p1-close-verification/tests.err",
+          "bytes": 0,
+          "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+        },
+        {
+          "path": "storage/local-dev/qa/safety/p1-close-verification/tests.exit",
+          "bytes": 1,
+          "sha256": "5feceb66ffc86f38d952786c6d696c79c2dbc239dd4e91b46729d73a27fb57e9"
+        },
+        {
+          "path": "storage/local-dev/qa/safety/p1-close-verification/diff.log",
+          "bytes": 0,
+          "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+        },
+        {
+          "path": "storage/local-dev/qa/safety/p1-close-verification/diff.err",
+          "bytes": 0,
+          "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+        },
+        {
+          "path": "storage/local-dev/qa/safety/p1-close-verification/diff.exit",
+          "bytes": 1,
+          "sha256": "5feceb66ffc86f38d952786c6d696c79c2dbc239dd4e91b46729d73a27fb57e9"
+        }
+      ],
+      "skip_reasons": [
+        {
+          "category": "dependency",
+          "reason": "needs bash",
+          "count": 13
+        },
+        {
+          "category": "dependency",
+          "reason": "no redis-server binary — run ./scripts/fetch_redis_server.sh",
+          "count": 20
+        },
+        {
+          "category": "policy",
+          "reason": "creates the venv itself, or runs no Python at all",
+          "count": 3
+        },
+        {
+          "category": "policy",
+          "reason": "runs no Python",
+          "count": 2
+        },
+        {
+          "category": "policy",
+          "reason": "sourced, never executed directly",
+          "count": 1
+        }
+      ],
+      "node_pwa": "passed",
+      "jobs": [
+        {
+          "name": "node-version",
+          "status": "passed",
+          "exit_code": 0
+        },
+        {
+          "name": "git-version",
+          "status": "passed",
+          "exit_code": 0
+        },
+        {
+          "name": "dependencies",
+          "status": "passed",
+          "exit_code": 0
+        },
+        {
+          "name": "lint",
+          "status": "passed",
+          "exit_code": 0
+        },
+        {
+          "name": "build",
+          "status": "passed",
+          "exit_code": 0
+        },
+        {
+          "name": "tests",
+          "status": "passed",
+          "exit_code": 0
+        },
+        {
+          "name": "diff",
+          "status": "passed",
+          "exit_code": 0
+        }
+      ],
+      "tool_versions": {
+        "python": "3.13.17",
+        "node": "v26.13.0",
+        "git": "git version 2.56.0.windows.4",
+        "pytest": "9.2.0",
+        "ruff": "0.17.4",
+        "fastapi": "0.162.2",
+        "starlette": "1.10.0"
+      },
+      "warnings": "1 existing Starlette/httpx TestClient deprecation",
+      "tools": {
+        "python": "repository .venv",
+        "node": "explicit installed portable Node",
+        "git": "explicit installed Git",
+        "bash": "absent",
+        "redis_server": "absent"
+      }
+    }
+  ]
+}

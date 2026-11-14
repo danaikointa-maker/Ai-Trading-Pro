@@ -1,0 +1,17 @@
+# Append ONLY after replacing the two unverified addresses with observed VM addresses.
+# Store in %USERPROFILE%\.ssh\config on Development PC.
+Host no7-ai
+    HostName REPLACE_WITH_VERIFIED_UBUNTU_VM100_IP
+    User no7deploy
+    IdentityFile ~/.ssh/no7-trading
+    IdentitiesOnly yes
+    StrictHostKeyChecking yes
+
+Host no7-mt5
+    HostName REPLACE_WITH_VERIFIED_WINDOWS_VM200_IP
+    User no7deploy
+    IdentityFile ~/.ssh/no7-trading
+    IdentitiesOnly yes
+    StrictHostKeyChecking yes
+
+# Proxmox root intentionally not set for Agent automations.

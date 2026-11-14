@@ -1,5 +1,17 @@
 # API — what the dashboard relies on
 
+### Model approval safety (H084)
+
+The model approve/revoke endpoint accepts only a JSON boolean for `approved`;
+other value types return `422`. Successful changes clear all local forecast
+cache entries before predictor reload. This is not cross-process or broker
+execution fencing, nor an operator quarantine-release workflow.
+H086 also filters obsolete version/approval cache entries in signals, explanation
+and local live payloads. Replica frames and client-side merge need separate checks.
+
+Safety state และหลักฐานตาม [`BASELINE-P1.th.md`](BASELINE-P1.th.md): protocol-level
+single delivery/duplicate handling ไม่ใช่ broker exactly-once, multi-host fencing หรือ crash acceptance
+
 Base: `http://127.0.0.1:8000` · interactive docs: `/api/docs` · OpenAPI: `/api/openapi.json`
 ทุก endpoint ใต้ `/api/` (ยกเว้น login/health) ต้องมี `Authorization: Bearer <jwt>`
 
@@ -135,7 +147,15 @@ CORS เป็น **allowlist**: ค่าเริ่มต้นไม่ใ�
 |---|---|---|
 | GET | `/api/forecast?symbol=` | active model + `models[]` ที่ฝึกไว้ |
 | POST | `/api/forecast/train` | เริ่มฝึกเบื้องหลัง (progress ผ่าน live payload `training`) |
-| POST | `/api/forecast/models/{version}/approve` | อนุมัติเฉพาะเมื่อ metric ผ่าน (ไม่มีการ override) |
+| POST | `/api/forecast/models/{version}/approve` | research approval/revoke; registry refusal คืน `409`; ไม่ใช่ full-auto execution permission |
+
+`models[]` มี `artifact_status` (`verified`/`quarantined`) และ generic `artifact_reason`;
+`verified` หมายถึง registration/hash ผ่าน ณ ตอนตรวจ ไม่ใช่ sandbox หรือพิสูจน์ edge ของโมเดล
+quarantine เป็น durable workspace SQLite latch: restore bytes/restart/revoke ไม่ปลดเอง
+ยังไม่มี operator release API ที่รับรองแล้ว; retrain version ใหม่และเก็บหลักฐานเดิม
+H080 reload ใช้ approval ของ payload และ DB ร่วมกัน และ route revalidate predictor หลัง approve/revoke
+ไม่แก้ artifact bytes เพื่อ sync flag; H081 เพิ่ม global approval guard ก่อน horizon inference
+ยังไม่รับรอง cached forecast/path-table ทุกจุดเปลี่ยนตามทันที หรือว่า concurrent mutation ถูก fenced แล้ว
 
 ## Signals & trading
 
@@ -269,7 +289,9 @@ X-No7-Attempt: 2                   ← ครั้งที่เท่าไ�
 | `ok` | `actual_risk ≤ planned×1.25` **และ** ไม่ geometry broken |
 
 - `ok=false` → audit `risk.fill_drift` + notification (Thai) ให้ผู้ใช้ตัดสินใจ
-- คำสั่งซื้อขายถูกส่ง **ครั้งเดียว** ไม่มีการส่งซ้ำอัตโนมัติ; ถ้า error ระบบถามโบรกเกอร์ก่อนแล้วค่อย reject
+- Gateway พยายามส่งครั้งเดียวต่อ admitted intent ไม่มีการ resend อัตโนมัติ;
+  ถ้า error จะตรวจหลักฐานที่หาได้ หากยืนยันไม่ได้คง `pending`/unresolved พร้อม manual reconciliation
+  ไม่เดาว่า rejected และห้าม retry ด้วย key ใหม่; admission ครอบคลุม connections ใน SQLite DB เดียว
 - `POST /api/trading/close` และ `/close-all` คืน `{ok, trade}` (paper) หรือ `{ok, order}` (MT5) — ตรวจ `ok` ก่อนใช้
 
 ## `forecast`

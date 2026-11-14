@@ -1,0 +1,17 @@
+{
+  "schemaVersion": 1,
+  "receiptId": "44fb7bdb-aab6-45ba-8951-257981ff5354",
+  "status": "current",
+  "command": "deliver",
+  "type": "architecture",
+  "input": "C:\\workspace\\Ai-Trading-Pro\\.archify\\architecture-tradeai-20261112\\candidate.json",
+  "output": "C:\\workspace\\Ai-Trading-Pro\\.archify\\architecture-tradeai-20261112\\architecture-tradeai.html",
+  "specification": {
+    "sha256": "da315edae53b9b917715bf95a7081cf9d75bc94cf838171b3ed2ab2a927e531e",
+    "bytes": 6232
+  },
+  "artifact": {
+    "sha256": "a3ca458a5336c99a91d459dd17385a3ec5e7e1dd6920a0e2c80271aceafa9ee2",
+    "bytes": 860819
+  }
+}

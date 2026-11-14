@@ -31,7 +31,7 @@ from packages.shared_schemas.settings import get_settings  # noqa: E402
 from services.ai_forecast.trainer import ForecastTrainer  # noqa: E402
 from services.backtest_engine.backtester import Backtester  # noqa: E402
 from services.market_data.dataset import (DatasetError, describe, import_candles,  # noqa: E402
-                                          load_dataset)
+                                          load_dataset, workspace_dataset_dir)
 from services.risk_engine.engine import RiskEngine  # noqa: E402
 from services.risk_engine.planner import TradePlanner  # noqa: E402
 from packages.persistence.db import Database  # noqa: E402
@@ -53,7 +53,7 @@ def main() -> int:
     parser.add_argument("--symbol", required=True)
     parser.add_argument("--csv", default=None, help="import this file first (optional)")
     parser.add_argument("--tz", default="UTC", help="timezone of --csv timestamps")
-    parser.add_argument("--dataset-dir", default="storage/datasets")
+    parser.add_argument("--dataset-dir", default=None, help="directory within configured workspace datasets")
     parser.add_argument("--timeframe", default="M1", choices=["M1", "M5", "M15", "M30", "H1", "H4", "D1"])
     parser.add_argument("--bars", type=int, default=0, help="use only the last N bars (0 = all)")
     parser.add_argument("--version", default=None, help="model version tag")
@@ -64,6 +64,7 @@ def main() -> int:
 
     settings = get_settings()
     try:
+        args.dataset_dir = workspace_dataset_dir(settings.paths["datasets"], args.dataset_dir)
         if args.csv:
             meta = import_candles(args.csv, args.symbol, args.dataset_dir, tz=args.tz,
                                   timeframe=args.timeframe)
