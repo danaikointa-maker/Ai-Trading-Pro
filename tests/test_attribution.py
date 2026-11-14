@@ -17,6 +17,7 @@ from services.strategy_engine.attribution import (
     BLOCKER_CODES,
     CODE_ORDER,
     BlockerTally,
+    RollingAttribution,
     merge,
     normalise,
 )
@@ -408,6 +409,100 @@ def test_attribution_reset_starts_a_new_window(client, auth, runtime):
     assert res.status_code == 200
     assert res.json()["overall"]["signal"]["decisions"] == 0
     assert runtime.attribution_summary()["window_seconds"] < 5
+
+
+# ------------------------------------------------- the window, not the session
+def test_rolling_window_forgets_what_already_stopped_happening():
+    """A condition that cleared this morning must not own the table all day."""
+    roll = RollingAttribution()
+    for _ in range(40):                                   # 6 hours ago: spread
+        roll.add_signal(False, ["data_quality"], ["spread blown out"], now=1_000_000.0)
+    for _ in range(3):                                    # now: entry conditions
+        roll.add_signal(False, ["entry_conditions"], ["no setup"], now=1_021_600.0)
+
+    recent, _ = roll.window(3600, now=1_021_600.0)
+    assert recent.decisions == 3
+    assert [r["code"] for r in recent.summary()["signal"]["primary"]] == ["entry_conditions"]
+    # ...and the morning is still on the books, not deleted to see the present.
+    assert roll.total.decisions == 43
+    assert roll.total.primary["data_quality"] == 40
+
+
+def test_window_never_claims_to_cover_more_than_it_does():
+    """An hour-long window over a ten-minute-old engine covers ten minutes."""
+    roll = RollingAttribution()
+    roll.add_signal(False, ["entry_conditions"], [], now=10_000.0)
+    _, covered_from = roll.window(3600, now=10_600.0)
+    assert covered_from == 10_000.0                        # not 7_000.0
+
+
+def test_a_straddling_bucket_widens_the_reported_span_instead_of_hiding():
+    """Counts from 5 minutes of decisions must never be divided by 1 minute."""
+    roll = RollingAttribution(bucket_seconds=300)
+    for i in range(10):
+        roll.add_signal(False, ["entry_conditions"], [], now=1_000_000.0 + i * 20)
+    tally, covered_from = roll.window(60, now=1_000_200.0)    # asked for 1 minute
+    assert tally.decisions == 10                              # got the whole bucket
+    assert covered_from == 1_000_000.0                        # and says so (200s, not 60s)
+
+
+def test_buckets_are_pruned_so_a_long_session_cannot_grow_without_bound():
+    roll = RollingAttribution(bucket_seconds=300, retain_seconds=3600)
+    for i in range(2000):                                  # ~2.2 days of decisions
+        roll.add_signal(False, ["entry_conditions"], [], now=1_000_000.0 + i * 100)
+    assert roll.buckets() <= 14                            # 1h of 5-min buckets + edge
+    assert roll.total.decisions == 2000                    # the totals lose nothing
+
+
+def test_summary_reports_both_the_window_and_the_session(runtime):
+    runtime.reset_attribution()
+    symbol = runtime.symbols()[0]
+    runtime._decide_symbol(symbol, 10_000.0, Health.connected,
+                           runtime.risk.state(runtime.adapter), time.time())
+
+    body = runtime.attribution_summary()
+    assert body["basis"] == "rolling" and body["requested_window_seconds"] == 3600
+    assert body["overall"]["signal"]["decisions"] == 1
+    assert body["session"]["signal"]["decisions"] == 1
+    assert body["window_seconds"] <= body["session_seconds"] + 1
+    assert body["idle_seconds"] is not None and body["idle_seconds"] < 5
+
+    whole = runtime.attribution_summary(window_seconds=0)
+    assert whole["basis"] == "session" and whole["requested_window_seconds"] is None
+
+
+def test_an_idle_window_says_so_instead_of_showing_an_empty_table(runtime):
+    """Silence is a different finding from 'nothing qualified', and says when."""
+    runtime.reset_attribution()
+    symbol = runtime.symbols()[0]
+    roll = RollingAttribution()
+    roll.add_signal(False, ["entry_conditions"], ["old"], now=time.time() - 7200)
+    runtime.attribution[symbol] = roll
+
+    body = runtime.attribution_summary(window_seconds=1800)
+    assert body["overall"]["signal"]["decisions"] == 0
+    assert "No decisions in the last" in body["headline"] and "min ago" in body["headline"]
+    assert body["session"]["signal"]["decisions"] == 1       # still counted somewhere
+    assert body["idle_seconds"] > 7000
+
+
+def test_window_query_parameter_narrows_what_the_endpoint_counts(client, auth, runtime):
+    runtime.reset_attribution()
+    symbol = runtime.symbols()[0]
+    roll = RollingAttribution()
+    roll.add_signal(False, ["data_quality"], ["stale"], now=time.time() - 7200)
+    roll.add_signal(False, ["entry_conditions"], ["no setup"], now=time.time())
+    runtime.attribution[symbol] = roll
+
+    hour = client.get("/api/system/attribution?window=3600", headers=auth).json()
+    assert hour["overall"]["signal"]["decisions"] == 1
+    assert hour["overall"]["signal"]["primary"][0]["code"] == "entry_conditions"
+
+    whole = client.get("/api/system/attribution?window=0", headers=auth).json()
+    assert whole["basis"] == "session"
+    assert whole["overall"]["signal"]["decisions"] == 2
+
+    assert client.get("/api/system/attribution?window=-5", headers=auth).status_code == 422
 
 
 def test_attribution_requires_authentication(client):

@@ -32,6 +32,7 @@ name with sample text, so a new blocker that nobody registered shows up as
 """
 from __future__ import annotations
 
+import time
 from typing import Any, Iterable
 
 # ---------------------------------------------------------------------------
@@ -244,6 +245,106 @@ class BlockerTally:
                     f"actionable signals ({', '.join(gparts)})")
         return (f"{self.blocked} of {self.decisions} analysed decisions produced no "
                 f"tradable signal — most binding: {', '.join(parts)}{gate}.")
+
+
+class RollingAttribution:
+    """One symbol's tallies, kept in time buckets so a *window* can be asked for.
+
+    The cumulative counter this replaces answered "why has this engine not been
+    trading, on average, since it booted". Nobody asks that question. The person
+    staring at a quiet dashboard is asking "why is it not trading *now*", and a
+    cumulative counter cannot answer it:
+
+    * a condition that started ten minutes ago is diluted to a rounding error
+      inside a day's worth of decisions, so the thing that is actually stopping
+      the engine right now is invisible;
+    * a condition that cleared yesterday keeps its share of the table forever,
+      so the operator fixes something that is no longer broken;
+    * the only cure on offer was `POST /attribution/reset`, which answers the
+      present by destroying the past.
+
+    So both are kept. `total` is never pruned and still answers the session
+    question exactly; the buckets answer any window up to `retain_seconds`.
+
+    Buckets are coarse on purpose. Storing every decision would let any window
+    be reconstructed exactly but grows without bound (one decision per symbol
+    every 4 seconds). A bucket costs at most `bucket_seconds` of slop at the
+    edge of the window — reported as `window_seconds`, never hidden.
+    """
+
+    def __init__(self, bucket_seconds: int = 300, retain_seconds: int = 86_400,
+                 keep_samples: int = 2) -> None:
+        self.bucket_seconds = max(1, int(bucket_seconds))
+        self.retain_seconds = max(self.bucket_seconds, int(retain_seconds))
+        self.keep_samples = max(0, int(keep_samples))
+        self.total = BlockerTally(self.keep_samples)   # never pruned
+        self._buckets: dict[int, BlockerTally] = {}
+        self.first_at: float | None = None
+        self.last_at: float | None = None
+
+    # ------------------------------------------------------------------ input
+    def _bucket(self, now: float) -> BlockerTally:
+        idx = int(now // self.bucket_seconds)
+        tally = self._buckets.get(idx)
+        if tally is None:
+            tally = self._buckets[idx] = BlockerTally(self.keep_samples)
+            self._prune(now)
+        if self.first_at is None or now < self.first_at:
+            self.first_at = now
+        self.last_at = max(now, self.last_at or now)
+        return tally
+
+    def _prune(self, now: float) -> None:
+        """Drop buckets older than the retention span.
+
+        Pruned against the newest timestamp seen rather than the wall clock, so
+        a replay or a test that feeds historical timestamps keeps its data
+        instead of having it deleted for being 'old'.
+        """
+        newest = max(now, self.last_at or now)
+        cutoff = int((newest - self.retain_seconds) // self.bucket_seconds)
+        for idx in [i for i in self._buckets if i < cutoff]:
+            del self._buckets[idx]
+
+    def add_signal(self, actionable: bool, codes: Iterable[str] = (),
+                   details: Iterable[str] = (), now: float | None = None) -> str | None:
+        now = time.time() if now is None else float(now)
+        codes, details = list(codes), list(details)
+        self.total.add_signal(actionable, codes, details)
+        return self._bucket(now).add_signal(actionable, codes, details)
+
+    def add_gate(self, allow: bool, checks: Iterable[dict[str, Any]] = (),
+                 now: float | None = None) -> str | None:
+        now = time.time() if now is None else float(now)
+        checks = list(checks)
+        self.total.add_gate(allow, checks)
+        return self._bucket(now).add_gate(allow, checks)
+
+    # ----------------------------------------------------------------- output
+    def window(self, seconds: float, now: float | None = None) -> tuple[BlockerTally, float]:
+        """Merged tally for the last `seconds`, plus the moment it really starts.
+
+        The second element is what the window *covers*, not what was asked for:
+        a window of an hour over an engine that booted ten minutes ago covers
+        ten minutes, and saying otherwise would understate every rate in it.
+        """
+        now = time.time() if now is None else float(now)
+        seconds = max(0.0, float(seconds))
+        start = now - seconds
+        first_idx = int(start // self.bucket_seconds)
+        picked = sorted(idx for idx in self._buckets if idx >= first_idx)
+        # A bucket that straddles the edge is included whole, so the answer can
+        # cover more than was asked for. Report the start of the earliest bucket
+        # actually included — rounding the span *down* to the request would
+        # divide these counts by a window that never produced them.
+        covered = (picked[0] * float(self.bucket_seconds)) if picked else start
+        if self.first_at is not None:
+            covered = max(covered, self.first_at)
+        return merge(self._buckets[i] for i in picked), min(covered, now)
+
+    def buckets(self) -> int:
+        """How many buckets are being retained (memory guard in tests)."""
+        return len(self._buckets)
 
 
 def merge(tallies: Iterable[BlockerTally]) -> BlockerTally:
