@@ -108,6 +108,8 @@ CORS เป็น **allowlist**: ค่าเริ่มต้นไม่ใ�
 | GET | `/api/system/audit?limit=` | audit trail (ใครทำอะไร) |
 | GET | `/api/system/alerts?limit=` | alert ล่าสุด |
 | GET | `/api/system/errors` | error buffer ของ runtime |
+| GET | `/api/system/attribution?symbol=` | **ทำไมถึงไม่เทรด**: นับเหตุผลที่บล็อกการตัดสินใจสด ตั้งแต่ `since` → `{since, window_seconds, symbols, headline, overall, per_symbol}` · `overall.signal` = `{decisions, actionable, blocked, primary[], fired[]}` และ `overall.gate` = `{evaluated, allowed, blocked, primary[], fired[]}` · แต่ละแถวคือ `{code, label, count, pct, samples}` · `primary` = เหตุผลผูกมัดที่สุดต่อหนึ่งการตัดสินใจ (ผลรวม = `blocked`), `fired` = ทุกกฎที่คัดค้าน (รวมกันได้เกิน) · รหัสที่ยังไม่ลงทะเบียนจะเป็น `unregistered:*` + `warning` |
+| POST | `/api/system/attribution/reset` | เริ่มหน้าต่างนับใหม่ (เช่นหลังแก้ threshold) — ต้องมี role `trader` ขึ้นไป |
 | GET | `/api/users` · `POST /api/users` · `PATCH /api/users/{email}` · `DELETE /api/users/{email}` | จัดการผู้ใช้ (**admin เท่านั้น**) |
 | GET | `/api/users/me/permissions` | `{role, can_trade, can_manage_users, roles}` — UI ใช้ปิดปุ่ม |
 | GET | `/api/system/health` → `cluster` | `{role: leader\|replica\|blocked\|solo, backend, requested, reason, shared_health}` + `runtime_lease` |
@@ -342,6 +344,24 @@ X-No7-Attempt: 2                   ← ครั้งที่เท่าไ�
                               "bars_settled_by_ticks": 3, "bars_without_ticks": 1, ...}},
 "assumptions": ["Intra-bar order: 3 ambiguous bars were settled by walking 24000 real ticks in time order; 1 bars had no ticks ..."]
 ```
+`diagnostics.attribution` (รอบ 28) ตอบคำถาม "ไม้หายไปไหน" ด้วยรหัสคงที่:
+```json
+"attribution": {
+  "signal": {"decisions": 1630, "actionable": 21, "blocked": 1609,
+             "primary": [{"code": "entry_conditions", "label": "เงื่อนไขเข้าไม่ครบ",
+                          "count": 1384, "pct": 86.6, "samples": ["entry conditions are not all satisfied"]}],
+             "fired":   [{"code": "reward_risk", "count": 34, "pct": 2.1, "samples": ["net reward/risk 1.26 below the 1.30 minimum ..."]}]},
+  "gate":   {"evaluated": 21, "allowed": 20, "blocked": 1,
+             "primary": [{"code": "cooldown", "count": 1, "pct": 100.0, "samples": ["cooldown after 3 consecutive losses until 06:20"]}]},
+  "basis": "primary = ... · fired = ..."
+}
+```
+- `primary` นับ **เหตุผลเดียวที่ผูกมัดที่สุด** ต่อหนึ่งการตัดสินใจ (ผลรวม = `blocked`)
+  เรียงความสำคัญจากสิ่งที่กลยุทธ์คุมไม่ได้ (ข่าว/ข้อมูล/โบรก) → โครงสร้าง → ค่าที่ปรับได้
+- `fired` นับ **ทุกกฎที่คัดค้าน** ในการตัดสินใจนั้น (รวมกันได้เกินจำนวนที่ถูกบล็อก)
+- อ่านคู่กัน: ถ้ากฎหนึ่ง `fired` สูงแต่ `primary` ต่ำ แปลว่ามันมักโดนกฎอื่นบังอยู่ — แก้แล้วไม่ช่วย
+- เดียวกันกับที่ระบบสดรายงานที่ `GET /api/system/attribution` จึงเทียบ backtest กับของจริงได้
+
 ความหมายของตัวเลขใน `intra_bar` (แยกให้ชัด เพราะมันต่างกันจริง):
 - `ticks_in_window` = tick ที่ **มีอยู่** ในหน้าต่างที่รัน (ตอบจาก manifest ไม่ได้อ่านไฟล์) —
   ใช้ตอบคำถาม "ทำไม tick ไม่ช่วยอะไรเลย": ถ้าเป็น 0 แปลว่าไม่มีข้อมูลครอบช่วงนี้จริง ๆ

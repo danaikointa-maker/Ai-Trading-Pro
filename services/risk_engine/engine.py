@@ -273,8 +273,18 @@ class RiskEngine:
                  f"cooldown after {state.consecutive_losses} consecutive losses until "
                  f"{datetime.fromtimestamp(state.cooldown_until, tz=self.tz).strftime('%H:%M')}"
                  if not cooldown_ok else "no cooldown")
-        gate.add("consecutive_losses", state.consecutive_losses < limits.max_consecutive_losses,
-                 f"{state.consecutive_losses} consecutive losses (limit {limits.max_consecutive_losses})")
+        # The losing streak is what *starts* the cooldown (risk.yaml: "then cooldown"),
+        # so it may only block for as long as that cooldown runs. As an independent
+        # hard check it deadlocked the system: the streak clears only on a winning
+        # trade, and no trade can be opened while it blocks. Measured on 20k bars —
+        # the engine opened a few trades, hit three losses and then rejected every
+        # later signal on this check, long after the 20-minute cooldown had expired.
+        # Past the cooldown it stays visible as a warning instead.
+        streak_hit = state.consecutive_losses >= limits.max_consecutive_losses
+        gate.add("consecutive_losses", not streak_hit,
+                 f"{state.consecutive_losses} consecutive losses (limit {limits.max_consecutive_losses})"
+                 + ("" if cooldown_ok else " — cooldown still running"),
+                 blocker=not cooldown_ok)
         gate.add("exposure", state.open_lots + requested_lot <= limits.max_exposure_lots + 1e-9,
                  f"exposure {state.open_lots + requested_lot:.2f} lots exceeds {limits.max_exposure_lots:.2f}")
         gate.add("trades_per_week", state.trades_this_week < limits.max_weekly_trades,

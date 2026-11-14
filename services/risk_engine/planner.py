@@ -8,7 +8,7 @@ Two invariants:
 """
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Any, Callable
 
 import math
@@ -58,6 +58,11 @@ class PlanResult:
     plan: TradePlan | None
     blockers: list[str]
     notes: list[str]
+    # Same length and order as `blockers`. The text carries live numbers and is
+    # written for a human; the code is what gets counted. Keeping them parallel
+    # (rather than parsing the text later) is what stops the attribution report
+    # from silently rotting when someone rewords a message.
+    blocker_codes: list[str] = field(default_factory=list)
 
 
 def _split_lot(spec: SymbolSpec, lot: float, closes_pct: list[float]) -> list[float]:
@@ -164,15 +169,20 @@ class TradePlanner:
     # ------------------------------------------------------------------ plan
     def build(self, ctx: PlanInputs) -> PlanResult:
         blockers: list[str] = []
+        codes: list[str] = []
         notes: list[str] = []
+
+        def block(code: str, text: str) -> None:
+            codes.append(code)
+            blockers.append(text)
         spec = ctx.spec
         direction = ctx.direction
         if spec.sizing_blocked:
             # No FX rate for the profit currency: sizing would be wrong by the
             # whole exchange rate, so refuse rather than guess.
-            blockers.append(
-                f"no FX rate to value {spec.profit_currency} P&L in the account currency; "
-                "size this symbol on the broker terminal instead")
+            block("no_fx_rate",
+                  f"no FX rate to value {spec.profit_currency} P&L in the account currency; "
+                  "size this symbol on the broker terminal instead")
         sign = 1 if direction == Direction.up else -1
         costs = self.cost_points(spec, ctx.spread_points)
 
@@ -212,11 +222,11 @@ class TradePlanner:
         raw_lot = risk_amount / loss_per_lot if loss_per_lot > 0 else 0.0
         lot = spec.normalize_lot(raw_lot)
         if lot < spec.min_lot - 1e-9:
-            blockers.append(
-                f"risk budget ${risk_amount:.2f} cannot fund the {spec.min_lot} minimum lot at a "
-                f"{sl_points:.0f}-point stop")
+            block("risk_budget_min_lot",
+                  f"risk budget ${risk_amount:.2f} cannot fund the {spec.min_lot} minimum lot at a "
+                  f"{sl_points:.0f}-point stop")
         elif not spec.lot_is_valid(lot):
-            blockers.append(f"computed lot {lot} violates lot step {spec.lot_step}")
+            block("lot_step", f"computed lot {lot} violates lot step {spec.lot_step}")
         actual_risk = lot * loss_per_lot
 
         # The blended figure assumes the whole ladder fills; TP1 has to work on
@@ -224,17 +234,17 @@ class TradePlanner:
         tp1_reward = ladder[0] - costs
         rr_net_tp1 = tp1_reward / (sl_points + costs) if sl_points > 0 else 0.0
         if rr_net < ctx.min_rr_net:
-            blockers.append(
-                f"net reward/risk {rr_net:.2f} below the {ctx.min_rr_net:.2f} minimum after "
-                f"{costs:.0f} points of cost")
+            block("reward_risk",
+                  f"net reward/risk {rr_net:.2f} below the {ctx.min_rr_net:.2f} minimum after "
+                  f"{costs:.0f} points of cost")
         if rr_net_tp1 < 1.0:
-            blockers.append(
-                f"first target only pays {rr_net_tp1:.2f}R net ({ladder[0]:.0f} pts reward vs "
-                f"{sl_points:.0f} pts stop + {costs:.0f} pts cost)")
+            block("tp1_reward",
+                  f"first target only pays {rr_net_tp1:.2f}R net ({ladder[0]:.0f} pts reward vs "
+                  f"{sl_points:.0f} pts stop + {costs:.0f} pts cost)")
         notes.append(
             f"Net R:R TP1 {rr_net_tp1:.2f} / blended {rr_net:.2f} (cost {costs:.0f} pts)")
         if sl_points <= costs * 3:
-            blockers.append("stop distance is too small relative to trading costs")
+            block("stop_vs_costs", "stop distance is too small relative to trading costs")
 
         # --- partial close feasibility (lot step aware)
         volumes = _split_lot(spec, lot, closes)
@@ -268,7 +278,8 @@ class TradePlanner:
                 f"or be skipped.")
 
         if blockers:
-            return PlanResult(plan=None, blockers=blockers, notes=notes + [sl_note] * bool(sl_note))
+            return PlanResult(plan=None, blockers=blockers, blocker_codes=codes,
+                              notes=notes + [sl_note] * bool(sl_note))
 
         tp_prices = [spec.round_price(ctx.entry + sign * spec.points_to_price(tp)) for tp in ladder]
         plan = TradePlan(
@@ -289,7 +300,7 @@ class TradePlanner:
             target_mode=ctx.target_mode,
             notes=notes + ([sl_note] if sl_note else []),
         )
-        return PlanResult(plan=plan, blockers=[], notes=plan.notes)
+        return PlanResult(plan=plan, blockers=[], blocker_codes=[], notes=plan.notes)
 
     # --------------------------------------------------------------- utility
     @staticmethod

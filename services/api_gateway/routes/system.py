@@ -6,7 +6,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel
 
 from packages.shared_schemas.settings import get_settings
-from services.api_gateway.deps import current_user, get_runtime
+from services.api_gateway.deps import current_user, get_runtime, require_trader
 from services.api_gateway.state import TradingRuntime
 
 router = APIRouter(prefix="/api/system", tags=["system"])
@@ -81,6 +81,21 @@ def audit(limit: int = Query(100, ge=1, le=500), runtime: TradingRuntime = Depen
           user=Depends(current_user)):
     rows = runtime.db.query("SELECT * FROM audit ORDER BY id DESC LIMIT ?", (limit,))
     return {"audit": [dict(r) for r in rows]}
+
+
+@router.get("/attribution")
+def attribution(symbol: str | None = Query(None, description="limit to one symbol"),
+                runtime: TradingRuntime = Depends(get_runtime), user=Depends(current_user)):
+    """Reason codes for the decisions the live engine did not trade."""
+    return runtime.attribution_summary(symbol)
+
+
+@router.post("/attribution/reset")
+def attribution_reset(runtime: TradingRuntime = Depends(get_runtime),
+                      user=Depends(require_trader)):
+    """Start a fresh counting window, e.g. right after changing a threshold."""
+    runtime.reset_attribution()
+    return runtime.attribution_summary()
 
 
 @router.get("/errors")

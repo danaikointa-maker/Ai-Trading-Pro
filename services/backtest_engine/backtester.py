@@ -53,6 +53,7 @@ from services.market_data.simulator import resample
 from services.risk_engine.engine import RiskEngine
 from services.risk_engine.planner import TradePlanner
 from services.strategy_engine.analysis import AnalysisService
+from services.strategy_engine.attribution import BlockerTally
 from services.strategy_engine.engine import StrategyEngine
 
 
@@ -182,6 +183,9 @@ class Backtester:
         actionable = 0
         gate_blocked = 0
         skipped = 0
+        # Counters say how many decisions died; the tally says why. Same data the
+        # engine already produces on every decision, previously discarded here.
+        tally = BlockerTally()
         model_decisions = 0
         proxy_decisions = 0
         last_ctx = None
@@ -267,7 +271,10 @@ class Backtester:
                         spread_points=spread_points, last=price)
             signal = strategy.generate(ctx, spec.symbol, broker_id, TradeMode.manual, tick,
                                        Health.connected, forecast, equity, now=bar_time)
-            if signal.action not in (SignalAction.buy, SignalAction.sell) or signal.plan is None:
+            tradable = (signal.action in (SignalAction.buy, SignalAction.sell)
+                        and signal.plan is not None)
+            tally.add_signal(tradable, signal.blocker_codes, signal.blockers)
+            if not tradable:
                 continue
             actionable += 1
             risk_state = self._risk_state(sim, balance, equity)
@@ -278,6 +285,7 @@ class Backtester:
                 # Simulated time, not the wall clock: without this the cooldown after
                 # consecutive losses is compared against today and never blocks a trade.
                 now=bar_time)
+            tally.add_gate(gate.allow, gate.checks)
             if not gate.allow:
                 gate_blocked += 1
                 continue
@@ -398,6 +406,7 @@ class Backtester:
                 f"({no_context} skipped — not enough higher-timeframe history yet); "
                 f"{actionable} were actionable, the risk gate blocked {gate_blocked}, "
                 f"{skipped} were skipped on fill drift, and {len(trades)} trades opened.",
+                tally.note(),
                 data_note or "Bar data: source not recorded — treat these numbers as unverified.",
                 *gap_notes,
             ],
@@ -418,6 +427,7 @@ class Backtester:
                 "fill_skipped": skipped,
                 "trades_opened": len(trades),
                 "no_trade_rate_basis": "trades / analysed decision points",
+                "attribution": tally.summary(),
             },
         )
         del started

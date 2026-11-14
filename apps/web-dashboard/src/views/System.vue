@@ -112,6 +112,74 @@
         </dl>
       </section>
 
+      <section class="panel lg:col-span-2">
+        <div class="panel-head">
+          <div class="panel-title">ทำไมถึงไม่เทรด (Decision attribution)</div>
+          <span class="chip" :class="attributionTone">{{ attributionChip }}</span>
+          <button class="btn ml-auto py-1 text-[10.5px]" :disabled="resetting" @click="resetAttribution">
+            เริ่มนับใหม่
+          </button>
+        </div>
+        <div class="px-4 py-3">
+          <p class="text-[11px] text-slate-200">{{ attribution?.headline || 'ยังไม่มีการตัดสินใจในหน้าต่างนี้' }}</p>
+          <p class="mt-1 text-[10px] text-muted">
+            นับจากการตัดสินใจสดตั้งแต่ {{ datetime(attribution?.since) }}
+            ({{ fmt((attribution?.window_seconds || 0) / 60, 0) }} นาที) ·
+            {{ (attribution?.symbols || []).join(', ') || '—' }}
+          </p>
+
+          <div class="mt-3 grid gap-3 md:grid-cols-2">
+            <div>
+              <div class="mb-1 flex items-baseline justify-between">
+                <span class="text-[10.5px] font-semibold text-slate-200">สัญญาณที่ไม่ผ่าน</span>
+                <span class="num text-[10px] text-muted">
+                  {{ signalPart.blocked }} / {{ signalPart.decisions }} ครั้ง
+                </span>
+              </div>
+              <div v-if="!signalPart.primary.length" class="text-[10.5px] text-muted">ยังไม่มีข้อมูล</div>
+              <div v-for="row in signalPart.primary" :key="row.code" class="mb-1.5">
+                <div class="flex items-baseline justify-between gap-2">
+                  <span class="truncate text-[10.5px] text-slate-200" :title="row.samples.join(' · ')">{{ row.label }}</span>
+                  <span class="num shrink-0 text-[10px] text-muted">{{ row.count }} · {{ row.pct }}%</span>
+                </div>
+                <div class="mt-0.5 h-1 rounded bg-slate-800">
+                  <div class="h-1 rounded bg-amber-400/80" :style="{ width: `${Math.min(100, row.pct)}%` }"></div>
+                </div>
+              </div>
+            </div>
+
+            <div>
+              <div class="mb-1 flex items-baseline justify-between">
+                <span class="text-[10.5px] font-semibold text-slate-200">Risk gate ปัดสัญญาณที่พร้อมเทรด</span>
+                <span class="num text-[10px] text-muted">
+                  {{ gatePart.blocked }} / {{ gatePart.evaluated }} ครั้ง
+                </span>
+              </div>
+              <div v-if="!gatePart.primary.length" class="text-[10.5px] text-muted">
+                ไม่มีสัญญาณไหนถูก gate ปัดในหน้าต่างนี้
+              </div>
+              <div v-for="row in gatePart.primary" :key="row.code" class="mb-1.5">
+                <div class="flex items-baseline justify-between gap-2">
+                  <span class="truncate text-[10.5px] text-slate-200" :title="row.samples.join(' · ')">{{ row.label }}</span>
+                  <span class="num shrink-0 text-[10px] text-muted">{{ row.count }} · {{ row.pct }}%</span>
+                </div>
+                <div class="mt-0.5 h-1 rounded bg-slate-800">
+                  <div class="h-1 rounded bg-rose-400/80" :style="{ width: `${Math.min(100, row.pct)}%` }"></div>
+                </div>
+              </div>
+            </div>
+          </div>
+
+          <p v-if="attribution?.overall?.warning" class="mt-2 text-[10px] text-amber-300">
+            {{ attribution.overall.warning }}
+          </p>
+          <p class="mt-2 text-[9.5px] text-muted">
+            primary = เหตุผลที่ผูกมัดที่สุดต่อหนึ่งการตัดสินใจ (รวมกันได้เท่าจำนวนที่ถูกบล็อก) ·
+            ชี้ที่ชื่อเหตุผลเพื่อดูตัวอย่างข้อความจริง
+          </p>
+        </div>
+      </section>
+
       <section class="panel">
         <div class="panel-head"><div class="panel-title">Model registry</div><span class="chip">{{ models.length }} versions</span></div>
         <div class="max-h-[260px] overflow-auto">
@@ -407,6 +475,27 @@ const notifyTone = computed(() => {
   if (state_ === 'failing') return 'chip-down'
   return state_ === 'external' ? 'chip-up' : 'chip-warn'
 })
+const attribution = ref(null)
+const resetting = ref(false)
+const EMPTY_SIGNAL = { decisions: 0, actionable: 0, blocked: 0, primary: [], fired: [] }
+const EMPTY_GATE = { evaluated: 0, allowed: 0, blocked: 0, primary: [], fired: [] }
+const signalPart = computed(() => attribution.value?.overall?.signal || EMPTY_SIGNAL)
+const gatePart = computed(() => attribution.value?.overall?.gate || EMPTY_GATE)
+// A quiet terminal has two very different causes: nothing qualified, or one
+// rule rejected everything. The chip says which, without opening the panel.
+const attributionChip = computed(() => {
+  const s = signalPart.value
+  if (!s.decisions) return 'ยังไม่มีข้อมูล'
+  if (s.actionable) return `${s.actionable}/${s.decisions} พร้อมเทรด`
+  const top = s.primary[0]
+  return top ? `0 พร้อมเทรด · ${top.label}` : `0/${s.decisions} พร้อมเทรด`
+})
+const attributionTone = computed(() => {
+  const s = signalPart.value
+  if (!s.decisions) return 'chip-warn'
+  return s.actionable ? 'chip-up' : 'chip-warn'
+})
+
 const errors = ref([])
 const models = ref([])
 const config = ref(null)
@@ -459,6 +548,19 @@ async function removeUser(user) {
   }
 }
 
+async function resetAttribution() {
+  if (resetting.value) return
+  resetting.value = true
+  try {
+    attribution.value = await api.post('/api/system/attribution/reset')
+    toast('เริ่มนับเหตุผลใหม่แล้ว', 'success')
+  } catch (err) {
+    toast(err.message, 'error')
+  } finally {
+    resetting.value = false
+  }
+}
+
 async function load() {
   try {
     const [h, a, m] = await Promise.all([
@@ -478,6 +580,11 @@ async function load() {
     bridge.value = await api.get('/api/bridge/session')
   } catch {
     bridge.value = null   // older server without the bridge: the card simply hides
+  }
+  try {
+    attribution.value = await api.get('/api/system/attribution')
+  } catch {
+    attribution.value = null  // older server without attribution: panel stays empty
   }
   await loadUsers()
 }

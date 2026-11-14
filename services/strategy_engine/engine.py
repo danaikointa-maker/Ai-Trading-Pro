@@ -304,16 +304,23 @@ class StrategyEngine:
         direction, dir_reasons = self._candidate_direction(ctx)
         reasons: list[str] = list(dir_reasons)
         blockers: list[str] = []
+        # Stable codes, parallel to `blockers`. The text is for a human and
+        # contains live numbers; the code is what the attribution report counts.
+        blocker_codes: list[str] = []
+
+        def block(code: str, text: str) -> None:
+            blocker_codes.append(code)
+            blockers.append(text)
 
         mode_obj = mode
         if snap.news_lockout.get("active"):
-            blockers.append(f"news lockout: {snap.news_lockout.get('reason')}")
+            block("news_lockout", f"news lockout: {snap.news_lockout.get('reason')}")
         if not snap.data_quality.get("ok"):
-            blockers.append(f"data quality: {snap.data_quality.get('reason')}")
+            block("data_quality", f"data quality: {snap.data_quality.get('reason')}")
         if broker_health not in (Health.connected, Health.degraded):
-            blockers.append(f"broker health is {broker_health.value}")
+            block("broker_health", f"broker health is {broker_health.value}")
         if snap.regime and snap.regime.regime == Regime.news_shock:
-            blockers.append("market regime is a news shock — no new entries")
+            block("regime_news_shock", "market regime is a news shock — no new entries")
 
         entry = self._evaluate_entry(ctx, direction, spec) if direction != Direction.sideways else None
         entry_price = tick.ask if direction == Direction.up else tick.bid
@@ -322,7 +329,7 @@ class StrategyEngine:
         if direction != Direction.sideways and entry is not None:
             reasons.extend(entry.reasons)
             if not entry.ok:
-                blockers.append("entry conditions are not all satisfied")
+                block("entry_conditions", "entry conditions are not all satisfied")
             # Settings are needed for *any* plan, not only for a blocked entry:
             # keeping this inside the `if` crashed the exact path where entry
             # conditions are satisfied (UnboundLocalError -> no signal ever sent).
@@ -353,6 +360,8 @@ class StrategyEngine:
             )
             result = self.planner.build(plan_inputs)
             blockers.extend(result.blockers)
+            blocker_codes.extend(
+                result.blocker_codes or ["no_plan"] * len(result.blockers))
             plan_notes.extend(result.notes)
             plan = result.plan
 
@@ -388,14 +397,16 @@ class StrategyEngine:
                 status = SignalStatus.valid
             elif score >= float(self.thresholds.get("weak", 50)):
                 status = SignalStatus.weak
-                blockers.append(f"signal score {score:.0f} is below the {execute:.0f} execution threshold")
+                block("score_below_execute",
+                      f"signal score {score:.0f} is below the {execute:.0f} execution threshold")
             else:
                 status = SignalStatus.no_trade
-                blockers.append(f"signal score {score:.0f} is below the {execute:.0f} execution threshold")
+                block("score_below_execute",
+                      f"signal score {score:.0f} is below the {execute:.0f} execution threshold")
             if calibrated_prob is not None and calibrated_prob < min_prob:
                 status = SignalStatus.weak if score >= float(self.thresholds.get("weak", 50)) else SignalStatus.no_trade
-                blockers.append(
-                    f"TP-before-SL probability {calibrated_prob:.0%} below the {min_prob:.0%} floor")
+                block("probability_floor",
+                      f"TP-before-SL probability {calibrated_prob:.0%} below the {min_prob:.0%} floor")
             if status in (SignalStatus.strong, SignalStatus.valid):
                 action = SignalAction.buy if direction == Direction.up else SignalAction.sell
         else:
@@ -404,12 +415,23 @@ class StrategyEngine:
             if direction != Direction.sideways and score >= float(self.thresholds.get("weak", 50)):
                 action = SignalAction.wait
 
+        # Every decision that is not tradable must say why. A silent `no_trade`
+        # is the one outcome the attribution report cannot explain, so the two
+        # paths that produce one without a blocker get an explicit code here.
+        if action not in (SignalAction.buy, SignalAction.sell) and not blocker_codes:
+            if direction == Direction.sideways or entry is None:
+                block("no_direction",
+                      "price structure does not point anywhere — no directional candidate")
+            elif plan is None:
+                block("no_plan", "no executable plan could be built for this candidate")
+
         signal = Signal(
             id=sig_id, t=now, symbol=symbol, timeframe=snap.timeframe, broker_id=broker_id,
             action=action, status=status, score=score,
             strategy=entry.strategy if entry else "none",
             regime=snap.regime.regime.value if snap.regime else "unknown",
             components=components, reasons=reasons, blockers=blockers,
+            blocker_codes=blocker_codes,
             plan=plan,
             forecast=primary, zones_used=[z.id for z in ([entry.zone] if entry and entry.zone else [])],
             mode=mode_obj, approval_required=mode_obj != TradeMode.full_auto,

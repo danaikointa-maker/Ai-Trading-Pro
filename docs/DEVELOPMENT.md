@@ -11,7 +11,7 @@
 ```bash
 ./scripts/dev_setup.sh      # venv + deps + .env + dashboard bundle (ครั้งแรก ~2 นาที)
 ./scripts/run.sh            # http://127.0.0.1:8000  →  demo@no7.ai / no7demo1234
-./scripts/dev_check.sh      # เกตก่อน commit: ruff + 548 tests (~2 นาที)
+./scripts/dev_check.sh      # เกตก่อน commit: ruff + 564 tests (~2 นาที)
 ```
 
 ทั้งสามคำสั่งรันซ้ำได้เสมอ ไม่พังของเดิม
@@ -88,12 +88,13 @@ curl -s -H "Authorization: Bearer $TOK" localhost:8000/api/system/health | pytho
 
 | ชุด | จำนวน | เวลา |
 |---|---|---|
-| ทั้งหมด (`pytest -q`) | 548 (542 pass + 6 skip) | **~2 นาที** (รวม backtest ที่ใช้โมเดล 3 รัน ≈ 50 วินาที) |
-| ตัดสองไฟล์ที่หนักที่สุด `--ignore=tests/test_backtest_engine.py --ignore=tests/test_model_validation.py` | 520 | ~30 → **~90** วินาที (แล้วแต่โหลดเครื่อง) |
+| ทั้งหมด (`pytest -q`) | 564 (558 pass + 6 skip) | **~2 นาที** (รวม backtest ที่ใช้โมเดล 3 รัน ≈ 50 วินาที) |
+| ตัดสองไฟล์ที่หนักที่สุด `--ignore=tests/test_backtest_engine.py --ignore=tests/test_model_validation.py` | 536 (530 pass + 6 skip) | ~30 → **~90** วินาที (แล้วแต่โหลดเครื่อง) |
 | `tests/test_backtest_engine.py` + `tests/test_model_validation.py` | 28 | ~75 → **~22** วินาที |
 | `tests/test_ws_quota.py` (โควตา WebSocket) | 32 | ~5 วินาที |
 | `tests/test_redis_real.py` (redis จริง, skip ถ้าไม่มี binary) | 20 | ~4 วินาที |
 | `tests/test_notify_outbox.py` (คิวถาวร + ลายเซ็น webhook) | 27 | ~5 วินาที |
+| `tests/test_attribution.py` (เหตุผลที่ไม่เทรด + deadlock สตรีคขาดทุน) | 16 | ~4 วินาที |
 
 (6 ที่ skip คือเทสต์สคริปต์ที่ต้องมี `bash`/`.venv` ซึ่งไม่มีในบางสภาพแวดล้อม)
 
@@ -354,6 +355,14 @@ slot เป็น **lease ที่หมดอายุ** ไม่ใช่ต
   พิสูจน์กับแอปจริงด้วย `scripts/check_outbox.py` (ล่ม → รีสตาร์ต → ฟื้น, 7/7)
   · ที่ยังเหลือในหัวข้อนี้: **คิวคำสั่ง bridge** ที่ยังไม่ ack ยังหายตอนรีสตาร์ต โดยตั้งใจ
   (คำสั่งเทรดเก่าที่ส่งซ้ำหลังรีสตาร์ตอันตรายกว่าคำสั่งที่หาย) และคิวนี้ยังเป็นของเครื่องเดียว
+- ~~ไม่มีใครตอบได้ว่า "ทำไมระบบไม่เทรด"~~ ✅ **เสร็จรอบ 28** —
+  `services/strategy_engine/attribution.py` นับเหตุผลด้วยรหัสคงที่ (ไม่ใช่ข้อความ)
+  โผล่ที่ `report.diagnostics.attribution`, `GET /api/system/attribution`
+  และแผงในหน้า System · เจอบั๊ก `consecutive_losses` ล็อกระบบถาวรทันทีที่เปิดดู
+  (LIMITATIONS §5) · ที่ยังเหลือ: หน้าต่างนับของระบบสดเป็นแบบสะสม ยังไม่ใช่ rolling รายชั่วโมง
+  และยังไม่ได้ผูกเหตุผลกับผลลัพธ์ย้อนหลัง ("ถ้าผ่อนกฎนี้จะได้/เสียเท่าไร")
+- **ยังไม่ได้ปรับ threshold ใด ๆ ทั้งที่รู้แล้วว่าตัวไหนบีบ** — 86% ของการตัดสินใจตายที่
+  `entry_conditions` แต่การผ่อนกฎบนฟีดจำลองจะได้คำตอบที่เชื่อไม่ได้ (§9.2 ต้องมาก่อน)
 - PWA: screenshots/splash สำหรับ install prompt ที่สวยขึ้น, Web Push (ยังไม่มีโดยตั้งใจ)
 - Monte Carlo / การกระจายของ slippage ใน backtest
 - Temporal CNN / ensemble — ต่อเมื่อ walk-forward พิสูจน์ว่าดีกว่าของเดิมจริง

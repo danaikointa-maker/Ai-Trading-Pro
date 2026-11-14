@@ -54,6 +54,7 @@ from services.risk_engine.engine import RiskEngine, default_risk_state
 from services.risk_engine.manager import PositionAction, PositionManager
 from services.risk_engine.planner import PlanInputs, TradePlanner
 from services.strategy_engine.analysis import AnalysisContext, AnalysisService
+from services.strategy_engine.attribution import BlockerTally, merge
 from services.strategy_engine.engine import StrategyEngine
 
 def _truthy(value: Any) -> bool:
@@ -235,6 +236,11 @@ class TradingRuntime:
         self.signal_log: deque[Signal] = deque(maxlen=400)
         self.plans: dict[str, Signal] = {}
         self.gates: dict[str, dict[str, Any]] = {}
+        # Why the live engine is not trading, counted per symbol by reason code.
+        # The dashboard could already show the *last* decision; nobody could see
+        # that, say, 95% of today's decisions died on one condition.
+        self.attribution: dict[str, BlockerTally] = {}
+        self.attribution_since = time.time()
         self.positions_cache: list[Position] = []
         self.ticks: dict[str, Tick] = {}
         self.version = 0
@@ -570,6 +576,24 @@ class TradingRuntime:
         gate = self.strategy.evaluate_gate(
             signal, spec, tick, risk_state, ctx.snapshot.data_quality, ctx.snapshot.news_lockout,
             health, self.predictor.approved, atr_pct)
+        # Count before the lines below rewrite the signal: once a gate rejection
+        # has turned a buy into a `wait` and merged the gate's prose into
+        # `signal.blockers`, the decision can no longer be told apart from one
+        # that never had a trade in it.
+        tradable = (signal.action in (SignalAction.buy, SignalAction.sell)
+                    and signal.plan is not None)
+        with self.lock:
+            tally = self.attribution.get(symbol)
+            if tally is None:
+                tally = self.attribution[symbol] = BlockerTally()
+            tally.add_signal(tradable, signal.blocker_codes, signal.blockers)
+            # The gate is consulted on every live decision, but counting it on
+            # decisions that had nothing to trade anyway would bury the cases
+            # that matter. Only signals that asked to trade are counted, which
+            # is also the basis the backtest uses — so the two are comparable.
+            if tradable:
+                tally.add_gate(gate.allow, gate.checks)
+
         if not gate.allow:
             signal.blockers = list(dict.fromkeys(signal.blockers + gate.blockers))
             if signal.action in (SignalAction.buy, SignalAction.sell):
@@ -593,6 +617,37 @@ class TradingRuntime:
 
         if self.mode == TradeMode.full_auto and signal.action in (SignalAction.buy, SignalAction.sell):
             self.execute_signal(signal.id, actor="full-auto")
+
+    def attribution_summary(self, symbol: str | None = None) -> dict[str, Any]:
+        """Why the live engine has or has not been trading since `since`.
+
+        Counted on live decisions only. A backtest answers the same question for
+        a historical sample; this answers it for the session that is running, so
+        an operator watching a quiet dashboard can tell "nothing qualifies" from
+        "one gate has been rejecting everything for an hour".
+        """
+        with self.lock:
+            tallies = dict(self.attribution)
+            since = self.attribution_since
+        if symbol:
+            chosen = {symbol: tallies[symbol]} if symbol in tallies else {}
+        else:
+            chosen = tallies
+        overall = merge(chosen.values()) if chosen else BlockerTally()
+        return {
+            "since": since,
+            "window_seconds": round(max(0.0, time.time() - since), 1),
+            "symbols": sorted(chosen),
+            "overall": overall.summary(),
+            "per_symbol": {sym: t.summary() for sym, t in sorted(chosen.items())},
+            "headline": overall.note(),
+        }
+
+    def reset_attribution(self) -> None:
+        """Start a fresh window — e.g. after changing a threshold."""
+        with self.lock:
+            self.attribution.clear()
+            self.attribution_since = time.time()
 
     def _persist_signal(self, signal: Signal, now: float) -> None:
         last = self._last_persisted.get(signal.symbol)

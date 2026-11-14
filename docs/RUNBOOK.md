@@ -647,6 +647,38 @@ timestamp เก่า แล้วถูกฝั่งรับปฏิเส
 - **ของเก่าเกิน `max_age_seconds` ถูกทิ้ง** — แต่ถูกนับไว้ใน `outbox.expired` และขึ้น `warning`
 - คิวนี้เป็นของเครื่องนี้ (sqlite ไฟล์เดียว) ยังไม่ใช่คิวกลางสำหรับหลายเครื่อง
 
+## 12.9 "ระบบไม่ยอมเทรดเลย" — หาคำตอบใน 30 วินาที
+
+อาการนี้เคยตอบไม่ได้เลย เพราะทุกชั้นนับแต่จำนวน ตอนนี้ถามตรง ๆ ได้:
+
+```bash
+TOKEN=$(curl -s -X POST localhost:8000/api/auth/login -H 'Content-Type: application/json' \
+  -d '{"email":"demo@no7.ai","password":"no7demo1234"}' | python3 -c "import sys,json;print(json.load(sys.stdin)['token'])")
+
+curl -s localhost:8000/api/system/attribution -H "Authorization: Bearer $TOKEN" \
+  | python3 -c "import sys,json; d=json.load(sys.stdin); print(d['headline']); \
+      [print(f\"  {r['count']:4d} {r['pct']:5.1f}%  {r['label']}  {r['samples'][:1]}\") for r in d['overall']['signal']['primary']]"
+```
+
+อ่านผลอย่างไร:
+
+| สิ่งที่เห็น | แปลว่า | ทำอะไรต่อ |
+|---|---|---|
+| `entry_conditions` กินเกือบทั้งหมด | ไม่มีจังหวะเข้าตามกฎ ไม่ใช่ระบบเสีย | ดู `samples`, ตรวจว่า zone/trend ใน `/api/analysis` สมเหตุผล |
+| `score_below_execute` สูง | มีจังหวะแต่คะแนนไม่ถึงเกณฑ์ | ดูว่าคะแนนห่างเกณฑ์แค่ไหนใน `samples` ก่อนคิดปรับ `execute` |
+| `data_quality` / `broker_health` / `news_lockout` | ปัญหาสภาพแวดล้อม ไม่ใช่กลยุทธ์ | แก้ฟีด/การเชื่อมต่อ แล้ว `POST /api/system/attribution/reset` เริ่มนับใหม่ |
+| `gate.blocked` สูงแต่ `signal.actionable` ปกติ | กลยุทธ์หาไม้ได้ แต่ risk gate ปัด | ดู `gate.primary` — มักเป็น `cooldown`, `daily_loss`, `spread` |
+| `unregistered:*` + `warning` | มีเหตุผลใหม่ที่ยังไม่ลงทะเบียน | เพิ่ม code ใน `services/strategy_engine/attribution.py` |
+
+- หน้า **System → "ทำไมถึงไม่เทรด"** แสดงชุดเดียวกันเป็นแถบ พร้อมปุ่ม *เริ่มนับใหม่*
+- หน้าต่างนับเป็นแบบสะสมตั้งแต่ boot หรือตั้งแต่ reset ล่าสุด (`since`, `window_seconds`)
+- นับเฉพาะ gate ของสัญญาณที่ "ขอเทรดจริง" เท่านั้น เพื่อให้เทียบกับ backtest ได้ตรง ๆ
+- ของ backtest อยู่ใน `report.diagnostics.attribution` และสรุปหนึ่งบรรทัดใน `assumptions`
+
+> บทเรียนรอบ 28: คำถามนี้เปิดบั๊กที่ซ่อนมานาน — `consecutive_losses` บล็อกถาวร
+> (คลายได้เฉพาะเมื่อมีไม้กำไร ซึ่งเปิดไม่ได้เพราะถูกบล็อก) ทำให้ระบบหยุดเทรดเองหลังแพ้ 3 ไม้
+> และทำให้รายงานเก่า "ดูกำไร" เพราะเหลือตัวอย่างแค่ 4 ไม้ ดู LIMITATIONS §5
+
 ## 13. ความปลอดภัย — TLS, reverse proxy และ perimeter
 
 ### 13.1 เปิด HTTPS (เลือกอย่างใดอย่างหนึ่ง)
