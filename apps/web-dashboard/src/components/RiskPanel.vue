@@ -22,12 +22,32 @@
     </div>
     <dl class="grid grid-cols-2 gap-x-4 border-t border-ink-700/60 px-4 py-3 text-[11px]">
       <div class="kv"><dt>Open trades</dt><dd>{{ risk?.open_trades ?? 0 }} / {{ risk?.max_trades_allowed ?? 1 }}</dd></div>
-      <div class="kv"><dt>Consecutive losses</dt><dd>{{ risk?.consecutive_losses ?? 0 }}</dd></div>
+      <div class="kv">
+        <dt>Consecutive losses</dt>
+        <dd :class="streakStopped ? 'text-down font-semibold' : ''">
+          {{ risk?.consecutive_losses ?? 0 }} / {{ maxStreak }}
+        </dd>
+      </div>
       <div class="kv"><dt>Trades today</dt><dd>{{ risk?.trades_today ?? 0 }}</dd></div>
       <div class="kv"><dt>Exposure</dt><dd>{{ fmt(risk?.open_lots, 2) }} lot</dd></div>
       <div class="kv"><dt>Peak equity</dt><dd>{{ money(risk?.peak_equity) }}</dd></div>
       <div class="kv"><dt>Cooldown</dt><dd>{{ risk?.cooldown_until ? clock(risk.cooldown_until) : '—' }}</dd></div>
     </dl>
+    <!-- Three losses in a row stop trading and nothing lifts it on a timer. The
+         hand-approval button goes through the same gate, so the only ways out are
+         a winning trade recorded at the broker, or this release. Say so here —
+         otherwise the terminal just looks broken. -->
+    <div v-if="streakStopped" class="mx-4 mb-3 rounded-lg border border-down/30 bg-down/10 p-2.5 text-[11px] text-down">
+      <div class="font-semibold">หยุดเทรด: ขาดทุนติดกัน {{ risk?.consecutive_losses }} ไม้ (เพดาน {{ maxStreak }})</div>
+      <p class="mt-1 text-[10.5px] text-down/90">
+        ระบบจะไม่กลับมาเทรดเองเมื่อครบ cooldown — ต้องมีไม้ที่กำไรเข้ามาในบัญชี
+        หรือกดปลดด้านล่าง (บันทึก audit) · ปุ่มอนุมัติไม้ด้วยมือก็ถูกกฎนี้บล็อกเช่นกัน
+      </p>
+      <button class="btn btn-danger mt-2 w-full py-1.5" :disabled="!perms.canTrade || releasing"
+              :title="perms.reason" @click="releaseStreak">
+        {{ releasing ? 'กำลังปลด…' : 'ปลดการหยุดจากสตรีคขาดทุน' }}
+      </button>
+    </div>
     <div v-if="risk?.kill_switch_active" class="mx-4 mb-3 rounded-lg border border-down/30 bg-down/10 p-2.5 text-[11px] text-down">
       {{ risk.kill_switch_reason }}
       <button class="btn btn-danger mt-2 w-full py-1.5" :disabled="!perms.canTrade" :title="perms.reason" @click="resetKill">Reset kill switch</button>
@@ -40,13 +60,16 @@
 </template>
 
 <script setup>
-import { computed } from 'vue'
+import { computed, ref } from 'vue'
 import { api } from '../lib/api'
 import { clock, fmt, money } from '../lib/format'
 import { permissions, riskState as risk, state, toast } from '../lib/store'
 
 // Read-only accounts see the buttons disabled — the server refuses them anyway.
 const perms = computed(() => permissions.value)
+const releasing = ref(false)
+const maxStreak = computed(() => state.live?.limits?.max_consecutive_losses ?? 3)
+const streakStopped = computed(() => (risk.value?.consecutive_losses ?? 0) >= maxStreak.value)
 
 const limits = computed(() => ({
   daily: state.live?.limits?.max_daily_loss_pct ?? 2.0,
@@ -83,6 +106,21 @@ const meters = computed(() => {
     },
   ]
 })
+
+async function releaseStreak() {
+  if (releasing.value) return
+  if (!confirm(`ปลดการหยุดจากขาดทุนติดกัน ${risk.value?.consecutive_losses} ไม้?\n`
+             + 'ไม้ที่ขาดทุนก่อนหน้านี้จะไม่ถูกนับอีก (P&L เดิมไม่ถูกแก้ และมีบันทึก audit)')) return
+  releasing.value = true
+  try {
+    await api.post('/api/risk/loss-streak/release')
+    toast('ปลดแล้ว — ระบบกลับมาพิจารณาสัญญาณตามปกติ', 'success')
+  } catch (err) {
+    toast(err.message, 'error')
+  } finally {
+    releasing.value = false
+  }
+}
 
 async function kill(flatten) {
   if (!confirm('ยืนยันหยุดระบบฉุกเฉินและปิดทุกไม้?')) return
