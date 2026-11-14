@@ -36,6 +36,7 @@ from packages.shared_schemas.models import (
     Position,
     Signal,
     SignalAction,
+    SignalReadiness,
     SignalStatus,
     Tick,
     TradeMode,
@@ -58,6 +59,7 @@ from services.risk_engine.planner import PlanInputs, TradePlanner
 from services.strategy_engine.analysis import AnalysisContext, AnalysisService
 from services.strategy_engine.attribution import BlockerTally, merge
 from services.strategy_engine.engine import StrategyEngine
+from services.strategy_engine.readiness import assess_readiness
 
 def _truthy(value: Any) -> bool:
     return str(value or "").strip().lower() in ("1", "true", "yes", "on")
@@ -242,6 +244,9 @@ class TradingRuntime:
         self.signals: dict[str, Signal] = {}
         self.signal_log: deque[Signal] = deque(maxlen=400)
         self.plans: dict[str, Signal] = {}
+        # Decision-time analysis is pinned by signal ID. Later symbol scans
+        # must never substitute new zones for the original entry evidence.
+        self.plan_analyses: dict[str, dict[str, Any]] = {}
         self.gates: dict[str, dict[str, Any]] = {}
         # Why the live engine is not trading, counted per symbol by reason code.
         # The dashboard could already show the *last* decision; nobody could see
@@ -278,6 +283,7 @@ class TradingRuntime:
         self._thread: threading.Thread | None = None
         self._decision_interval = float(self.settings.app.get("app", {}).get("decision_interval_seconds", 4))
         self._alert_dedupe: dict[str, int] = {}
+        self._last_readiness: dict[str, SignalReadiness] = {}
         self._last_persisted: dict[str, tuple[str, float]] = {}
         self._forecast_invalid: dict[str, bool] = {}
         self.active_symbol = self.settings.market_data.get("default_symbol", "XAUUSD")
@@ -622,12 +628,23 @@ class TradingRuntime:
                 signal.action = SignalAction.wait
                 signal.status = SignalStatus.weak if signal.score >= 50 else SignalStatus.no_trade
 
+        # Explanatory lifecycle only. The executor still trusts solely the
+        # original action and independent risk gate; this field grants nothing.
+        readiness = assess_readiness(signal, gate_allow=gate.allow,
+                                     was_tradable=tradable, as_of=int(now))
+        signal.readiness = readiness.state
+        signal.readiness_reason = readiness.reason
+
         with self.lock:
             self.contexts[symbol] = ctx
             if forecast:
                 self.forecasts[symbol] = forecast
             self.signals[symbol] = signal
             self.plans[signal.id] = signal
+            if signal.action in (SignalAction.buy, SignalAction.sell) and signal.plan:
+                self.plan_analyses[signal.id] = ctx.snapshot.model_dump(mode="json")
+                while len(self.plan_analyses) > 256:
+                    self.plan_analyses.pop(next(iter(self.plan_analyses)))
             self.gates[symbol] = {
                 "allow": gate.allow, "blockers": gate.blockers, "warnings": gate.warnings,
                 "checks": gate.checks, "t": now,
@@ -639,6 +656,13 @@ class TradingRuntime:
 
         if self.mode == TradeMode.full_auto and signal.action in (SignalAction.buy, SignalAction.sell):
             self.execute_signal(signal.id, actor="full-auto")
+
+        # Informational notifications run after the original decision and
+        # execution path, so they cannot delay an otherwise authorized order.
+        try:
+            self._maybe_alert_readiness(signal)
+        except Exception as exc:  # alerts must never alter trading decisions
+            self._log_error("readiness_alert", exc)
 
     def attribution_summary(self, symbol: str | None = None) -> dict[str, Any]:
         """Why the live engine has or has not been trading since `since`.
@@ -712,6 +736,38 @@ class TradingRuntime:
                                    f"analysis before acting.", symbol=signal.symbol, dedupe_seconds=0)
             elif not invalid:
                 self._forecast_invalid[signal.symbol] = False
+
+    def _maybe_alert_readiness(self, signal: Signal) -> None:
+        """Notify on readiness transitions, not on every four-second scan.
+
+        Existing BUY/SELL alerts handle READY. WAIT alerts only follow a prior
+        READY/BLOCKED state; initial idle scans produce no notification storm.
+        """
+        new = signal.readiness
+        if new is None:
+            return
+        previous = self._last_readiness.get(signal.symbol)
+        if previous == new:
+            return
+        self._last_readiness[signal.symbol] = new
+        if new == SignalReadiness.blocked:
+            self.notifier.emit(
+                "warning", f"Entry BLOCKED — {signal.symbol}",
+                signal.readiness_reason or "Risk Gate ไม่อนุญาตให้เปิดออเดอร์",
+                symbol=signal.symbol,
+                meta={"signal_id": signal.id, "readiness": new.value},
+                dedupe_seconds=300,
+            )
+        elif new in (SignalReadiness.wait, SignalReadiness.scanning) and previous in (
+            SignalReadiness.ready, SignalReadiness.blocked,
+        ):
+            self.notifier.emit(
+                "info", f"รอสัญญาณ — {signal.symbol}",
+                signal.readiness_reason or "ยังไม่ครบเงื่อนไขจุดเข้า",
+                symbol=signal.symbol,
+                meta={"signal_id": signal.id, "readiness": new.value},
+                dedupe_seconds=300,
+            )
 
     # --------------------------------------------------------- manage cycle
     def _manage_cycle(self, now: float) -> None:
@@ -851,6 +907,9 @@ class TradingRuntime:
         )
         with self.lock:
             self.plans[sig_id] = signal
+            self.plan_analyses[sig_id] = ctx.snapshot.model_dump(mode="json")
+            while len(self.plan_analyses) > 256:
+                self.plan_analyses.pop(next(iter(self.plan_analyses)))
             self.signal_log.append(signal)
         return signal, ""
 
@@ -920,8 +979,25 @@ class TradingRuntime:
                 mode=self.mode,
                 broker_id=self.adapter.id,
             )
+            with self.lock:
+                original_analysis = self.plan_analyses.get(signal.id)
+            original_plan_snapshot = {
+                "signal": signal.model_dump(mode="json"),
+                "analysis": original_analysis,
+                "analysis_provenance": "decision_time" if original_analysis is not None else "unavailable",
+                "risk_decision": {
+                    "evaluated_at": int(now),
+                    "allow": gate.allow,
+                    "checks": getattr(gate, "checks", []),
+                    "warnings": getattr(gate, "warnings", []),
+                    "risk_state": (risk_state.model_dump(mode="json")
+                                   if callable(getattr(risk_state, "model_dump", None)) else None),
+                },
+            }
             with self._position_mutation():
-                result: OrderResult = self.gateway.submit(self.adapter, request, actor=actor)
+                result: OrderResult = self.gateway.submit(
+                    self.adapter, request, actor=actor,
+                    original_plan_snapshot=original_plan_snapshot)
         except BrokerError as exc:
             return {"ok": False, "error": str(exc)}
         if result.status == OrderState.filled:

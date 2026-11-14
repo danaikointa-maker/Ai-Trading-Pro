@@ -6,6 +6,7 @@
         <div class="panel-sub">{{ signal ? `${signal.strategy.replace('_', ' ')} · ${signal.regime.replace('_', ' ')}` : 'waiting for the first cycle' }}</div>
       </div>
       <div class="flex items-center gap-1.5">
+        <span class="chip" :class="readinessChip" :title="readinessReason" role="status">{{ readiness }}</span>
         <span class="chip" :class="statusChip">{{ signal?.status || 'idle' }}</span>
         <span class="chip chip-gold">{{ modeLabel }}</span>
       </div>
@@ -22,6 +23,9 @@
         </div>
         <p class="mt-1.5 line-clamp-2 text-[11.5px] leading-relaxed text-slate-300">
           {{ headline }}
+        </p>
+        <p v-if="signal?.readiness_reason" class="mt-1 text-[10.5px] text-amber-200/80">
+          {{ readinessReason }}
         </p>
         <div class="mt-2 flex flex-wrap gap-1.5">
           <span v-for="b in (signal?.blockers || []).slice(0, 2)" :key="b" class="chip chip-warn" :title="b">
@@ -44,6 +48,17 @@
       >
         อนุมัติ ({{ modeLabel }})
       </button>
+    </div>
+
+    <div v-if="state.live?.analysis?.stochastic?.length" class="px-4 pt-3">
+      <div class="mb-1 text-[10px] text-muted">Stochastic (14,3,3) · M5/M15/H1 · ข้อมูลประกอบ ยังไม่ใช้อนุมัติออเดอร์</div>
+      <div class="flex flex-wrap gap-1.5">
+        <span v-for="s in state.live.analysis.stochastic" :key="s.timeframe" class="chip"
+              :class="!s.fresh ? 'chip-warn' : s.direction === 'bullish' ? 'chip-up' : s.direction === 'bearish' ? 'chip-down' : ''"
+              :title="s.reason || ('K ' + s.k + ' / D ' + s.d)">
+          {{ s.timeframe }} · {{ s.fresh ? `${fmt(s.k, 0)}/${fmt(s.d, 0)} ${s.direction}` : 'ข้อมูลไม่พร้อม' }}
+        </span>
+      </div>
     </div>
 
     <div v-if="plan" class="mt-3 border-t border-ink-700/60 px-4 py-3">
@@ -104,7 +119,7 @@
 </template>
 
 <script setup>
-import { computed, ref } from 'vue'
+import { computed, onBeforeUnmount, onMounted, ref } from 'vue'
 import ExplainPanel from './ExplainPanel.vue'
 import ScoreGauge from './ScoreGauge.vue'
 import { api } from '../lib/api'
@@ -120,11 +135,34 @@ const askAi = ref(false)
 const signal = computed(() => liveSignal.value)
 const plan = computed(() => signal.value?.plan || null)
 const digits = computed(() => state.live?.analysis?.spec?.digits ?? 2)
+const nowSeconds = ref(Math.floor(Date.now() / 1000))
+let clockTimer = null
+onMounted(() => { clockTimer = window.setInterval(() => { nowSeconds.value = Math.floor(Date.now() / 1000) }, 1000) })
+onBeforeUnmount(() => { if (clockTimer !== null) window.clearInterval(clockTimer) })
+const readiness = computed(() => {
+  if (!signal.value) return 'SCANNING'
+  // A real live signal can expire before the next update. Replay and simulated
+  // feeds use market time, so comparing them to the browser clock is invalid.
+  const liveMt5 = ['mt5', 'mt5-live'].includes(state.live?.feed)
+  if (liveMt5 && signal.value.expires_at > 0 && nowSeconds.value >= signal.value.expires_at) return 'EXPIRED'
+  return signal.value.readiness || 'SCANNING'
+})
+const readinessReason = computed(() => readiness.value === 'EXPIRED'
+  ? 'สัญญาณหมดอายุแล้ว รอการวิเคราะห์รอบถัดไป'
+  : (signal.value?.readiness_reason || 'กำลังค้นหาจุดเข้า'))
+const readinessChip = computed(() => ({
+  READY: 'chip-up', WAIT: 'chip-warn', BLOCKED: 'chip-down',
+  EXPIRED: 'chip-down', SCANNING: 'chip',
+}[readiness.value] || 'chip'))
 const modeLabel = computed(() => ({ manual: 'Manual', semi_auto: 'Semi-Auto', full_auto: 'Full Auto' }[mode.value] || mode.value))
-const canApprove = computed(() => perms.value.canTrade && ['BUY', 'SELL'].includes(signal.value?.action) && (signal.value?.score || 0) >= 70 && !signal.value?.executed_order_id)
+const canApprove = computed(() => perms.value.canTrade && ['BUY', 'SELL'].includes(signal.value?.action)
+  && (!signal.value?.readiness || readiness.value === 'READY')
+  && (signal.value?.score || 0) >= 70 && !signal.value?.executed_order_id)
 const reasons = computed(() => signal.value?.reasons || [])
 const headline = computed(() => {
   if (!signal.value) return 'รอรอบวิเคราะห์ถัดไป…'
+  if (readiness.value === 'EXPIRED') return 'สัญญาณเดิมหมดอายุแล้ว ห้ามใช้เปิดไม้ใหม่'
+  if (readiness.value === 'BLOCKED') return 'ระบบบล็อกจุดเข้าในรอบนี้ — ตรวจเงื่อนไขความเสี่ยงก่อน'
   if (signal.value.action === 'BUY' || signal.value.action === 'SELL') {
     return `${signal.value.action} signal ที่คะแนน ${fmt(signal.value.score, 0)}/100 — ผ่านเงื่อนไขครบและ Risk Gate เปิดให้เข้าไม้`
   }

@@ -73,6 +73,58 @@ def test_trade_review_keeps_original_signal_and_labels_retrospective_outcome(cli
     assert body["retrospective"]["basis"] == "recorded trade result; not a new prediction"
 
 
+def test_trade_review_prefers_immutable_preorder_plan_and_decision_zones(client, auth, runtime):
+    from packages.shared_schemas.models import (Direction, OrderRequest, OrderResult,
+                                                 OrderState, TradeRecord)
+
+    identity = runtime.gateway._assert_account(runtime.adapter)
+    signal_id = "immutable-review-signal-1"
+    ticket = "immutable-review-ticket-1"
+    order_id = "immutable-review-order-1"
+    request = OrderRequest(broker_id=runtime.adapter.id, signal_id=signal_id, symbol="XAUUSD",
+                           side="buy", volume=0.1, sl=1990, tp=2030,
+                           idempotency_key=order_id).model_dump(mode="json")
+    result = OrderResult(order_id=order_id, idempotency_key=order_id,
+                         status=OrderState.filled, ticket=ticket, filled_volume=0.1,
+                         fill_price=2001, verified=True).model_dump(mode="json")
+    original_signal = {"id": signal_id, "broker_id": runtime.adapter.id, "symbol": "XAUUSD",
+                       "action": "BUY", "score": 75, "plan": {"entry": 2000, "sl": 1990,
+                                                           "tp1": 2010, "tp2": 2020, "tp3": 2030},
+                       "zones_used": ["archived-zone"]}
+    snapshot = {"schema_version": 1, "account_identity": identity,
+                "evidence_level": "original_plan", "request": request,
+                "original_signal": original_signal, "analysis_provenance": "decision_time",
+                "analysis": {"symbol": "XAUUSD", "broker_id": runtime.adapter.id, "timeframe": "M5",
+                             "zones": [{"id": "archived-zone", "low": 1992, "high": 1998}],
+                             "sr_flips": [{"level": 1998}],
+                             "fibonacci_band": {"level_50": 1996, "level_618": 1994}}}
+    with runtime.db.cursor() as cur:
+        cur.execute("INSERT INTO orders(id,created_at,idempotency_key,state,broker_id,symbol,payload) "
+                    "VALUES(?,?,?,?,?,?,?)", (order_id, 1.0, order_id, "filled", runtime.adapter.id,
+                    "XAUUSD", json.dumps({"request": request, "result": result,
+                                          "account_identity": identity})))
+        cur.execute("INSERT INTO pre_order_snapshots "
+                    "(order_id,broker_id,signal_id,symbol,captured_at,payload) VALUES(?,?,?,?,?,?)",
+                    (order_id, runtime.adapter.id, signal_id, "XAUUSD", 1.0, json.dumps(snapshot)))
+    # The mutable signal row is intentionally changed AFTER the order.
+    rewritten = {**original_signal, "score": 99, "plan": {**original_signal["plan"], "sl": 1980}}
+    runtime.db.execute("INSERT OR REPLACE INTO signals(id,t,symbol,action,score,payload) VALUES(?,?,?,?,?,?)",
+                       (signal_id, 1, "XAUUSD", "BUY", 99, json.dumps(rewritten)))
+    runtime.gateway.record_trade(TradeRecord(
+        ticket=ticket, symbol="XAUUSD", direction=Direction.up, volume=0.1,
+        entry=2001, exit=2010, opened_at=1, closed_at=2, points=900,
+        gross_pnl=10, costs=1, pnl=9, signal_id=signal_id, broker_id=runtime.adapter.id))
+
+    response = client.get(f"/api/trading/trades/{ticket}/review", headers=auth)
+    assert response.status_code == 200
+    body = response.json()
+    assert body["entry_snapshot"]["score"] == 75
+    assert body["entry_snapshot"]["plan"]["sl"] == 1990
+    assert body["original_plan_snapshot"]["analysis"]["zones"][0]["id"] == "archived-zone"
+    assert body["original_plan_snapshot"]["analysis_provenance"] == "decision_time"
+    assert body["retrospective"]["limitations"] == []
+
+
 def test_trade_review_rejects_other_broker_account(client, auth, runtime):
     from packages.shared_schemas.models import Direction, TradeRecord
 
