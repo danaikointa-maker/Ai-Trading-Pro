@@ -59,6 +59,31 @@
           {{ s.timeframe }} · {{ s.fresh ? `${fmt(s.k, 0)}/${fmt(s.d, 0)} ${s.direction}` : 'ข้อมูลไม่พร้อม' }}
         </span>
       </div>
+      <p v-if="state.live?.stochastic_veto_preview" class="mt-1 text-[10px] text-muted">
+        ทดลองกฎ 3 TF: {{ state.live.stochastic_veto_preview.would_block ? 'จะให้รอ' : 'สอดคล้อง' }}
+        · {{ state.live.stochastic_veto_preview.reasons.slice(0, 2).join(' · ') }}
+        · ยังไม่เปิดใช้เป็น Risk Gate (รอผลทดสอบ OOS จริง)
+      </p>
+    </div>
+
+    <div v-if="state.live?.entry_proposals?.proposals?.length" class="px-4 pt-3">
+      <div class="mb-1 text-[10px] text-muted">ทางเลือกจุดเข้า (สูงสุด 3) · ประเมินงบเสี่ยงรวม · ยังสั่งเปิดไม่ได้</div>
+      <div class="grid gap-1.5">
+        <div v-for="proposal in state.live.entry_proposals.proposals" :key="proposal.proposal_id"
+             class="rounded border border-ink-700 bg-ink-800/40 px-2 py-1.5 text-[10.5px]">
+          <span class="text-gold">{{ proposal.proposal_id.split('-').at(-1) }}</span>
+          · {{ proposal.scenario === 'market_reference' ? 'ราคาอ้างอิงปัจจุบัน' : 'รอย่อเข้าโซนที่ยืนยัน' }}
+          · Entry {{ fmt(proposal.plan.entry, digits) }}
+          · SL {{ fmt(proposal.plan.sl, digits) }}
+          · TP {{ fmt(proposal.plan.tp3, digits) }}
+          · {{ fmt(proposal.plan.lot, 2) }} lot
+          · เสี่ยง {{ money(proposal.plan.risk_amount) }}
+        </div>
+      </div>
+      <p class="mt-1 text-[10px] text-muted">
+        งบรวม {{ money(state.live.entry_proposals.aggregate_risk) }} / {{ money(state.live.entry_proposals.risk_budget) }}
+        · แผนจำลอง ไม่ใช่สัญญาณอนุมัติซื้อขาย
+      </p>
     </div>
 
     <div v-if="plan" class="mt-3 border-t border-ink-700/60 px-4 py-3">

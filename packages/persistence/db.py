@@ -50,6 +50,15 @@ CREATE TABLE IF NOT EXISTS pre_order_snapshots (
 CREATE INDEX IF NOT EXISTS idx_pre_order_signal
     ON pre_order_snapshots(broker_id, signal_id);
 
+-- Post-order actions are new evidence, never modifications of the original plan.
+CREATE TABLE IF NOT EXISTS position_events (
+    event_id TEXT PRIMARY KEY, order_id TEXT, broker_id TEXT NOT NULL,
+    ticket TEXT NOT NULL, actor TEXT NOT NULL, kind TEXT NOT NULL,
+    status TEXT NOT NULL, created_at REAL NOT NULL, payload TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_position_events_ticket
+    ON position_events(broker_id, ticket, created_at);
+
 CREATE TABLE IF NOT EXISTS trades (
     ticket TEXT PRIMARY KEY, opened_at INTEGER, closed_at INTEGER,
     symbol TEXT, direction TEXT, volume REAL, entry REAL, exit REAL,
@@ -227,6 +236,12 @@ class Database:
             BEFORE DELETE ON pre_order_snapshots
             BEGIN SELECT RAISE(ABORT, 'pre-order evidence is immutable'); END
         """)
+        for operation in ("UPDATE", "DELETE"):
+            self._conn.execute(f"""
+                CREATE TRIGGER IF NOT EXISTS position_events_no_{operation.lower()}
+                BEFORE {operation} ON position_events
+                BEGIN SELECT RAISE(ABORT, 'position evidence is immutable'); END
+            """)
 
     # ------------------------------------------------------------------ core
     @contextmanager
