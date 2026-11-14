@@ -489,6 +489,10 @@ class Signal(BaseModel):
     components: list[ScoreComponent] = Field(default_factory=list)
     reasons: list[str] = Field(default_factory=list)
     blockers: list[str] = Field(default_factory=list)
+    # Stable identifiers for `blockers`, same order. `blockers` is prose with live
+    # numbers in it; counting prose produces one bucket per decision, so the
+    # attribution report counts these instead.
+    blocker_codes: list[str] = Field(default_factory=list)
     plan: TradePlan | None = None
     forecast: HorizonForecast | None = None
     zones_used: list[str] = Field(default_factory=list)

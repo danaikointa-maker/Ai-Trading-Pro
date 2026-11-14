@@ -21,6 +21,12 @@ def terminal(monkeypatch):
                           last_error=lambda: (-1, "unavailable"),
                           terminal_info=lambda: SimpleNamespace(connected=True))
     monkeypatch.setattr(mt5_live, "mt5", api)
+    # The fixture stands in for a connected terminal, so the availability flag has
+    # to say so too — the package is Windows-only and absent on CI, which left
+    # `account_info()` on its disconnected branch returning login "—". The identity
+    # guard in ExecutionGateway then refused the account, failing a test about
+    # history. Same patch the other MT5 suites use.
+    monkeypatch.setattr(mt5_live, "MT5_AVAILABLE", True)
     broker = MT5Broker({"id": "demo", "symbols": {}}, login=123, server="Demo-Server")
     broker._connected = True
     return broker, api
