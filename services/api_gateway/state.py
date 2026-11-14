@@ -56,7 +56,7 @@ from services.notification.notifier import Notifier
 from services.risk_engine.engine import RiskEngine, default_risk_state
 from services.risk_engine.manager import PositionAction, PositionManager
 from services.risk_engine.planner import PlanInputs, TradePlanner
-from services.strategy_engine.analysis import AnalysisContext, AnalysisService
+from services.strategy_engine.analysis import AnalysisContext, AnalysisService, decision_candles
 from services.strategy_engine.attribution import BlockerTally, RollingAttribution, merge
 
 # One hour of live decisions is the default view: long enough that a four-second
@@ -65,6 +65,8 @@ from services.strategy_engine.attribution import BlockerTally, RollingAttributio
 DEFAULT_ATTRIBUTION_WINDOW = 3600.0
 from services.strategy_engine.engine import StrategyEngine
 from services.strategy_engine.readiness import assess_readiness
+from services.strategy_engine.proposals import entry_proposals
+from services.strategy_engine.momentum_veto import preview_stochastic_veto
 
 def _truthy(value: Any) -> bool:
     return str(value or "").strip().lower() in ("1", "true", "yes", "on")
@@ -249,6 +251,7 @@ class TradingRuntime:
         self.signals: dict[str, Signal] = {}
         self.signal_log: deque[Signal] = deque(maxlen=400)
         self.plans: dict[str, Signal] = {}
+        self.proposals: dict[str, dict[str, Any]] = {}
         # Decision-time analysis is pinned by signal ID. Later symbol scans
         # must never substitute new zones for the original entry evidence.
         self.plan_analyses: dict[str, dict[str, Any]] = {}
@@ -675,14 +678,29 @@ class TradingRuntime:
         signal.readiness = readiness.state
         signal.readiness_reason = readiness.reason
 
+        # Advisory plans only. Failure to calculate alternative entries must
+        # never authorize, block or delay the existing order execution path.
+        try:
+            suggested = entry_proposals(signal, ctx.snapshot, self.planner,
+                                        self.risk.limits(), risk_state, equity,
+                                        float(tick.spread_points), gate_allow=gate.allow)
+        except Exception as exc:  # noqa: BLE001
+            self._log_error("entry_proposals", exc)
+            suggested = {"signal_id": signal.id, "proposals": [], "executable": False,
+                         "reasons": ["proposal calculation unavailable"]}
+
         with self.lock:
             self.contexts[symbol] = ctx
             if forecast:
                 self.forecasts[symbol] = forecast
             self.signals[symbol] = signal
             self.plans[signal.id] = signal
+            self.proposals[symbol] = suggested
             if signal.action in (SignalAction.buy, SignalAction.sell) and signal.plan:
-                self.plan_analyses[signal.id] = ctx.snapshot.model_dump(mode="json")
+                analysis_at_decision = ctx.snapshot.model_dump(mode="json")
+                analysis_at_decision["decision_candles"] = decision_candles(
+                    ctx.frames["M5"], as_of=signal.t)
+                self.plan_analyses[signal.id] = analysis_at_decision
                 while len(self.plan_analyses) > 256:
                     self.plan_analyses.pop(next(iter(self.plan_analyses)))
             self.gates[symbol] = {
@@ -844,9 +862,23 @@ class TradingRuntime:
         if new is None:
             return
         previous = self._last_readiness.get(signal.symbol)
+        store = getattr(self, "db", None)
+        key = f"readiness-state:{signal.broker_id}:{signal.symbol}"
+        if previous is None and store is not None:
+            saved = store.kv_get(key, {}) or {}
+            # A several-day-old signal is not a meaningful transition after a
+            # restart. Retain only a recent session's alert deduplication state.
+            if time.time() - float(saved.get("recorded_at") or 0) <= 21600:
+                try:
+                    previous = SignalReadiness(saved["state"])
+                except (KeyError, ValueError, TypeError):
+                    previous = None
         if previous == new:
+            self._last_readiness[signal.symbol] = new
             return
         self._last_readiness[signal.symbol] = new
+        if store is not None:
+            store.kv_set(key, {"state": new.value, "recorded_at": time.time(), "signal_id": signal.id})
         if new == SignalReadiness.blocked:
             self.notifier.emit(
                 "warning", f"Entry BLOCKED — {signal.symbol}",
@@ -1004,7 +1036,10 @@ class TradingRuntime:
         )
         with self.lock:
             self.plans[sig_id] = signal
-            self.plan_analyses[sig_id] = ctx.snapshot.model_dump(mode="json")
+            analysis_at_decision = ctx.snapshot.model_dump(mode="json")
+            analysis_at_decision["decision_candles"] = decision_candles(
+                ctx.frames["M5"], as_of=signal.t)
+            self.plan_analyses[sig_id] = analysis_at_decision
             while len(self.plan_analyses) > 256:
                 self.plan_analyses.pop(next(iter(self.plan_analyses)))
             self.signal_log.append(signal)
@@ -1487,6 +1522,11 @@ class TradingRuntime:
             "ticker": quote.get("tick") if quote else None,
             "ticker_stale": bool(quote and quote.get("stale")),
             "signal": signal.model_dump() if signal else None,
+            "entry_proposals": getattr(self, "proposals", {}).get(
+                symbol, {"proposals": [], "executable": False}),
+            "stochastic_veto_preview": (preview_stochastic_veto(
+                snapshot.snapshot.stochastic, signal.plan.direction)
+                if snapshot and signal and signal.plan else None),
             "gate": gate,
             "model": {
                 "version": self.predictor.version,

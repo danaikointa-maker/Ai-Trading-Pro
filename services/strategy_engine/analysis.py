@@ -59,6 +59,29 @@ class AnalysisContext:
     alignment_notes: list[str] = field(default_factory=list)
 
 
+def decision_candles(frame: pd.DataFrame, *, as_of: int, limit: int = 180,
+                     timeframe_seconds: int = 300) -> list[dict[str, float | int]]:
+    """Freeze only bars whose close is at/before the original decision clock.
+
+    Never fetch current broker history during historical review: chart bars
+    must come from this archived decision-time slice, or remain unavailable.
+    """
+    columns = ("t", "o", "h", "l", "c", "v")
+    if any(column not in frame.columns for column in columns):
+        return []
+    complete = frame.loc[frame["t"] + timeframe_seconds <= as_of, list(columns)]
+    complete = complete.sort_values("t").drop_duplicates("t").tail(max(1, min(500, limit)))
+    result: list[dict[str, float | int]] = []
+    for _, row in complete.iterrows():
+        values = [float(row[k]) for k in columns[1:]]
+        if (not np.isfinite(values).all() or values[1] < values[2]
+                or not values[2] <= values[0] <= values[1]
+                or not values[2] <= values[3] <= values[1]):
+            return []  # invalid historical evidence must never be "repaired" for display
+        result.append({"t": int(row["t"]), **dict(zip(columns[1:], values))})
+    return result
+
+
 class AnalysisService:
     def __init__(self, settings: Settings, market: MarketDataService, news: NewsService) -> None:
         self.settings = settings

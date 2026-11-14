@@ -420,6 +420,9 @@ class Backtester:
             dataset={**(dataset or {}),
                      **({"ticks": ticks.stats()} if ticks is not None else {})},
             diagnostics={
+                "cost_assumptions": {"spread_points": spread_points,
+                                     "slippage_points": float(request.slippage_points),
+                                     "commission_per_lot": commission},
                 "intra_bar": (ticks.stats() if ticks is not None else
                               {"mode": "conservative", "reason": "no tick data imported"}),
                 "forecast_source": getattr(request, "forecast_source", "rule-proxy"),

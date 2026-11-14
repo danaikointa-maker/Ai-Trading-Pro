@@ -148,6 +148,21 @@ def test_trade_review_remains_readable_when_market_feed_is_offline(client, auth,
     assert response.json()["entry_snapshot"] is None
 
 
+def test_open_position_review_is_read_only_and_scoped_to_broker(client, auth, runtime, monkeypatch):
+    from packages.shared_schemas.models import Position
+
+    position = Position(ticket="open-review-1", symbol="XAUUSD", direction="up",
+                        volume=0.1, entry=2000, sl=1990, tp=2030,
+                        open_time=1, current_price=2002, broker_id=runtime.adapter.id)
+    monkeypatch.setattr(runtime.adapter, "positions", lambda: [position])
+    response = client.get("/api/trading/positions/open-review-1/review", headers=auth)
+    assert response.status_code == 200
+    assert response.json()["position"]["ticket"] == "open-review-1"
+    assert response.json()["original_plan_snapshot"] is None
+    assert "events" in response.json()
+    assert client.get("/api/trading/positions/not-my-ticket/review", headers=auth).status_code == 404
+
+
 def test_trade_history_is_scoped_to_active_broker_account(client, auth, runtime):
     from packages.shared_schemas.models import Direction, TradeRecord
 
