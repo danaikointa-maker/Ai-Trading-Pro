@@ -11,8 +11,9 @@ limits:
   max_drawdown_pct: 10.00           # from peak equity -> hard stop
   max_open_trades: 1
   max_open_per_symbol: 1
-  max_consecutive_losses: 3         # then cooldown
-  cooldown_minutes: 20
+  max_consecutive_losses: 3         # then STOP — no timer lifts this; a winning
+                                    # trade or an audited operator release does
+  cooldown_minutes: 20              # separate, shorter pause after the same streak
   max_spread_points: 60             # per-symbol override allowed in brokers.yaml
   max_slippage_points: 15
   max_exposure_lots: 1.00           # total open volume

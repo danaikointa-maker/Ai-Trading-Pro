@@ -7,13 +7,13 @@
   "quality": "showcase",
   "specification": {
     "path": "C:\\workspace\\Ai-Trading-Pro\\.archify\\explainer-project-progress-20261109-114911\\candidate.archify.md",
-    "sha256": "1416af9e5be76839b6703642415f68f392675833bc77121dde5464beefbdd550",
-    "bytes": 210398
+    "sha256": "2c76feceb5ecc10675372ff528d60625f341ae25a851e72f67114b721aba701b",
+    "bytes": 206495
   },
   "artifact": {
     "path": "C:\\workspace\\Ai-Trading-Pro\\.archify\\explainer-project-progress-20261109-114911\\project-progress.html",
-    "sha256": "3b1f6b59d54a4c00e74f387658f7f395380f7ab7a9e472a50581a12110765477",
-    "bytes": 1110240
+    "sha256": "84f9fe6edc61dfdca3ed4f0b9f28417514446f7065bc6ff7778f9f178326fd70",
+    "bytes": 1094192
   },
   "gates": {
     "validate": "pass",
@@ -25,31 +25,10 @@
     {
       "code": "explainer/writing-sentence-length",
       "severity": "warning",
-      "message": "Sentence has 31 reading units, above the configured en limit of 28.",
-      "subject": {
-        "input": "C:\\workspace\\Ai-Trading-Pro\\.archify\\explainer-project-progress-20261109-114911\\candidate.archify.md",
-        "line": 14,
-        "component": "list",
-        "panelId": "panel-9bd895a8ab56"
-      },
-      "evidence": {
-        "reason": "Sentence has 31 reading units, above the configured en limit of 28.",
-        "example": "先查缓存。未命中时再查数据库。 / Check the cache first. Query the database on a miss.",
-        "rule": "sentence-length",
-        "units": 31,
-        "limit": 28
-      },
-      "supportedFixes": [
-        "Split at a logical action or condition boundary while preserving qualifications and causal links."
-      ]
-    },
-    {
-      "code": "explainer/writing-sentence-length",
-      "severity": "warning",
       "message": "Sentence has 32 reading units, above the configured en limit of 28.",
       "subject": {
         "input": "C:\\workspace\\Ai-Trading-Pro\\.archify\\explainer-project-progress-20261109-114911\\candidate.archify.md",
-        "line": 107,
+        "line": 93,
         "component": "prose",
         "panelId": "phase-2"
       },
@@ -70,7 +49,7 @@
       "message": "Sentence has 30 reading units, above the configured en limit of 28.",
       "subject": {
         "input": "C:\\workspace\\Ai-Trading-Pro\\.archify\\explainer-project-progress-20261109-114911\\candidate.archify.md",
-        "line": 253,
+        "line": 239,
         "component": "comparison",
         "panelId": "documentation-loop"
       },
@@ -88,31 +67,10 @@
     {
       "code": "explainer/writing-sentence-length",
       "severity": "warning",
-      "message": "Sentence has 36 reading units, above the configured en limit of 28.",
-      "subject": {
-        "input": "C:\\workspace\\Ai-Trading-Pro\\.archify\\explainer-project-progress-20261109-114911\\candidate.archify.md",
-        "line": 269,
-        "component": "comparison",
-        "panelId": "documentation-loop"
-      },
-      "evidence": {
-        "reason": "Sentence has 36 reading units, above the configured en limit of 28.",
-        "example": "先查缓存。未命中时再查数据库。 / Check the cache first. Query the database on a miss.",
-        "rule": "sentence-length",
-        "units": 36,
-        "limit": 28
-      },
-      "supportedFixes": [
-        "Split at a logical action or condition boundary while preserving qualifications and causal links."
-      ]
-    },
-    {
-      "code": "explainer/writing-sentence-length",
-      "severity": "warning",
       "message": "Sentence has 31 reading units, above the configured en limit of 28.",
       "subject": {
         "input": "C:\\workspace\\Ai-Trading-Pro\\.archify\\explainer-project-progress-20261109-114911\\candidate.archify.md",
-        "line": 322,
+        "line": 308,
         "component": "list",
         "panelId": "close-all-results"
       },
@@ -133,7 +91,28 @@
       "message": "Sentence has 36 reading units, above the configured en limit of 28.",
       "subject": {
         "input": "C:\\workspace\\Ai-Trading-Pro\\.archify\\explainer-project-progress-20261109-114911\\candidate.archify.md",
-        "line": 333,
+        "line": 255,
+        "component": "comparison",
+        "panelId": "documentation-loop"
+      },
+      "evidence": {
+        "reason": "Sentence has 36 reading units, above the configured en limit of 28.",
+        "example": "先查缓存。未命中时再查数据库。 / Check the cache first. Query the database on a miss.",
+        "rule": "sentence-length",
+        "units": 36,
+        "limit": 28
+      },
+      "supportedFixes": [
+        "Split at a logical action or condition boundary while preserving qualifications and causal links."
+      ]
+    },
+    {
+      "code": "explainer/writing-sentence-length",
+      "severity": "warning",
+      "message": "Sentence has 36 reading units, above the configured en limit of 28.",
+      "subject": {
+        "input": "C:\\workspace\\Ai-Trading-Pro\\.archify\\explainer-project-progress-20261109-114911\\candidate.archify.md",
+        "line": 319,
         "component": "list",
         "panelId": "close-all-partial"
       },
@@ -154,7 +133,7 @@
       "message": "Sentence has 31 reading units, above the configured en limit of 28.",
       "subject": {
         "input": "C:\\workspace\\Ai-Trading-Pro\\.archify\\explainer-project-progress-20261109-114911\\candidate.archify.md",
-        "line": 344,
+        "line": 330,
         "component": "list",
         "panelId": "management-acknowledgements"
       },
@@ -175,7 +154,7 @@
       "message": "Sentence has 31 reading units, above the configured en limit of 28.",
       "subject": {
         "input": "C:\\workspace\\Ai-Trading-Pro\\.archify\\explainer-project-progress-20261109-114911\\candidate.archify.md",
-        "line": 423,
+        "line": 409,
         "component": "list",
         "panelId": "model-provenance-quarantine"
       },
@@ -189,14 +168,35 @@
       "supportedFixes": [
         "Split at a logical action or condition boundary while preserving qualifications and causal links."
       ]
+    },
+    {
+      "code": "explainer/writing-sentence-length",
+      "severity": "warning",
+      "message": "Sentence has 29 reading units, above the configured en limit of 28.",
+      "subject": {
+        "input": "C:\\workspace\\Ai-Trading-Pro\\.archify\\explainer-project-progress-20261109-114911\\candidate.archify.md",
+        "line": 683,
+        "component": "list",
+        "panelId": "panel-1ec5234c7341"
+      },
+      "evidence": {
+        "reason": "Sentence has 29 reading units, above the configured en limit of 28.",
+        "example": "先查缓存。未命中时再查数据库。 / Check the cache first. Query the database on a miss.",
+        "rule": "sentence-length",
+        "units": 29,
+        "limit": 28
+      },
+      "supportedFixes": [
+        "Split at a logical action or condition boundary while preserving qualifications and causal links."
+      ]
     }
   ],
   "diagnosticSummary": {
-    "total": 22,
+    "total": 21,
     "shown": 8,
     "truncated": true,
     "omittedByCode": {
-      "explainer/writing-sentence-length": 14
+      "explainer/writing-sentence-length": 13
     }
   },
   "evidence": {
@@ -204,7 +204,7 @@
     "summaryReceipt": "C:\\workspace\\Ai-Trading-Pro\\.archify\\explainer-project-progress-20261109-114911\\project-progress.finalize-summary.json"
   },
   "visualReview": "not-requested",
-  "durationMs": 7940,
+  "durationMs": 5111,
   "browserCheck": {
     "requested": false,
     "ran": false

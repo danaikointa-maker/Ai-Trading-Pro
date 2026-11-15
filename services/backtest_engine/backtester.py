@@ -53,6 +53,7 @@ from services.market_data.simulator import resample
 from services.risk_engine.engine import RiskEngine
 from services.risk_engine.planner import TradePlanner
 from services.strategy_engine.analysis import AnalysisService
+from services.strategy_engine.attribution import BlockerTally
 from services.strategy_engine.engine import StrategyEngine
 
 
@@ -182,6 +183,9 @@ class Backtester:
         actionable = 0
         gate_blocked = 0
         skipped = 0
+        # Counters say how many decisions died; the tally says why. Same data the
+        # engine already produces on every decision, previously discarded here.
+        tally = BlockerTally()
         model_decisions = 0
         proxy_decisions = 0
         last_ctx = None
@@ -217,12 +221,17 @@ class Backtester:
                     sim["balance"] = round(sim["balance"] + closed.pnl, 2)
                     balance = sim["balance"]
                     sim["day_pnl"] = round(balance - sim["day_start_equity"], 2)
-                    if closed.pnl <= 0:
+                    # Same arithmetic as RiskEngine.state(): a win clears the streak,
+                    # a loss extends it, and a break-even close does neither. The
+                    # backtest used to count a flat trade as a loss while the live
+                    # engine counted it as a win — the two answered differently on
+                    # the one event that decides whether trading halts.
+                    if closed.pnl > 0:
+                        sim["consecutive_losses"] = 0
+                    elif closed.pnl < 0:
                         sim["consecutive_losses"] += 1
                         if sim["consecutive_losses"] >= self.risk.limits().max_consecutive_losses:
                             sim["cooldown_until"] = bar_time + self.risk.limits().cooldown_minutes * 60
-                    else:
-                        sim["consecutive_losses"] = 0
                     pos = None
 
             equity = balance + (self._floating(pos, float(bar["c"]), spec) if pos else 0.0)
@@ -267,7 +276,10 @@ class Backtester:
                         spread_points=spread_points, last=price)
             signal = strategy.generate(ctx, spec.symbol, broker_id, TradeMode.manual, tick,
                                        Health.connected, forecast, equity, now=bar_time)
-            if signal.action not in (SignalAction.buy, SignalAction.sell) or signal.plan is None:
+            tradable = (signal.action in (SignalAction.buy, SignalAction.sell)
+                        and signal.plan is not None)
+            tally.add_signal(tradable, signal.blocker_codes, signal.blockers)
+            if not tradable:
                 continue
             actionable += 1
             risk_state = self._risk_state(sim, balance, equity)
@@ -278,6 +290,7 @@ class Backtester:
                 # Simulated time, not the wall clock: without this the cooldown after
                 # consecutive losses is compared against today and never blocks a trade.
                 now=bar_time)
+            tally.add_gate(gate.allow, gate.checks)
             if not gate.allow:
                 gate_blocked += 1
                 continue
@@ -398,6 +411,8 @@ class Backtester:
                 f"({no_context} skipped — not enough higher-timeframe history yet); "
                 f"{actionable} were actionable, the risk gate blocked {gate_blocked}, "
                 f"{skipped} were skipped on fill drift, and {len(trades)} trades opened.",
+                tally.note(),
+                self._hard_stop_note(tally, len(trades)),
                 data_note or "Bar data: source not recorded — treat these numbers as unverified.",
                 *gap_notes,
             ],
@@ -405,6 +420,9 @@ class Backtester:
             dataset={**(dataset or {}),
                      **({"ticks": ticks.stats()} if ticks is not None else {})},
             diagnostics={
+                "cost_assumptions": {"spread_points": spread_points,
+                                     "slippage_points": float(request.slippage_points),
+                                     "commission_per_lot": commission},
                 "intra_bar": (ticks.stats() if ticks is not None else
                               {"mode": "conservative", "reason": "no tick data imported"}),
                 "forecast_source": getattr(request, "forecast_source", "rule-proxy"),
@@ -418,6 +436,7 @@ class Backtester:
                 "fill_skipped": skipped,
                 "trades_opened": len(trades),
                 "no_trade_rate_basis": "trades / analysed decision points",
+                "attribution": tally.summary(),
             },
         )
         del started
@@ -528,6 +547,25 @@ class Backtester:
             trades_this_week=sim["trades_week"], cooldown_until=sim["cooldown_until"] or None,
             kill_switch_active=sim["kill"], kill_switch_reason=sim["kill_reason"],
         )
+
+    @staticmethod
+    def _hard_stop_note(tally: BlockerTally, trades: int) -> str:
+        """Say it loudly when the run ended on the losing-streak stop.
+
+        Three losses in a row halt trading and nothing in a backtest can lift it
+        (the release is an operator action). Every bar after that point measures
+        the stop, not the strategy, and the sample is whatever it had reached —
+        often three trades. Without this line the metrics look like a verdict.
+        """
+        blocked = tally.gate_primary.get("consecutive_losses", 0)
+        if not blocked:
+            return ("The losing-streak stop never fired: no three consecutive losses "
+                    "occurred in this sample.")
+        return (f"RUN ENDED ON THE LOSING-STREAK STOP: after three consecutive losses the risk "
+                f"gate rejected the next {blocked} signal(s) and nothing lifts that inside a "
+                f"backtest, so trading stopped for the rest of the sample. These {trades} trade(s) "
+                f"are where the account stood at the halt — read them as 'how fast it hit the "
+                f"stop', not as the strategy's performance.")
 
     @staticmethod
     def _forecast_note(edge: Any, model_decisions: int, proxy_decisions: int) -> str:

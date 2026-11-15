@@ -6,6 +6,8 @@ from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel
 
 from packages.shared_schemas.models import Direction, EquityPoint, TradeMode, TradeRecord
+from packages.persistence.position_events import PositionEventLog
+from packages.persistence.position_candles import PositionCandleLog
 from services.api_gateway.deps import current_user, get_runtime
 from services.api_gateway.state import TradingRuntime
 from services.backtest_engine.metrics import compute_metrics
@@ -98,6 +100,81 @@ def trades(limit: int = Query(50, ge=1, le=500), runtime: TradingRuntime = Depen
     return {"trades": out}
 
 
+def _original_snapshot_for_trade(runtime: TradingRuntime, trade: TradeRecord) -> dict | None:
+    """Link immutable pre-send evidence by broker ticket, or unique signal ID.
+
+    Ambiguous links and mismatched account ownership never become historical
+    facts. In particular this code never calls live analysis to reconstruct a
+    zone or fills a missing entry plan from the current chart.
+    """
+    params = (trade.broker_id, trade.symbol, trade.ticket)
+    rows = runtime.db.query(
+        "SELECT p.payload FROM pre_order_snapshots p "
+        "JOIN orders o ON o.id=p.order_id "
+        "WHERE p.broker_id=? AND p.symbol=? AND o.broker_id=p.broker_id "
+        "AND o.symbol=p.symbol "
+        "AND json_extract(CASE WHEN json_valid(o.payload) THEN o.payload ELSE '{}' END, "
+        "'$.result.ticket')=? LIMIT 2", params)
+    if not rows and trade.signal_id:
+        rows = runtime.db.query(
+            "SELECT p.payload FROM pre_order_snapshots p "
+            "JOIN orders o ON o.id=p.order_id "
+            "WHERE p.broker_id=? AND p.symbol=? AND o.broker_id=p.broker_id "
+            "AND o.symbol=p.symbol AND p.signal_id=? LIMIT 2",
+            (trade.broker_id, trade.symbol, trade.signal_id))
+    if len(rows) != 1:
+        return None
+    owner = runtime.db.query_one("SELECT value FROM kv WHERE key=?",
+                                 ("account-owner:" + trade.broker_id,))
+    if owner is None:
+        return None
+    try:
+        payload = json.loads(rows[0]["payload"])
+        identity = json.loads(owner["value"])
+        request = payload["request"]
+        if (payload.get("schema_version") != 1
+                or payload.get("account_identity") != identity
+                or request.get("broker_id") != trade.broker_id
+                or request.get("symbol") != trade.symbol
+                or (trade.signal_id and request.get("signal_id") != trade.signal_id)
+                or (payload.get("original_signal") is not None
+                    and (payload["original_signal"].get("id") != request.get("signal_id")
+                         or payload["original_signal"].get("broker_id") != trade.broker_id
+                         or payload["original_signal"].get("symbol") != trade.symbol))):
+            return None
+        return payload
+    except (KeyError, TypeError, ValueError, AttributeError):
+        return None
+
+
+def _account_scoped_evidence(runtime: TradingRuntime, ticket: str, broker_id: str,
+                             symbol: str) -> dict:
+    """Read-only broker history. Ticket equality does not certify strategy attribution."""
+    row = runtime.db.query_one("SELECT value FROM kv WHERE key=?", ("account-owner:" + broker_id,))
+    if row is None:
+        return {"events": [], "deals": [], "deal_attribution": "unavailable",
+                "post_entry_candles": {"bars": [], "broker_tick_verified": False, "complete": False}}
+    try:
+        identity = json.loads(row["value"])
+        if identity.get("broker_id") != broker_id or identity.get("workspace_id") != runtime.db.workspace_id:
+            raise ValueError("account identity mismatch")
+        from services.execution_gateway.history import DealLedger
+
+        account_key = f"{identity['server']}:{identity['login']}"
+        deals = [d for d in DealLedger(runtime.db).deals(broker_id, account_key)
+                 if d.get("position_id") == ticket]
+        events = PositionEventLog(runtime.db).for_ticket(
+            broker_id=broker_id, ticket=ticket, account_identity=identity)
+        post_entry = PositionCandleLog(runtime.db).for_ticket(
+            broker_id=broker_id, ticket=ticket, account_identity=identity, symbol=symbol)
+    except (TypeError, KeyError, ValueError, AttributeError):
+        return {"events": [], "deals": [], "deal_attribution": "unavailable",
+                "post_entry_candles": {"bars": [], "broker_tick_verified": False, "complete": False}}
+    return {"events": events, "deals": deals,
+            "post_entry_candles": post_entry,
+            "deal_attribution": "broker_position_id_match_only" if deals else "no_matching_deals"}
+
+
 @router.get("/trades/{ticket}/review")
 def trade_review(ticket: str, runtime: TradingRuntime = Depends(get_runtime),
                  user=Depends(current_user)):
@@ -110,6 +187,7 @@ def trade_review(ticket: str, runtime: TradingRuntime = Depends(get_runtime),
         raise HTTPException(status_code=409, detail="stored trade evidence is invalid") from exc
     if row["broker_id"] != runtime.adapter.id or trade.broker_id != runtime.adapter.id:
         raise HTTPException(status_code=404, detail="trade not found")
+    original_plan_snapshot = _original_snapshot_for_trade(runtime, trade)
     signal_row = (runtime.db.query_one("SELECT payload FROM signals WHERE id=?", (trade.signal_id,))
                   if trade.signal_id else None)
     entry_snapshot = None
@@ -120,6 +198,9 @@ def trade_review(ticket: str, runtime: TradingRuntime = Depends(get_runtime),
                 entry_snapshot = signal_payload
         except (TypeError, json.JSONDecodeError):
             entry_snapshot = None
+    if original_plan_snapshot and original_plan_snapshot.get("original_signal"):
+        # The signal row may be overwritten at fill time; this copy cannot be.
+        entry_snapshot = original_plan_snapshot["original_signal"]
     outcome = "profitable" if trade.pnl > 0 else "loss" if trade.pnl < 0 else "breakeven"
     retrospective = {
         "outcome": outcome,
@@ -128,7 +209,8 @@ def trade_review(ticket: str, runtime: TradingRuntime = Depends(get_runtime),
         "r_multiple": trade.r_multiple,
         "exit_reason": trade.exit_reason,
         "basis": "recorded trade result; not a new prediction",
-        "limitations": ([] if entry_snapshot else ["ไม่มี snapshot สัญญาณตอนเข้าไม้ที่เชื่อมโยงได้"]),
+        "limitations": ([] if original_plan_snapshot and original_plan_snapshot.get("original_signal")
+                        else ["ไม่พบหลักฐานแผนก่อนส่งออเดอร์; สัญญาณเก่าหรือข้อมูลไม่ครบ"]),
         "suggestions": [],
     }
     if entry_snapshot:
@@ -136,8 +218,36 @@ def trade_review(ticket: str, runtime: TradingRuntime = Depends(get_runtime),
             "ทบทวนเหตุผลและเงื่อนไขความเสี่ยงที่บันทึกไว้ก่อนเข้าไม้ เทียบกับผลจริง; ผลครั้งเดียวไม่ยืนยันว่ากลยุทธ์ดีหรือไม่"
         ]
     return {"trade": trade.model_dump(), "entry_snapshot": entry_snapshot,
+            "original_plan_snapshot": original_plan_snapshot,
+            **_account_scoped_evidence(runtime, ticket, trade.broker_id, trade.symbol),
             "retrospective": retrospective,
             "disclaimer": "เป็นการทบทวนข้อมูลในอดีต ไม่ใช่คำแนะนำลงทุนหรือการคาดการณ์ผลครั้งถัดไป"}
+
+
+@router.get("/positions/{ticket}/review")
+def position_review(ticket: str, runtime: TradingRuntime = Depends(get_runtime),
+                    user=Depends(current_user)):
+    """Snapshot of an *open* position, never a command or a live-zone reconstruction."""
+    adapter = runtime.adapter
+    try:
+        runtime.gateway._assert_account(adapter)
+        matches = [p for p in adapter.positions() if p.ticket == ticket]
+        runtime.gateway._assert_account(adapter)
+    except Exception as exc:  # noqa: BLE001
+        raise HTTPException(status_code=503, detail="broker position evidence unavailable") from exc
+    if len(matches) > 1:
+        raise HTTPException(status_code=409, detail="ambiguous broker ticket; reconciliation required")
+    if not matches or matches[0].broker_id != adapter.id:
+        raise HTTPException(status_code=404, detail="open position not found")
+    position = matches[0]
+    # Same identity/link rules as a closed trade; this proxy has only read-only fields.
+    from types import SimpleNamespace
+
+    entry = _original_snapshot_for_trade(runtime, SimpleNamespace(
+        broker_id=adapter.id, symbol=position.symbol, ticket=ticket, signal_id=position.signal_id))
+    return {"position": position.model_dump(), "original_plan_snapshot": entry,
+            **_account_scoped_evidence(runtime, ticket, adapter.id, position.symbol),
+            "disclaimer": "เส้นจากบันทึกก่อนส่งออเดอร์เท่านั้น; สถานะโบรกเกอร์อาจเปลี่ยนหลังการอ่าน"}
 
 
 @router.get("/deals")

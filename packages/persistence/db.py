@@ -45,6 +45,35 @@ CREATE TABLE IF NOT EXISTS orders (
     state TEXT, broker_id TEXT, symbol TEXT, payload TEXT
 );
 
+-- Written in the SAME transaction as an order's pending idempotency claim.
+-- Never updated or replaced: later fills/plan revisions must not rewrite intent.
+CREATE TABLE IF NOT EXISTS pre_order_snapshots (
+    order_id TEXT PRIMARY KEY, broker_id TEXT NOT NULL, signal_id TEXT,
+    symbol TEXT NOT NULL, captured_at REAL NOT NULL, payload TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_pre_order_signal
+    ON pre_order_snapshots(broker_id, signal_id);
+
+-- Post-order actions are new evidence, never modifications of the original plan.
+CREATE TABLE IF NOT EXISTS position_events (
+    event_id TEXT PRIMARY KEY, order_id TEXT, broker_id TEXT NOT NULL,
+    ticket TEXT NOT NULL, actor TEXT NOT NULL, kind TEXT NOT NULL,
+    status TEXT NOT NULL, created_at REAL NOT NULL, payload TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_position_events_ticket
+    ON position_events(broker_id, ticket, created_at);
+
+-- Closed M5 bars observed while a broker position is open. The stored source
+-- distinguishes an analytical live/replay observation from broker tick proof.
+CREATE TABLE IF NOT EXISTS position_candles (
+    broker_id TEXT NOT NULL, ticket TEXT NOT NULL, timeframe TEXT NOT NULL,
+    t INTEGER NOT NULL, symbol TEXT NOT NULL, captured_at REAL NOT NULL,
+    payload TEXT NOT NULL,
+    PRIMARY KEY (broker_id, ticket, timeframe, t)
+);
+CREATE INDEX IF NOT EXISTS idx_position_candles_ticket
+    ON position_candles(broker_id, ticket, t);
+
 CREATE TABLE IF NOT EXISTS trades (
     ticket TEXT PRIMARY KEY, opened_at INTEGER, closed_at INTEGER,
     symbol TEXT, direction TEXT, volume REAL, entry REAL, exit REAL,
@@ -252,11 +281,52 @@ class Database:
                         # another worker added it between the PRAGMA and the ALTER
                         if "duplicate column" not in str(exc).lower():
                             raise
+
+
+        # Initialize the default tenant for existing installations.
         self._conn.execute(
             "INSERT OR IGNORE INTO tenants(id, name, status, created_at) VALUES(?,?,?,?)",
             ("default", "Default", "active", time.time()),
         )
-        self._conn.execute("UPDATE users SET tenant_id = 'default' WHERE tenant_id IS NULL OR tenant_id = ''")
+        self._conn.execute(
+            "UPDATE users SET tenant_id = 'default' "
+            "WHERE tenant_id IS NULL OR tenant_id = ''"
+        )
+
+        # Protect immutable pre-order evidence.
+        self._conn.execute("""
+            CREATE TRIGGER IF NOT EXISTS pre_order_snapshot_no_update
+            BEFORE UPDATE ON pre_order_snapshots
+            BEGIN
+                SELECT RAISE(ABORT, 'pre-order evidence is immutable');
+            END
+        """)
+
+        self._conn.execute("""
+            CREATE TRIGGER IF NOT EXISTS pre_order_snapshot_no_delete
+            BEFORE DELETE ON pre_order_snapshots
+            BEGIN
+                SELECT RAISE(ABORT, 'pre-order evidence is immutable');
+            END
+        """)
+
+        # Protect immutable position events and candle evidence.
+        for operation in ("UPDATE", "DELETE"):
+            self._conn.execute(f"""
+                CREATE TRIGGER IF NOT EXISTS position_events_no_{operation.lower()}
+                BEFORE {operation} ON position_events
+                BEGIN
+                    SELECT RAISE(ABORT, 'position evidence is immutable');
+                END
+            """)
+
+            self._conn.execute(f"""
+                CREATE TRIGGER IF NOT EXISTS position_candles_no_{operation.lower()}
+                BEFORE {operation} ON position_candles
+                BEGIN
+                    SELECT RAISE(ABORT, 'position candle evidence is immutable');
+                END
+            """)
 
     # ------------------------------------------------------------------ core
     @contextmanager

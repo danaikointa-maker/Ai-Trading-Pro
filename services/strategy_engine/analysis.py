@@ -25,6 +25,9 @@ from packages.shared_schemas.models import (
 )
 from packages.shared_schemas.settings import Settings
 from packages.strategy_rules import regime as regime_mod
+from packages.strategy_rules.flip_readings import confirmed_flip_readings
+from packages.strategy_rules.retracement import confirmed_fibonacci_band
+from packages.strategy_rules.stochastic_readings import three_tf_stochastic
 from packages.strategy_rules.trend import alignment_score, read_trend
 from packages.strategy_rules.zones import ZoneEngineConfig, build_zones
 from services.market_data.service import MarketDataService
@@ -54,6 +57,29 @@ class AnalysisContext:
     bias_confidence: float = 0.0
     alignment: float = 0.0
     alignment_notes: list[str] = field(default_factory=list)
+
+
+def decision_candles(frame: pd.DataFrame, *, as_of: int, limit: int = 180,
+                     timeframe_seconds: int = 300) -> list[dict[str, float | int]]:
+    """Freeze only bars whose close is at/before the original decision clock.
+
+    Never fetch current broker history during historical review: chart bars
+    must come from this archived decision-time slice, or remain unavailable.
+    """
+    columns = ("t", "o", "h", "l", "c", "v")
+    if any(column not in frame.columns for column in columns):
+        return []
+    complete = frame.loc[frame["t"] + timeframe_seconds <= as_of, list(columns)]
+    complete = complete.sort_values("t").drop_duplicates("t").tail(max(1, min(500, limit)))
+    result: list[dict[str, float | int]] = []
+    for _, row in complete.iterrows():
+        values = [float(row[k]) for k in columns[1:]]
+        if (not np.isfinite(values).all() or values[1] < values[2]
+                or not values[2] <= values[0] <= values[1]
+                or not values[2] <= values[3] <= values[1]):
+            return []  # invalid historical evidence must never be "repaired" for display
+        result.append({"t": int(row["t"]), **dict(zip(columns[1:], values))})
+    return result
 
 
 class AnalysisService:
@@ -103,6 +129,11 @@ class AnalysisService:
         base = frames[self.base_timeframe]
         swings = find_swings(base)
         events = detect_events(base, swings)
+        # Visual evidence only. The strategy/risk/order gates do not consume this.
+        sr_flips = confirmed_flip_readings(base, swings, spec.point)
+        fibonacci_band = confirmed_fibonacci_band(base, swings, spec.digits)
+        # Three-timeframe momentum is observable but not an execution gate yet.
+        stochastic = three_tf_stochastic(frames, int(base["t"].iloc[-1]))
         bias, bias_conf = structure_bias(swings, events)
         htf_bias = next((t for t in trends if t.timeframe == "H1"), trends[-1])
         align, align_notes = alignment_score(trends, bias if bias != Direction.sideways else htf_bias.direction)
@@ -156,7 +187,9 @@ class AnalysisService:
         snapshot = AnalysisSnapshot(
             symbol=symbol, timeframe=self.base_timeframe, broker_id=broker_id,
             price=round(price, spec.digits), server_time=int(base["t"].iloc[-1]), spec=spec,
-            trend=trends, structure=events[-12:], swings=to_swing_points(swings), zones=zones,
+            trend=trends, structure=events[-12:], swings=to_swing_points(swings),
+            sr_flips=sr_flips, fibonacci_band=fibonacci_band, stochastic=stochastic,
+            zones=zones,
             supports=supports, resistances=resistances, regime=regime, indicators=indicators,
             pivots=pivots, session_high=round(session_high, spec.digits),
             session_low=round(session_low, spec.digits), news_lockout=news_lock,

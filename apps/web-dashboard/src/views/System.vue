@@ -153,6 +153,92 @@
         </dl>
       </section>
 
+      <section class="panel lg:col-span-2">
+        <div class="panel-head">
+          <div class="panel-title">ทำไมถึงไม่เทรด (Decision attribution)</div>
+          <span class="chip" :class="attributionTone">{{ attributionChip }}</span>
+          <div class="ml-auto flex items-center gap-1">
+            <button
+              v-for="w in WINDOWS" :key="w.seconds"
+              class="rounded px-1.5 py-0.5 text-[10px] transition"
+              :class="w.seconds === windowSeconds
+                ? 'bg-accent/20 font-semibold text-accent'
+                : 'text-muted hover:text-slate-200'"
+              @click="setWindow(w.seconds)"
+            >{{ w.label }}</button>
+            <button class="btn py-1 text-[10.5px]" :disabled="resetting" @click="resetAttribution">
+              เริ่มนับใหม่
+            </button>
+          </div>
+        </div>
+        <div class="px-4 py-3">
+          <p class="text-[11px] text-slate-200">{{ attribution?.headline || 'ยังไม่มีการตัดสินใจในหน้าต่างนี้' }}</p>
+          <p class="mt-1 text-[10px] text-muted">
+            <template v-if="attribution?.basis === 'rolling'">
+              {{ fmt((attribution?.window_seconds || 0) / 60, 0) }} นาทีล่าสุด
+              (ตั้งแต่ {{ datetime(attribution?.window_since) }}) ·
+              ทั้งเซสชัน {{ sessionDecisions }} การตัดสินใจ ตั้งแต่ {{ datetime(attribution?.since) }}
+            </template>
+            <template v-else>
+              ทั้งเซสชันตั้งแต่ {{ datetime(attribution?.since) }}
+              ({{ fmt((attribution?.window_seconds || 0) / 60, 0) }} นาที)
+            </template>
+            · {{ (attribution?.symbols || []).join(', ') || '—' }}
+          </p>
+          <p v-if="idleNote" class="mt-1 text-[10px] text-amber-300">{{ idleNote }}</p>
+
+          <div class="mt-3 grid gap-3 md:grid-cols-2">
+            <div>
+              <div class="mb-1 flex items-baseline justify-between">
+                <span class="text-[10.5px] font-semibold text-slate-200">สัญญาณที่ไม่ผ่าน</span>
+                <span class="num text-[10px] text-muted">
+                  {{ signalPart.blocked }} / {{ signalPart.decisions }} ครั้ง
+                </span>
+              </div>
+              <div v-if="!signalPart.primary.length" class="text-[10.5px] text-muted">ยังไม่มีข้อมูล</div>
+              <div v-for="row in signalPart.primary" :key="row.code" class="mb-1.5">
+                <div class="flex items-baseline justify-between gap-2">
+                  <span class="truncate text-[10.5px] text-slate-200" :title="row.samples.join(' · ')">{{ row.label }}</span>
+                  <span class="num shrink-0 text-[10px] text-muted">{{ row.count }} · {{ row.pct }}%</span>
+                </div>
+                <div class="mt-0.5 h-1 rounded bg-slate-800">
+                  <div class="h-1 rounded bg-amber-400/80" :style="{ width: `${Math.min(100, row.pct)}%` }"></div>
+                </div>
+              </div>
+            </div>
+
+            <div>
+              <div class="mb-1 flex items-baseline justify-between">
+                <span class="text-[10.5px] font-semibold text-slate-200">Risk gate ปัดสัญญาณที่พร้อมเทรด</span>
+                <span class="num text-[10px] text-muted">
+                  {{ gatePart.blocked }} / {{ gatePart.evaluated }} ครั้ง
+                </span>
+              </div>
+              <div v-if="!gatePart.primary.length" class="text-[10.5px] text-muted">
+                ไม่มีสัญญาณไหนถูก gate ปัดในหน้าต่างนี้
+              </div>
+              <div v-for="row in gatePart.primary" :key="row.code" class="mb-1.5">
+                <div class="flex items-baseline justify-between gap-2">
+                  <span class="truncate text-[10.5px] text-slate-200" :title="row.samples.join(' · ')">{{ row.label }}</span>
+                  <span class="num shrink-0 text-[10px] text-muted">{{ row.count }} · {{ row.pct }}%</span>
+                </div>
+                <div class="mt-0.5 h-1 rounded bg-slate-800">
+                  <div class="h-1 rounded bg-rose-400/80" :style="{ width: `${Math.min(100, row.pct)}%` }"></div>
+                </div>
+              </div>
+            </div>
+          </div>
+
+          <p v-if="attribution?.overall?.warning" class="mt-2 text-[10px] text-amber-300">
+            {{ attribution.overall.warning }}
+          </p>
+          <p class="mt-2 text-[9.5px] text-muted">
+            primary = เหตุผลที่ผูกมัดที่สุดต่อหนึ่งการตัดสินใจ (รวมกันได้เท่าจำนวนที่ถูกบล็อก) ·
+            ชี้ที่ชื่อเหตุผลเพื่อดูตัวอย่างข้อความจริง
+          </p>
+        </div>
+      </section>
+
       <section class="panel">
         <div class="panel-head"><div class="panel-title">Model registry</div><span class="chip">{{ models.length }} versions</span></div>
         <div class="max-h-[260px] overflow-auto">
@@ -505,6 +591,46 @@ const notifyTone = computed(() => {
   if (state_ === 'failing') return 'chip-down'
   return state_ === 'external' ? 'chip-up' : 'chip-warn'
 })
+const attribution = ref(null)
+const resetting = ref(false)
+// Cumulative-since-boot was the only view on offer, which answers "what has
+// stopped this engine on average since Tuesday" — never "why is it quiet now".
+const WINDOWS = [
+  { label: '15น', seconds: 900 },
+  { label: '1ชม', seconds: 3600 },
+  { label: '6ชม', seconds: 21600 },
+  { label: 'ทั้งหมด', seconds: 0 },
+]
+const windowSeconds = ref(3600)
+const sessionDecisions = computed(() => attribution.value?.session?.signal?.decisions ?? 0)
+// An empty table because nothing was decided is a different fact from an empty
+// table because everything passed; the panel must never let them look alike.
+const idleNote = computed(() => {
+  const a = attribution.value
+  if (!a || a.basis !== 'rolling' || a.overall?.signal?.decisions) return ''
+  if (!a.idle_seconds) return ''
+  return `เงียบ: ไม่มีการตัดสินใจในหน้าต่างนี้ ล่าสุดเมื่อ ${fmt(a.idle_seconds / 60, 0)} นาทีก่อน`
+    + ` — ลองขยายหน้าต่างเพื่อดูว่าติดอะไรอยู่`
+})
+const EMPTY_SIGNAL = { decisions: 0, actionable: 0, blocked: 0, primary: [], fired: [] }
+const EMPTY_GATE = { evaluated: 0, allowed: 0, blocked: 0, primary: [], fired: [] }
+const signalPart = computed(() => attribution.value?.overall?.signal || EMPTY_SIGNAL)
+const gatePart = computed(() => attribution.value?.overall?.gate || EMPTY_GATE)
+// A quiet terminal has two very different causes: nothing qualified, or one
+// rule rejected everything. The chip says which, without opening the panel.
+const attributionChip = computed(() => {
+  const s = signalPart.value
+  if (!s.decisions) return 'ยังไม่มีข้อมูล'
+  if (s.actionable) return `${s.actionable}/${s.decisions} พร้อมเทรด`
+  const top = s.primary[0]
+  return top ? `0 พร้อมเทรด · ${top.label}` : `0/${s.decisions} พร้อมเทรด`
+})
+const attributionTone = computed(() => {
+  const s = signalPart.value
+  if (!s.decisions) return 'chip-warn'
+  return s.actionable ? 'chip-up' : 'chip-warn'
+})
+
 const errors = ref([])
 const models = ref([])
 const config = ref(null)
@@ -649,6 +775,35 @@ async function removeUser(user) {
   }
 }
 
+async function setWindow(seconds) {
+  windowSeconds.value = seconds
+  await loadAttribution()
+}
+
+async function loadAttribution() {
+  try {
+    attribution.value = await api.get(`/api/system/attribution?window=${windowSeconds.value}`)
+  } catch {
+    attribution.value = null  // older server without attribution: panel stays empty
+  }
+}
+
+async function resetAttribution() {
+  if (resetting.value) return
+  resetting.value = true
+  try {
+    await api.post('/api/system/attribution/reset')
+    // Re-read rather than trusting the POST body: it answers for the default
+    // window and the operator may be looking at a different one.
+    await loadAttribution()
+    toast('เริ่มนับเหตุผลใหม่แล้ว', 'success')
+  } catch (err) {
+    toast(err.message, 'error')
+  } finally {
+    resetting.value = false
+  }
+}
+
 async function load() {
   if (isPlatformSuperAdmin.value) {
     await loadTenants()
@@ -673,6 +828,7 @@ async function load() {
   } catch {
     bridge.value = null   // older server without the bridge: the card simply hides
   }
+  await loadAttribution()
   await loadUsers()
   await loadTeams()
 }

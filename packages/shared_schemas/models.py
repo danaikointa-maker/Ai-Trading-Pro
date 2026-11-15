@@ -47,6 +47,15 @@ class SignalStatus(str, Enum):
     no_trade = "no_trade"
 
 
+class SignalReadiness(str, Enum):
+    """Explanatory state after a decision and its independent risk gate."""
+    scanning = "SCANNING"
+    wait = "WAIT"
+    ready = "READY"
+    blocked = "BLOCKED"
+    expired = "EXPIRED"
+
+
 class TradeMode(str, Enum):
     manual = "manual"
     semi_auto = "semi_auto"
@@ -285,6 +294,41 @@ class StructureEvent(BaseModel):
     note: str = ""
 
 
+class SRFlipReading(BaseModel):
+    """Read-only, closed-bar break/retest evidence for a historical swing level."""
+    level: float
+    direction: Literal["support_to_resistance", "resistance_to_support"]
+    source_swing_t: int
+    break_t: int
+    retest_t: int
+    confirmed_t: int
+    timeframe: str = "M5"
+
+
+class FibonacciBand(BaseModel):
+    """Latest confirmed swing-to-swing retracement, for chart annotation."""
+    direction: Literal["up", "down"]
+    anchor_start_t: int
+    anchor_end_t: int
+    anchor_start_price: float
+    anchor_end_price: float
+    confirmed_t: int
+    level_50: float
+    level_618: float
+    timeframe: str = "M5"
+
+
+class StochasticReading(BaseModel):
+    """Closed-bar momentum evidence; not an execution gate in this stage."""
+    timeframe: str
+    k: float | None = None
+    d: float | None = None
+    direction: Literal["bullish", "bearish", "neutral", "unavailable"] = "unavailable"
+    source_t: int = 0
+    fresh: bool = False
+    reason: str = ""
+
+
 class TrendReading(BaseModel):
     timeframe: str
     direction: Direction
@@ -364,6 +408,9 @@ class AnalysisSnapshot(BaseModel):
     trend: list[TrendReading] = Field(default_factory=list)
     structure: list[StructureEvent] = Field(default_factory=list)
     swings: list[SwingPoint] = Field(default_factory=list)
+    sr_flips: list[SRFlipReading] = Field(default_factory=list)
+    fibonacci_band: FibonacciBand | None = None
+    stochastic: list[StochasticReading] = Field(default_factory=list)
     zones: list[Zone] = Field(default_factory=list)
     supports: list[Zone] = Field(default_factory=list)
     resistances: list[Zone] = Field(default_factory=list)
@@ -483,12 +530,19 @@ class Signal(BaseModel):
     broker_id: str
     action: SignalAction
     status: SignalStatus
+    # Observability only. Order authorization still depends on action + RiskGate.
+    readiness: SignalReadiness | None = None
+    readiness_reason: str = ""
     score: float
     strategy: str
     regime: str
     components: list[ScoreComponent] = Field(default_factory=list)
     reasons: list[str] = Field(default_factory=list)
     blockers: list[str] = Field(default_factory=list)
+    # Stable identifiers for `blockers`, same order. `blockers` is prose with live
+    # numbers in it; counting prose produces one bucket per decision, so the
+    # attribution report counts these instead.
+    blocker_codes: list[str] = Field(default_factory=list)
     plan: TradePlan | None = None
     forecast: HorizonForecast | None = None
     zones_used: list[str] = Field(default_factory=list)
@@ -550,6 +604,16 @@ class RiskState(BaseModel):
     open_lots: float
     exposure_pct: float
     consecutive_losses: int
+    # What the streak actually cost and how long it took. Three scratch losses in
+    # ten minutes and three full-risk losses over two days both read as "3"
+    # without these, and they call for very different responses.
+    streak_loss: float = 0.0
+    streak_since: float | None = None
+    # Releases are the one way to overrule the hard stop, so they are counted and
+    # attributed. A system released four times in a day is not being protected.
+    streak_releases_today: int = 0
+    last_release_at: float | None = None
+    last_release_by: str = ""
     trades_today: int
     trades_this_week: int
     cooldown_until: int | None = None

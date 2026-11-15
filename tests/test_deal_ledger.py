@@ -105,3 +105,20 @@ def test_order_evidence_aggregates_partial_fills_without_resolving_claim(ledger)
     assert service.order_evidence("demo", "Demo-Server:123", "order-1", "XAUUSD", "buy", 0.2)["status"] == "partial"
     assert service.order_evidence("demo", "Demo-Server:123", "order-1", "EURUSD", "buy", 0.1)["status"] == "mismatch"
     assert db.query("SELECT * FROM orders") == []
+
+
+@pytest.mark.parametrize("entry", ["out", "out_by", "inout"])
+def test_close_and_netting_reversal_cannot_inflate_open_order_fill(ledger, entry):
+    service, _ = ledger
+    service.ingest("demo", "Demo-Server:123", [
+        deal("1", order_id="broker-order", volume=0.04),
+        deal("2", order_id="broker-order", entry=entry, side="sell", volume=0.06,
+             price=2010, profit=12),
+    ])
+    result = service.order_evidence("demo", "Demo-Server:123", "broker-order",
+                                    "XAUUSD", "buy", 0.1)
+    assert result["status"] == "ambiguous_non_opening_deal"
+    assert result["volume"] == pytest.approx(0.04)
+    assert result["deal_ids"] == ["1"]
+    assert result["ignored_non_opening_ids"] == ["2"]
+    assert result["auto_resolved"] is False

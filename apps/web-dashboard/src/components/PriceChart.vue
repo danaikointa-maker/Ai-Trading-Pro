@@ -1,12 +1,23 @@
 <template>
   <div class="relative">
+    <div class="flex flex-wrap items-center gap-1.5 border-b border-ink-700/60 px-2 py-2" aria-label="ชั้นข้อมูลบนกราฟ">
+      <span class="mr-1 text-[10px] text-muted">แสดงเส้น:</span>
+      <button v-for="item in layerChoices" :key="item.key" type="button"
+              class="rounded border px-2 py-1 text-[10px] transition-colors"
+              :class="layerVisibility[item.key] ? 'border-gold/50 bg-gold/10 text-gold' : 'border-ink-700 text-muted'"
+              :aria-pressed="layerVisibility[item.key]" :title="'เปิด/ปิดเฉพาะการแสดงผล ' + item.label"
+              @click="layerVisibility[item.key] = !layerVisibility[item.key]">
+        {{ item.label }} {{ layerVisibility[item.key] ? '✓' : '○' }}
+      </button>
+      <span class="text-[9.5px] text-muted">ไม่กระทบระบบเทรด</span>
+    </div>
     <div ref="container" class="h-[380px] w-full sm:h-[440px]"></div>
-    <div class="pointer-events-none absolute left-3 top-3 flex flex-wrap items-center gap-1.5">
+    <div class="pointer-events-none absolute left-3 top-12 flex flex-wrap items-center gap-1.5">
       <span class="chip chip-gold">{{ state.symbol }} · {{ state.timeframe }}</span>
       <span class="chip" :class="feedWarn ? 'chip-warn' : ''" :title="feedTitle">{{ feedLabel }}</span>
       <span v-if="state.live?.analysis?.regime" class="chip">{{ state.live.analysis.regime.regime.replace('_',' ') }}</span>
     </div>
-    <div v-if="loading" class="absolute inset-0 grid place-items-center bg-ink-900/40 text-[12px] text-muted">loading chart…</div>
+    <div v-if="loading" class="absolute inset-x-0 bottom-0 top-10 grid place-items-center bg-ink-900/40 text-[12px] text-muted">loading chart…</div>
     <!-- Never fail silently: a blank panel tells nobody anything. -->
     <div v-else-if="error" class="absolute inset-0 grid place-items-center px-6 text-center">
       <div>
@@ -29,7 +40,7 @@
 </template>
 
 <script setup>
-import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
+import { computed, onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue'
 import { createChart } from 'lightweight-charts'
 import { api } from '../lib/api'
 import { positions, state } from '../lib/store'
@@ -47,6 +58,36 @@ let ema200 = null
 let priceLines = []
 let lastCandle = null
 let resizeObs = null
+
+// UI preferences only: never write these switches into state.live or send an
+// API request. Engine, risk controls and persisted trade decisions are unchanged.
+const LAYERS_KEY = 'no7.chart.layers.v1'
+const layerChoices = [
+  { key: 'ema', label: 'EMA' },
+  { key: 'sr', label: 'S/R' },
+  { key: 'flip', label: 'SR Flip' },
+  { key: 'fib', label: 'Fib 50–61.8' },
+  { key: 'structure', label: 'BOS/CHoCH' },
+  { key: 'plan', label: 'Entry/SL/TP' },
+  { key: 'positions', label: 'ไม้เปิด' },
+]
+const layerVisibility = reactive({ ema: true, sr: true, flip: true, fib: true, structure: false, plan: true, positions: true })
+try {
+  const saved = JSON.parse(window.localStorage.getItem(LAYERS_KEY) || '{}')
+  for (const { key } of layerChoices) {
+    if (typeof saved[key] === 'boolean') layerVisibility[key] = saved[key]
+  }
+} catch { /* Private mode or invalid preferences: defaults remain safe. */ }
+
+function syncSeriesVisibility() {
+  for (const series of [ema20, ema50, ema200]) series?.applyOptions({ visible: layerVisibility.ema })
+}
+
+watch(layerVisibility, () => {
+  syncSeriesVisibility()
+  drawOverlays()
+  try { window.localStorage.setItem(LAYERS_KEY, JSON.stringify(layerVisibility)) } catch { /* noop */ }
+})
 
 function ema(values, period) {
   const k = 2 / (period + 1)
@@ -103,6 +144,7 @@ function buildChart() {
   ema20 = line('rgba(245,181,65,0.85)', 1)
   ema50 = line('rgba(96,165,250,0.8)', 1)
   ema200 = line('rgba(167,139,250,0.8)', 1)
+  syncSeriesVisibility()
   resizeObs = new ResizeObserver(() => {
     if (!chart || !container.value) return
     const { clientWidth, clientHeight } = container.value
@@ -199,14 +241,14 @@ function drawOverlays() {
   const signal = state.live?.signal
   const analysis = state.live?.analysis
   const plan = signal?.plan
-  if (plan && ['BUY', 'SELL', 'WAIT'].includes(signal.action)) {
+  if (layerVisibility.plan && plan && ['BUY', 'SELL', 'WAIT'].includes(signal.action)) {
     addLine(plan.entry, 'rgba(245,181,65,0.9)', 'entry', 0, 2)
     addLine(plan.sl, 'rgba(248,113,113,0.9)', 'SL', 2, 1)
     addLine(plan.tp1, 'rgba(52,211,153,0.7)', 'TP1', 2, 1)
     addLine(plan.tp2, 'rgba(52,211,153,0.55)', 'TP2', 2, 1)
     addLine(plan.tp3, 'rgba(52,211,153,0.4)', 'TP3', 2, 1)
   }
-  if (analysis) {
+  if (layerVisibility.sr && analysis) {
     ;(analysis.resistances || []).slice(0, 2).forEach((z) =>
       addLine(z.mid, 'rgba(248,113,113,0.35)', `R ${z.quality[0].toUpperCase()}`, 3),
     )
@@ -214,11 +256,30 @@ function drawOverlays() {
       addLine(z.mid, 'rgba(52,211,153,0.35)', `S ${z.quality[0].toUpperCase()}`, 3),
     )
   }
-  positions.value.forEach((p) => {
-    addLine(p.entry, 'rgba(96,165,250,0.8)', `#${p.ticket}`, 1, 1)
-    addLine(p.sl, 'rgba(248,113,113,0.6)', 'pos SL', 1, 1)
-    addLine(p.tp, 'rgba(52,211,153,0.6)', 'pos TP', 1, 1)
-  })
+  if (layerVisibility.flip) {
+    ;(analysis?.sr_flips || []).slice(0, 4).forEach((event) => {
+      const rising = event.direction === 'resistance_to_support'
+      addLine(event.level, rising ? 'rgba(52,211,153,0.75)' : 'rgba(248,113,113,0.75)',
+        rising ? 'Flip R→S' : 'Flip S→R', 2, 2)
+    })
+  }
+  if (layerVisibility.fib && analysis?.fibonacci_band) {
+    const fib = analysis.fibonacci_band
+    addLine(fib.level_50, 'rgba(245,181,65,0.65)', 'Fib 50%', 3)
+    addLine(fib.level_618, 'rgba(245,181,65,0.85)', 'Fib 61.8%', 3, 2)
+  }
+  if (layerVisibility.structure) {
+    ;(analysis?.structure || []).filter((event) => event.confirmed).slice(-3).forEach((event) =>
+      addLine(event.level, 'rgba(167,139,250,0.65)', event.kind, 3),
+    )
+  }
+  if (layerVisibility.positions) {
+    positions.value.forEach((p) => {
+      addLine(p.entry, 'rgba(96,165,250,0.8)', `#${p.ticket}`, 1, 1)
+      addLine(p.sl, 'rgba(248,113,113,0.6)', 'pos SL', 1, 1)
+      addLine(p.tp, 'rgba(52,211,153,0.6)', 'pos TP', 1, 1)
+    })
+  }
 }
 
 function updateLast() {

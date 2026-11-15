@@ -9,7 +9,7 @@ import numpy as np
 import pandas as pd
 
 __all__ = [
-    "sma", "ema", "rsi", "atr", "adx", "macd", "bollinger", "vwap_session",
+    "sma", "ema", "rsi", "atr", "adx", "macd", "stochastic", "bollinger", "vwap_session",
     "volume_profile", "pivot_points", "stdev", "percentile_rank", "zscore",
     "crossover", "slope",
 ]
@@ -47,6 +47,28 @@ def rsi(close, period: int = 14) -> np.ndarray:
     out = out.where(avg_loss != 0, 100.0)
     out = out.where(~((avg_loss == 0) & (avg_gain == 0)), 50.0)
     return out.to_numpy()
+
+
+def stochastic(high, low, close, period: int = 14,
+               smooth_k: int = 3, smooth_d: int = 3) -> tuple[np.ndarray, np.ndarray]:
+    """Stochastic K/D (14,3,3); no centered windows or future candle access.
+
+    The flat-price 0/0 case is neutral (50) rather than falsely overbought.
+    Incomplete warmup bars remain NaN so callers cannot treat them as signals.
+    """
+    h, l, c = _series(high), _series(low), _series(close)
+    if not (len(h) == len(l) == len(c)):
+        raise ValueError("high, low, close lengths must match")
+    if min(period, smooth_k, smooth_d) < 1:
+        raise ValueError("stochastic periods must be positive")
+    high_max = pd.Series(h).rolling(period, min_periods=period).max()
+    low_min = pd.Series(l).rolling(period, min_periods=period).min()
+    span = high_max - low_min
+    raw_k = 100.0 * (pd.Series(c) - low_min) / span.replace(0, np.nan)
+    raw_k = raw_k.where(span != 0, 50.0).clip(0, 100)
+    k = raw_k.rolling(smooth_k, min_periods=smooth_k).mean()
+    d = k.rolling(smooth_d, min_periods=smooth_d).mean()
+    return k.to_numpy(), d.to_numpy()
 
 
 def true_range(high, low, close) -> np.ndarray:

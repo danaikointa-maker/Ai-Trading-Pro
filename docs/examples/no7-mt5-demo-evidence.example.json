@@ -1,0 +1,14 @@
+{
+  "account_type": "demo",
+  "broker_id": "REPLACE_WITH_ACTUAL_DEMO_BROKER_ID",
+  "forward_days": 0,
+  "closed_trades": 0,
+  "account_identity_verified": false,
+  "all_fills_verified": false,
+  "partial_fills_reconciled": false,
+  "restarts_reconciled": false,
+  "disconnects_reconciled": false,
+  "manual_changes_reconciled": false,
+  "unresolved_orders": null,
+  "evidence_note": "Attach real broker logs/deal IDs before setting acceptance flags."
+}

@@ -36,6 +36,7 @@ from packages.shared_schemas.models import (
     Position,
     Signal,
     SignalAction,
+    SignalReadiness,
     SignalStatus,
     Tick,
     TradeMode,
@@ -55,8 +56,18 @@ from services.notification.notifier import Notifier
 from services.risk_engine.engine import RiskEngine, default_risk_state
 from services.risk_engine.manager import PositionAction, PositionManager
 from services.risk_engine.planner import PlanInputs, TradePlanner
-from services.strategy_engine.analysis import AnalysisContext, AnalysisService
+from services.strategy_engine.analysis import AnalysisContext, AnalysisService, decision_candles
+from packages.persistence.position_candles import PositionCandleLog
+from services.strategy_engine.attribution import BlockerTally, RollingAttribution, merge
+
+# One hour of live decisions is the default view: long enough that a four-second
+# decision loop fills it with hundreds of samples, short enough that a condition
+# which started this morning cannot hide inside it.
+DEFAULT_ATTRIBUTION_WINDOW = 3600.0
 from services.strategy_engine.engine import StrategyEngine
+from services.strategy_engine.readiness import assess_readiness
+from services.strategy_engine.proposals import entry_proposals
+from services.strategy_engine.momentum_veto import preview_stochastic_veto
 
 def _truthy(value: Any) -> bool:
     return str(value or "").strip().lower() in ("1", "true", "yes", "on")
@@ -241,7 +252,19 @@ class TradingRuntime:
         self.signals: dict[str, Signal] = {}
         self.signal_log: deque[Signal] = deque(maxlen=400)
         self.plans: dict[str, Signal] = {}
+        self.proposals: dict[str, dict[str, Any]] = {}
+        # Decision-time analysis is pinned by signal ID. Later symbol scans
+        # must never substitute new zones for the original entry evidence.
+        self.plan_analyses: dict[str, dict[str, Any]] = {}
         self.gates: dict[str, dict[str, Any]] = {}
+        # Why the live engine is not trading, counted per symbol by reason code.
+        # The dashboard could already show the *last* decision; nobody could see
+        # that, say, 95% of today's decisions died on one condition. Kept in
+        # time buckets as well as a session total, because "why is it not
+        # trading now" and "what has been stopping it all week" are different
+        # questions and a single cumulative counter can only answer the second.
+        self.attribution: dict[str, RollingAttribution] = {}
+        self.attribution_since = time.time()
         self.positions_cache: list[Position] = []
         self._positions_identity: dict[str, str] | None = None
         self._positions_read_at = 0.0
@@ -272,6 +295,7 @@ class TradingRuntime:
         self._thread: threading.Thread | None = None
         self._decision_interval = float(self.settings.app.get("app", {}).get("decision_interval_seconds", 4))
         self._alert_dedupe: dict[str, int] = {}
+        self._last_readiness: dict[str, SignalReadiness] = {}
         self._last_persisted: dict[str, tuple[str, float]] = {}
         self._forecast_invalid: dict[str, bool] = {}
         self.active_symbol = self.settings.market_data.get("default_symbol", "XAUUSD")
@@ -513,11 +537,43 @@ class TradingRuntime:
                            symbol=trade.symbol, meta={"ticket": trade.ticket, "pnl": trade.pnl}, dedupe_seconds=0)
         with self.lock:
             self.version += 1
-        if trade.pnl < 0 and self.risk.state(self.adapter, now=self.market.now()).consecutive_losses >= \
-                self.risk.limits().max_consecutive_losses:
-            self.notifier.emit("critical", "Cooldown engaged",
-                               f"{self.risk.limits().max_consecutive_losses} consecutive losses — new entries paused "
-                               f"for {self.risk.limits().cooldown_minutes} minutes.", dedupe_seconds=0)
+        if trade.pnl < 0:
+            self._alert_losing_streak()
+
+    def _alert_losing_streak(self) -> None:
+        """Tell someone the moment trading stops, and tell them the truth.
+
+        This alert used to say "new entries paused for 20 minutes", which is what
+        the old cooldown did. Under the current rule nothing lifts the stop on a
+        timer: an operator who believes the message waits for a system that is
+        never coming back. The message now states the real release conditions and
+        what the streak cost.
+        """
+        try:
+            state = self.risk.state(self.adapter, now=self.market.now())
+        except Exception as exc:  # noqa: BLE001 - an alert must not break the close path
+            self._log_error("streak_alert", exc)
+            return
+        limit = self.risk.limits().max_consecutive_losses
+        if state.consecutive_losses < limit:
+            return
+        # One alert per streak, not one per losing trade that extends it.
+        key = f"loss-streak:{int(state.streak_since or 0)}"
+        if self._alert_dedupe.get(key):
+            return
+        self._alert_dedupe[key] = int(self.market.now())
+        releases = (f" This is after {state.streak_releases_today} release(s) today."
+                    if state.streak_releases_today else "")
+        self.notifier.emit(
+            "critical", f"Trading stopped — {state.consecutive_losses} consecutive losses",
+            (f"The streak cost {state.streak_loss:.2f} and the risk gate is now rejecting every "
+             f"signal, including hand-approved ones. Nothing lifts this on a timer: it clears "
+             f"when a winning trade is recorded, or when someone releases it on the Risk Engine "
+             f"card (audited).{releases}"),
+            meta={"consecutive_losses": state.consecutive_losses,
+                  "streak_loss": state.streak_loss,
+                  "releases_today": state.streak_releases_today},
+            dedupe_seconds=0)
 
     def _journal(self, trade: TradeRecord) -> None:
         """Deterministic, data-driven trade journal entry (no LLM required)."""
@@ -592,11 +648,47 @@ class TradingRuntime:
         gate = self.strategy.evaluate_gate(
             signal, spec, tick, risk_state, ctx.snapshot.data_quality, ctx.snapshot.news_lockout,
             health, self.predictor.approved, atr_pct)
+        # Count before the lines below rewrite the signal: once a gate rejection
+        # has turned a buy into a `wait` and merged the gate's prose into
+        # `signal.blockers`, the decision can no longer be told apart from one
+        # that never had a trade in it.
+        tradable = (signal.action in (SignalAction.buy, SignalAction.sell)
+                    and signal.plan is not None)
+        with self.lock:
+            tally = self.attribution.get(symbol)
+            if tally is None:
+                tally = self.attribution[symbol] = RollingAttribution()
+            tally.add_signal(tradable, signal.blocker_codes, signal.blockers, now=now)
+            # The gate is consulted on every live decision, but counting it on
+            # decisions that had nothing to trade anyway would bury the cases
+            # that matter. Only signals that asked to trade are counted, which
+            # is also the basis the backtest uses — so the two are comparable.
+            if tradable:
+                tally.add_gate(gate.allow, gate.checks, now=now)
+
         if not gate.allow:
             signal.blockers = list(dict.fromkeys(signal.blockers + gate.blockers))
             if signal.action in (SignalAction.buy, SignalAction.sell):
                 signal.action = SignalAction.wait
                 signal.status = SignalStatus.weak if signal.score >= 50 else SignalStatus.no_trade
+
+        # Explanatory lifecycle only. The executor still trusts solely the
+        # original action and independent risk gate; this field grants nothing.
+        readiness = assess_readiness(signal, gate_allow=gate.allow,
+                                     was_tradable=tradable, as_of=int(now))
+        signal.readiness = readiness.state
+        signal.readiness_reason = readiness.reason
+
+        # Advisory plans only. Failure to calculate alternative entries must
+        # never authorize, block or delay the existing order execution path.
+        try:
+            suggested = entry_proposals(signal, ctx.snapshot, self.planner,
+                                        self.risk.limits(), risk_state, equity,
+                                        float(tick.spread_points), gate_allow=gate.allow)
+        except Exception as exc:  # noqa: BLE001
+            self._log_error("entry_proposals", exc)
+            suggested = {"signal_id": signal.id, "proposals": [], "executable": False,
+                         "reasons": ["proposal calculation unavailable"]}
 
         with self.lock:
             self.contexts[symbol] = ctx
@@ -604,6 +696,14 @@ class TradingRuntime:
                 self.forecasts[symbol] = forecast
             self.signals[symbol] = signal
             self.plans[signal.id] = signal
+            self.proposals[symbol] = suggested
+            if signal.action in (SignalAction.buy, SignalAction.sell) and signal.plan:
+                analysis_at_decision = ctx.snapshot.model_dump(mode="json")
+                analysis_at_decision["decision_candles"] = decision_candles(
+                    ctx.frames["M5"], as_of=signal.t)
+                self.plan_analyses[signal.id] = analysis_at_decision
+                while len(self.plan_analyses) > 256:
+                    self.plan_analyses.pop(next(iter(self.plan_analyses)))
             self.gates[symbol] = {
                 "allow": gate.allow, "blockers": gate.blockers, "warnings": gate.warnings,
                 "checks": gate.checks, "t": now,
@@ -615,6 +715,101 @@ class TradingRuntime:
 
         if self.mode == TradeMode.full_auto and signal.action in (SignalAction.buy, SignalAction.sell):
             self.execute_signal(signal.id, actor="full-auto")
+
+        # Informational notifications run after the original decision and
+        # execution path, so they cannot delay an otherwise authorized order.
+        try:
+            self._maybe_alert_readiness(signal)
+        except Exception as exc:  # alerts must never alter trading decisions
+            self._log_error("readiness_alert", exc)
+
+    def attribution_summary(self, symbol: str | None = None,
+                            window_seconds: float = DEFAULT_ATTRIBUTION_WINDOW) -> dict[str, Any]:
+        """Why the live engine has or has not been trading, over a window.
+
+        Counted on live decisions only. A backtest answers the same question for
+        a historical sample; this answers it for the session that is running, so
+        an operator watching a quiet dashboard can tell "nothing qualifies" from
+        "one gate has been rejecting everything for an hour".
+
+        `window_seconds` is the rolling span the headline numbers describe, and
+        0 means the whole session. Both views ship in every response: the
+        session totals under `session` are never pruned, so narrowing the window
+        hides nothing — it only stops the last six hours from being averaged
+        into the last six days.
+        """
+        now = time.time()
+        with self.lock:
+            tallies = dict(self.attribution)
+            since = self.attribution_since
+        if symbol:
+            chosen = {symbol: tallies[symbol]} if symbol in tallies else {}
+        else:
+            chosen = tallies
+        requested = max(0.0, float(window_seconds or 0.0))
+        rolling = requested > 0
+
+        parts: dict[str, BlockerTally] = {}
+        starts: list[float] = []
+        last_seen: list[float] = []
+        for sym, roll in sorted(chosen.items()):
+            if rolling:
+                tally, covered_from = roll.window(requested, now=now)
+            else:
+                tally, covered_from = roll.total, (roll.first_at if roll.first_at else since)
+            parts[sym] = tally
+            starts.append(covered_from)
+            if roll.last_at:
+                last_seen.append(roll.last_at)
+
+        overall = merge(parts.values()) if parts else BlockerTally()
+        session = merge([r.total for r in chosen.values()]) if chosen else BlockerTally()
+        # The session view always spans the session; only a rolling view can be
+        # shorter than asked for, and only because the engine is younger.
+        window_since = (min(starts) if starts else now) if rolling else since
+        covered = round(max(0.0, now - window_since), 1)
+        last_at = max(last_seen) if last_seen else None
+        bucket = next(iter(chosen.values())).bucket_seconds if chosen else 300
+
+        return {
+            "basis": "rolling" if rolling else "session",
+            "requested_window_seconds": requested if rolling else None,
+            "window_since": window_since,
+            # What the numbers actually cover, which is never more than the
+            # engine has been awake — a window is not evidence of its own span.
+            "window_seconds": covered,
+            "bucket_seconds": bucket,
+            "since": since,
+            "session_seconds": round(max(0.0, now - since), 1),
+            "last_decision_at": last_at,
+            "idle_seconds": round(now - last_at, 1) if last_at else None,
+            "symbols": sorted(chosen),
+            "overall": overall.summary(),
+            "per_symbol": {sym: t.summary() for sym, t in parts.items()},
+            "session": session.summary(),
+            "headline": self._attribution_headline(overall, rolling, covered, last_at, now),
+        }
+
+    @staticmethod
+    def _attribution_headline(overall: BlockerTally, rolling: bool, covered: float,
+                              last_at: float | None, now: float) -> str:
+        """One sentence that states its own window, so a screenshot cannot lie."""
+        if not rolling:
+            return overall.note()
+        mins = max(1, int(round(covered / 60.0)))
+        if overall.decisions:
+            return f"Last {mins} min: {overall.note()}"
+        if last_at:
+            idle = max(1, int(round((now - last_at) / 60.0)))
+            return (f"No decisions in the last {mins} min — the last one was {idle} min ago. "
+                    f"Widen the window to see what was blocking them.")
+        return f"No decisions in the last {mins} min, and none recorded this session."
+
+    def reset_attribution(self) -> None:
+        """Start a fresh window — e.g. after changing a threshold."""
+        with self.lock:
+            self.attribution.clear()
+            self.attribution_since = time.time()
 
     def _persist_signal(self, signal: Signal, now: float) -> None:
         last = self._last_persisted.get(signal.symbol)
@@ -658,6 +853,52 @@ class TradingRuntime:
             elif not invalid:
                 self._forecast_invalid[signal.symbol] = False
 
+    def _maybe_alert_readiness(self, signal: Signal) -> None:
+        """Notify on readiness transitions, not on every four-second scan.
+
+        Existing BUY/SELL alerts handle READY. WAIT alerts only follow a prior
+        READY/BLOCKED state; initial idle scans produce no notification storm.
+        """
+        new = signal.readiness
+        if new is None:
+            return
+        previous = self._last_readiness.get(signal.symbol)
+        store = getattr(self, "db", None)
+        key = f"readiness-state:{signal.broker_id}:{signal.symbol}"
+        if previous is None and store is not None:
+            saved = store.kv_get(key, {}) or {}
+            # A several-day-old signal is not a meaningful transition after a
+            # restart. Retain only a recent session's alert deduplication state.
+            if time.time() - float(saved.get("recorded_at") or 0) <= 21600:
+                try:
+                    previous = SignalReadiness(saved["state"])
+                except (KeyError, ValueError, TypeError):
+                    previous = None
+        if previous == new:
+            self._last_readiness[signal.symbol] = new
+            return
+        self._last_readiness[signal.symbol] = new
+        if store is not None:
+            store.kv_set(key, {"state": new.value, "recorded_at": time.time(), "signal_id": signal.id})
+        if new == SignalReadiness.blocked:
+            self.notifier.emit(
+                "warning", f"Entry BLOCKED — {signal.symbol}",
+                signal.readiness_reason or "Risk Gate ไม่อนุญาตให้เปิดออเดอร์",
+                symbol=signal.symbol,
+                meta={"signal_id": signal.id, "readiness": new.value},
+                dedupe_seconds=300,
+            )
+        elif new in (SignalReadiness.wait, SignalReadiness.scanning) and previous in (
+            SignalReadiness.ready, SignalReadiness.blocked,
+        ):
+            self.notifier.emit(
+                "info", f"รอสัญญาณ — {signal.symbol}",
+                signal.readiness_reason or "ยังไม่ครบเงื่อนไขจุดเข้า",
+                symbol=signal.symbol,
+                meta={"signal_id": signal.id, "readiness": new.value},
+                dedupe_seconds=300,
+            )
+
     # --------------------------------------------------------- manage cycle
     def _manage_cycle(self, now: float) -> None:
         with self.lock:
@@ -685,7 +926,9 @@ class TradingRuntime:
                     return
                 # Keep the epoch check, local transaction and cache acceptance
                 # together; mutation entry must not slip between these steps.
-                self.gateway.open_position_snapshot(positions, broker_id=adapter.id)
+                observations = self.gateway.open_position_snapshot(
+                    positions, broker_id=adapter.id, account_identity=identity,
+                    retain_unverified=True)
                 self.positions_cache = positions
                 self._positions_identity = dict(identity)
                 self._positions_adapter = adapter
@@ -693,12 +936,51 @@ class TradingRuntime:
                 self._positions_available = True
                 plans = dict(self.plans)
                 ctx = self.contexts.get(self.active_symbol)
+                observed_contexts = dict(self.contexts)
                 forecast = self.cached_forecast(self.active_symbol)
+            if observations and hasattr(self, "notifier"):
+                try:
+                    restored = all(row["status"] == "baseline_restored" for row in observations)
+                    self.notifier.emit(
+                        "info" if restored else "warning",
+                        "Broker position baseline restored" if restored else
+                        "Broker position changes need review",
+                        ("Broker positions returned to the stored baseline. " if restored else
+                         "Broker position list differs from the locally verified baseline. ")
+                        + "The observations are archived; no fills or human attribution inferred.",
+                        meta={"broker_id": adapter.id,
+                              "event_ids": [row["event_id"] for row in observations],
+                              "transitions": observations},
+                        dedupe_seconds=0)
+                except Exception as exc:  # noqa: BLE001 - alert delivery must not change positions
+                    self._log_error("position_observation_alert", exc)
         except Exception as exc:  # noqa: BLE001
             with self.lock:
                 self._positions_available = False
             self._log_error("positions", exc)
             return
+        # Archive only recently observed, already-closed M5 bars for positions
+        # with an available *matching* analysed context, including non-active
+        # symbols. Never fetch a current chart to fill a missing past interval.
+        feed = getattr(getattr(self, "market", None), "feed_mode", None)
+        if not isinstance(feed, str) or not feed.strip():
+            feed = getattr(adapter, "adapter_type", "unknown")
+        if not isinstance(feed, str) or not feed.strip():
+            feed = "unknown"
+        log = PositionCandleLog(self.db)
+        for position in positions:
+            observation = observed_contexts.get(position.symbol)
+            if (observation is None or not getattr(observation, "frames", None)
+                    or "M5" not in observation.frames
+                    or observation.snapshot.broker_id != adapter.id
+                    or observation.snapshot.symbol != position.symbol):
+                continue
+            try:
+                bars = decision_candles(observation.frames["M5"], as_of=int(now), limit=5)
+                log.capture(position=position, account_identity=identity,
+                            bars=bars, market_time=int(now), feed_mode=feed)
+            except Exception as exc:  # noqa: BLE001 - chart archiving cannot block protective exits
+                self._log_error("post_entry_candle_archive", exc)
         atr_points = 0.0
         if ctx is not None:
             atr_points = ctx.snapshot.indicators.atr_points
@@ -796,6 +1078,12 @@ class TradingRuntime:
         )
         with self.lock:
             self.plans[sig_id] = signal
+            analysis_at_decision = ctx.snapshot.model_dump(mode="json")
+            analysis_at_decision["decision_candles"] = decision_candles(
+                ctx.frames["M5"], as_of=signal.t)
+            self.plan_analyses[sig_id] = analysis_at_decision
+            while len(self.plan_analyses) > 256:
+                self.plan_analyses.pop(next(iter(self.plan_analyses)))
             self.signal_log.append(signal)
         return signal, ""
 
@@ -865,8 +1153,25 @@ class TradingRuntime:
                 mode=self.mode,
                 broker_id=self.adapter.id,
             )
+            with self.lock:
+                original_analysis = self.plan_analyses.get(signal.id)
+            original_plan_snapshot = {
+                "signal": signal.model_dump(mode="json"),
+                "analysis": original_analysis,
+                "analysis_provenance": "decision_time" if original_analysis is not None else "unavailable",
+                "risk_decision": {
+                    "evaluated_at": int(now),
+                    "allow": gate.allow,
+                    "checks": getattr(gate, "checks", []),
+                    "warnings": getattr(gate, "warnings", []),
+                    "risk_state": (risk_state.model_dump(mode="json")
+                                   if callable(getattr(risk_state, "model_dump", None)) else None),
+                },
+            }
             with self._position_mutation():
-                result: OrderResult = self.gateway.submit(self.adapter, request, actor=actor)
+                result: OrderResult = self.gateway.submit(
+                    self.adapter, request, actor=actor,
+                    original_plan_snapshot=original_plan_snapshot)
         except BrokerError as exc:
             return {"ok": False, "error": str(exc)}
         if result.status == OrderState.filled:
@@ -1045,6 +1350,25 @@ class TradingRuntime:
     def _reconcile_cycle(self) -> None:
         try:
             self.last_reconcile = self.gateway.reconcile(self.adapter)
+            observed = self.last_reconcile.get("observations_added", 0)
+            if observed:
+                transitions = self.last_reconcile.get("observation_transitions", [])
+                restored = all(item.get("status") == "baseline_restored" for item in transitions)
+                issues = []
+                for field in ("missing_at_broker", "unknown_locally", "changed_at_broker"):
+                    if self.last_reconcile.get(field):
+                        issues.append(f"{field}: {', '.join(self.last_reconcile[field][:4])}")
+                self.notifier.emit(
+                    "info" if restored else "warning",
+                    "Broker position baseline restored" if restored else
+                    "Broker position reconciliation needs review",
+                    ("The previously observed position discrepancy returned to the stored baseline. "
+                     if restored else "A new broker position discrepancy was recorded. ")
+                    + "No close/fill or human attribution has been inferred. " + "; ".join(issues),
+                    meta={"broker_id": self.last_reconcile.get("broker_id"),
+                          "event_ids": self.last_reconcile["observation_events"],
+                          "transitions": transitions},
+                    dedupe_seconds=0)
         except Exception as exc:  # noqa: BLE001
             self._log_error("reconcile", exc)
 
@@ -1259,6 +1583,11 @@ class TradingRuntime:
             "ticker": quote.get("tick") if quote else None,
             "ticker_stale": bool(quote and quote.get("stale")),
             "signal": signal.model_dump() if signal else None,
+            "entry_proposals": getattr(self, "proposals", {}).get(
+                symbol, {"proposals": [], "executable": False}),
+            "stochastic_veto_preview": (preview_stochastic_veto(
+                snapshot.snapshot.stochastic, signal.plan.direction)
+                if snapshot and signal and signal.plan else None),
             "gate": gate,
             "model": {
                 "version": self.predictor.version,

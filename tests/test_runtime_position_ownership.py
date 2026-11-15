@@ -4,6 +4,7 @@ from threading import Event, RLock
 from types import SimpleNamespace
 from unittest.mock import Mock
 import time
+import pandas as pd
 
 import pytest
 
@@ -103,9 +104,114 @@ def test_management_accepts_owned_snapshot_and_keeps_other_broker(managed, empty
     runtime._manage_cycle(10)
     assert runtime.positions_cache == broker.positions.return_value
     assert {row["ticket"] for row in db.query("SELECT ticket FROM open_positions")} == (
-        {"other"} if empty else {"other", "new"})
+        {"other", "kept"} if empty else {"other", "kept", "new"})
+    # A position missing from an isolated broker poll cannot be treated as a
+    # completed close. Its last baseline stays pending authoritative evidence.
+    from packages.persistence.position_events import PositionEventLog
+
+    owner = runtime.gateway._assert_account(broker)
+    events = PositionEventLog(db).for_ticket(broker_id=broker.id, ticket="kept",
+                                              account_identity=owner)
+    assert any(event["status"] == "missing_unverified" for event in events)
     runtime.manager.evaluate.assert_called_once()
     runtime._log_error.assert_not_called()
+
+
+def test_management_poll_archives_unverified_sl_change_before_updating_cache(managed):
+    from packages.persistence.position_events import PositionEventLog
+    import json
+
+    runtime, broker, db = managed
+    changed = position("kept").model_copy(update={"sl": 1995})
+    broker.positions.return_value = [changed]
+    runtime._manage_cycle(10)
+    owner = runtime.gateway._assert_account(broker)
+    events = PositionEventLog(db).for_ticket(
+        broker_id=broker.id, ticket="kept", account_identity=owner)
+    assert [event["status"] for event in events] == ["changed_unverified"]
+    assert events[0]["detail"]["changed_fields"] == ["sl"]
+    assert json.loads(db.query_one("SELECT payload FROM open_positions WHERE ticket='kept'")["payload"])["sl"] == 1990
+    assert runtime.positions_cache == [changed]
+    runtime._manage_cycle(11)
+    assert len(PositionEventLog(db).for_ticket(broker_id=broker.id, ticket="kept",
+                                              account_identity=owner)) == 1
+
+
+def test_management_archives_only_recent_closed_m5_bars_for_its_symbol(managed):
+    from packages.persistence.position_candles import PositionCandleLog
+
+    runtime, broker, db = managed
+    frames = pd.DataFrame([{ "t": stamp, "o": 2000.0, "h": 2004.0,
+                             "l": 1998.0, "c": 2001.0, "v": 10.0}
+                           for stamp in (0, 300, 600, 900, 1200)])
+    runtime.contexts["XAUUSD"] = SimpleNamespace(
+        snapshot=SimpleNamespace(symbol="XAUUSD", broker_id="demo",
+                                 indicators=SimpleNamespace(atr_points=300)),
+        frames={"M5": frames})
+    runtime.contexts["EURUSD"] = SimpleNamespace(
+        snapshot=SimpleNamespace(symbol="EURUSD", broker_id="demo",
+                                 indicators=SimpleNamespace(atr_points=300)),
+        frames={"M5": frames})
+    runtime.market = SimpleNamespace(feed_mode="simulated")
+    broker.positions.return_value = [
+        position("tracked"),
+        position("eur-tracked").model_copy(update={"symbol": "EURUSD"}),
+        position("unobserved").model_copy(update={"symbol": "GBPUSD"}),
+    ]
+    runtime._manage_cycle(1200)
+    owner = runtime.gateway._assert_account(broker)
+    archive = PositionCandleLog(db).for_ticket(
+        broker_id="demo", ticket="tracked", account_identity=owner, symbol="XAUUSD")
+    assert [bar["t"] for bar in archive["bars"]] == [300, 600, 900]
+    assert all(bar["feed_mode"] == "simulated" for bar in archive["bars"])
+    assert archive["complete"] is False and archive["broker_tick_verified"] is False
+    assert [bar["t"] for bar in PositionCandleLog(db).for_ticket(
+        broker_id="demo", ticket="eur-tracked", account_identity=owner,
+        symbol="EURUSD")["bars"]] == [300, 600, 900]
+    assert PositionCandleLog(db).for_ticket(
+        broker_id="demo", ticket="unobserved", account_identity=owner,
+        symbol="GBPUSD")["bars"] == []
+    runtime._manage_cycle(1200)
+    assert len(PositionCandleLog(db).for_ticket(
+        broker_id="demo", ticket="tracked", account_identity=owner,
+        symbol="XAUUSD")["bars"]) == 3
+    runtime._log_error.assert_not_called()
+
+
+def test_chart_archive_failure_does_not_block_protective_management(managed, monkeypatch):
+    from packages.persistence.position_candles import PositionCandleLog
+
+    runtime, broker, _ = managed
+    runtime.contexts["XAUUSD"] = SimpleNamespace(
+        snapshot=SimpleNamespace(symbol="XAUUSD", broker_id="demo",
+                                 indicators=SimpleNamespace(atr_points=300)),
+        frames={"M5": pd.DataFrame([{ "t": 600, "o": 2000., "h": 2004.,
+                                      "l": 1998., "c": 2001., "v": 10.}])})
+    runtime.manager.evaluate.return_value = []
+    broker.positions.return_value = [position("tracked")]
+
+    def reject(*args, **kwargs):
+        raise OSError("chart storage unavailable")
+
+    monkeypatch.setattr(PositionCandleLog, "capture", reject)
+    runtime._manage_cycle(1200)
+    runtime.manager.evaluate.assert_called_once()
+    assert runtime._log_error.call_args.args[0] == "post_entry_candle_archive"
+
+
+def test_management_rejects_snapshot_if_broker_observation_cannot_be_saved(managed):
+    runtime, broker, db = managed
+    before = [dict(row) for row in db.query("SELECT * FROM open_positions")]
+    prior_cache = runtime.positions_cache
+    broker.positions.return_value = [position("kept").model_copy(update={"sl": 1995})]
+    db.execute("CREATE TRIGGER deny_observation BEFORE INSERT ON position_events "
+               "BEGIN SELECT RAISE(ABORT, 'observation unavailable'); END")
+    runtime._manage_cycle(10)
+    assert runtime.positions_cache is prior_cache
+    assert [dict(row) for row in db.query("SELECT * FROM open_positions")] == before
+    assert db.query("SELECT * FROM position_events") == []
+    runtime.manager.evaluate.assert_not_called()
+    runtime._log_error.assert_called_once()
 
 
 def test_management_does_not_resurrect_snapshot_deleted_by_action(managed):
@@ -114,7 +220,9 @@ def test_management_does_not_resurrect_snapshot_deleted_by_action(managed):
     runtime._apply_action.side_effect = lambda *args, **kwargs: db.execute(
         "DELETE FROM open_positions WHERE ticket='new'")
     runtime._manage_cycle(10)
-    assert db.query("SELECT * FROM open_positions") == []
+    # The mutation removes `new` without bringing it back, while an unrelated
+    # broker-missing `kept` position remains flagged for reconciliation.
+    assert {row["ticket"] for row in db.query("SELECT ticket FROM open_positions")} == {"kept"}
     runtime._apply_action.assert_called_once()
 
 
@@ -474,7 +582,7 @@ def test_concurrent_read_cannot_resurrect_position_removed_during_mutation(manag
         finally:
             release.set()
         future.result(timeout=10)
-    assert db.query("SELECT * FROM open_positions") == []
+    assert {row["ticket"] for row in db.query("SELECT ticket FROM open_positions")} == {"kept"}
     assert runtime.positions_cache is accepted
     runtime.manager.evaluate.assert_not_called()
     assert runtime.position_view()["positions_status"]["available"] is False

@@ -20,6 +20,7 @@ from typing import Any
 
 from integrations.brokers.base import BrokerAdapter, BrokerError
 from packages.persistence.db import Database
+from packages.persistence.position_events import PositionEventLog
 from packages.shared_schemas.models import (
     Direction,
     Health,
@@ -31,6 +32,19 @@ from packages.shared_schemas.models import (
     TradeRecord,
 )
 from packages.shared_schemas.settings import Settings
+
+POSITION_EVIDENCE_FIELDS = ("symbol", "direction", "volume", "entry", "sl", "tp", "open_time")
+
+
+def _position_evidence(pos: Position | None) -> dict[str, Any] | None:
+    """Stable broker fields only: exclude live mark-to-market price/noise."""
+    if pos is None:
+        return None
+    out: dict[str, Any] = {}
+    for field in POSITION_EVIDENCE_FIELDS:
+        value = getattr(pos, field, None)
+        out[field] = value.value if isinstance(value, Direction) else value
+    return out
 
 
 class ExecutionGateway:
@@ -124,8 +138,37 @@ class ExecutionGateway:
             status=OrderState.pending, message="order unresolved; not resent — manual reconciliation required",
         )
 
+    @staticmethod
+    def _validate_original_plan(snapshot: dict[str, Any] | None, request: OrderRequest) -> None:
+        """Reject misattributed evidence before claiming an order, never infer old zones."""
+        if snapshot is None:
+            return
+        if not isinstance(snapshot, dict) or not isinstance(snapshot.get("signal"), dict):
+            raise BrokerError("original plan snapshot is invalid")
+        signal = snapshot["signal"]
+        plan = signal.get("plan")
+        expected_action = "BUY" if request.side.value == "buy" else "SELL"
+        expected_direction = "up" if request.side.value == "buy" else "down"
+        if (not request.signal_id or signal.get("id") != request.signal_id
+                or signal.get("broker_id") != request.broker_id
+                or signal.get("symbol") != request.symbol
+                or signal.get("action") != expected_action
+                or not isinstance(plan, dict)
+                or plan.get("direction") != expected_direction
+                or plan.get("lot") != request.volume
+                or plan.get("sl") != request.sl
+                or plan.get("tp3") != request.tp):
+            raise BrokerError("original plan does not match order intent")
+        analysis = snapshot.get("analysis")
+        if analysis is not None and (not isinstance(analysis, dict)
+                                    or analysis.get("symbol") != request.symbol
+                                    or analysis.get("broker_id") != request.broker_id
+                                    or analysis.get("timeframe") != signal.get("timeframe")):
+            raise BrokerError("original analysis does not match the plan")
+
     # ---------------------------------------------------------------- submit
-    def submit(self, adapter: BrokerAdapter, request: OrderRequest, actor: str = "system") -> OrderResult:
+    def submit(self, adapter: BrokerAdapter, request: OrderRequest, actor: str = "system",
+               original_plan_snapshot: dict[str, Any] | None = None) -> OrderResult:
         if request.broker_id is not None and request.broker_id != adapter.id:
             raise BrokerError("broker identity mismatch; idempotency intent must not be rewritten")
         identity = self._assert_account(adapter)
@@ -135,6 +178,24 @@ class ExecutionGateway:
         request = request.model_copy(update={"broker_id": adapter.id})
         key = self.make_key(request)
         request = request.model_copy(update={"idempotency_key": key})
+        self._validate_original_plan(original_plan_snapshot, request)
+
+        # Serialize the exact intent before broker I/O. A missing strategy plan
+        # is labelled request-only, never fabricated from later market data.
+        snapshot_payload = {
+            "schema_version": 1, "account_identity": identity,
+            "request": request.model_dump(mode="json"),
+            "evidence_level": "original_plan" if original_plan_snapshot is not None else "request_only",
+            "original_signal": original_plan_snapshot["signal"] if original_plan_snapshot else None,
+            "analysis": original_plan_snapshot.get("analysis") if original_plan_snapshot else None,
+            "risk_decision": original_plan_snapshot.get("risk_decision") if original_plan_snapshot else None,
+            "analysis_provenance": (original_plan_snapshot.get("analysis_provenance", "unavailable")
+                                    if original_plan_snapshot else "unavailable"),
+        }
+        try:
+            serialized_snapshot = json.dumps(snapshot_payload, sort_keys=True, allow_nan=False)
+        except (TypeError, ValueError) as exc:
+            raise BrokerError("original plan evidence is not serializable") from exc
 
         existing = self._existing(key)
         if existing:
@@ -159,6 +220,15 @@ class ExecutionGateway:
                     (order_id, time.time(), key, OrderState.pending.value, adapter.id, request.symbol,
                      json.dumps({"request": request.model_dump(), "actor": actor,
                                  "account_identity": identity}, default=str)),
+                )
+                # An insert failure rolls back BOTH the order claim and the
+                # evidence. A replay never rewrites the original snapshot.
+                cur.execute(
+                    "INSERT INTO pre_order_snapshots"
+                    "(order_id, broker_id, signal_id, symbol, captured_at, payload) "
+                    "VALUES(?,?,?,?,?,?)",
+                    (order_id, adapter.id, request.signal_id, request.symbol,
+                     time.time(), serialized_snapshot),
                 )
         if already_claimed:
             if existing is None:
@@ -285,13 +355,22 @@ class ExecutionGateway:
     def modify(self, adapter: BrokerAdapter, ticket: str, sl: float | None = None,
                tp: float | None = None, reason: str = "") -> bool:
         try:
-            self._assert_account(adapter)
+            identity = self._assert_account(adapter)
+            ledger = PositionEventLog(self.db)
+            detail = {"sl": sl, "tp": tp, "reason": reason}
+            ledger.append(broker_id=adapter.id, ticket=ticket, actor="position-manager",
+                          kind="modify", status="requested", account_identity=identity, detail=detail)
             ok = adapter.modify_position(ticket, sl=sl, tp=tp)
             self._assert_account(adapter)
+            ledger.append(broker_id=adapter.id, ticket=ticket, actor="position-manager",
+                          kind="modify", status="accepted_unverified" if ok else "unknown",
+                          account_identity=identity, detail=detail)
             self.db.audit("position-manager", "position.modify",
                           {"ticket": ticket, "sl": sl, "tp": tp, "ok": ok, "reason": reason})
             return ok
         except BrokerError as exc:
+            # The request already exists in append-only evidence; a transport
+            # exception cannot prove that the broker rejected it.
             self.db.audit("position-manager", "position.modify_failed", {"ticket": ticket, "error": str(exc)})
             return False
 
@@ -304,8 +383,17 @@ class ExecutionGateway:
         ``OrderResult``. Callers used to assume ``.status`` existed and crashed on
         every simulated close, so this method now returns one dict for both.
         """
-        self._assert_account(adapter)
-        result = adapter.close_position(ticket, volume=volume, comment=reason[:24])
+        identity = self._assert_account(adapter)
+        ledger = PositionEventLog(self.db)
+        detail = {"volume": volume, "reason": reason}
+        ledger.append(broker_id=adapter.id, ticket=ticket, actor=actor, kind="close",
+                      status="requested", account_identity=identity, detail=detail)
+        try:
+            result = adapter.close_position(ticket, volume=volume, comment=reason[:24])
+        except Exception:
+            ledger.append(broker_id=adapter.id, ticket=ticket, actor=actor, kind="close",
+                          status="unknown", account_identity=identity, detail=detail)
+            raise
         self._assert_account(adapter)
         payload: dict[str, Any]
         if isinstance(result, TradeRecord):
@@ -319,11 +407,21 @@ class ExecutionGateway:
                                "reason": reason})
             else:
                 self.record_trade(result)
+            ledger.append(broker_id=adapter.id, ticket=ticket, actor=actor, kind="close",
+                          status="partial_realized" if still_open else "closed_recorded",
+                          account_identity=identity,
+                          detail={**detail, "realized_volume": result.volume, "pnl": result.pnl})
             payload = {"ok": True, "trade": result.model_dump()}
         else:
             if result.status not in (OrderState.closed, OrderState.filled, OrderState.rejected, OrderState.cancelled):
+                ledger.append(broker_id=adapter.id, ticket=ticket, actor=actor, kind="close",
+                              status="unknown", account_identity=identity, detail=detail)
                 raise BrokerError("close outcome unknown; reconcile before further action or resending")
             ok = result.status in (OrderState.closed, OrderState.filled)
+            ledger.append(broker_id=adapter.id, ticket=ticket, actor=actor, kind="close",
+                          status="accepted_unverified" if ok else "rejected",
+                          account_identity=identity,
+                          detail={**detail, "retcode": result.retcode, "broker_status": result.status.value})
             payload = {"ok": ok, "order": result.model_dump()}
         self.db.audit(actor, "position.close",
                       {"ticket": ticket, "volume": volume, "reason": reason, "result": payload})
@@ -361,7 +459,7 @@ class ExecutionGateway:
     def reconcile(self, adapter: BrokerAdapter) -> dict[str, Any]:
         """Compare remembered positions with the broker; never place orders here."""
         try:
-            self._assert_account(adapter)
+            identity = self._assert_account(adapter)
             all_stored = {r["ticket"]: Position(**json.loads(r["payload"]))
                           for r in self.db.query("SELECT * FROM open_positions")}
             stored = {ticket: pos for ticket, pos in all_stored.items() if pos.broker_id == adapter.id}
@@ -372,22 +470,41 @@ class ExecutionGateway:
                 raise BrokerError("ambiguous position identity; manual reconciliation required")
             if any(ticket in all_stored and all_stored[ticket].broker_id != adapter.id for ticket in live):
                 raise BrokerError("cross-account ticket collision; isolated storage required")
+            missing_at_broker = sorted(set(stored) - set(live))
+            unknown_locally = sorted(set(live) - set(stored))
+            changed_at_broker = sorted(ticket for ticket in set(live) & set(stored)
+                                       if _position_evidence(live[ticket]) != _position_evidence(stored[ticket]))
+            events = PositionEventLog(self.db)
+            new_observations: list[str] = []
+            observation_transitions: list[dict[str, str]] = []
+            for ticket in sorted(set(live) | set(stored)):
+                before, broker = _position_evidence(stored.get(ticket)), _position_evidence(live.get(ticket))
+                changed_fields = ([key for key in POSITION_EVIDENCE_FIELDS if before and broker
+                                   and before[key] != broker[key]]
+                                  if before and broker else ["presence"])
+                status = ("missing_unverified" if ticket in missing_at_broker else
+                          "unexpected_unverified" if ticket in unknown_locally else
+                          "changed_unverified" if ticket in changed_at_broker else
+                          "baseline_restored")
+                event_id = events.observe_broker(
+                    broker_id=adapter.id, ticket=ticket, account_identity=identity,
+                    status=status, detail={"before": before, "broker": broker,
+                                           "changed_fields": changed_fields,
+                                           "attribution": "unverified_source"})
+                if event_id is not None:
+                    new_observations.append(event_id)
+                    observation_transitions.append({"ticket": ticket, "status": status})
+            for ticket, pos in live.items():
+                if ticket in changed_at_broker:
+                    continue  # Preserve prior baseline until manual/history reconciliation.
+                self.db.execute(
+                    "INSERT OR REPLACE INTO open_positions(ticket, payload, updated_at) VALUES(?,?,?)",
+                    (ticket, json.dumps(pos.model_dump(), default=str), time.time()),
+                )
+            # A missing broker position is *not* proof of a filled close; keep
+            # the previous local baseline until verified deal/trade evidence.
         except Exception as exc:  # noqa: BLE001
             return {"ok": False, "error": str(exc), "checked_at": time.time()}
-        missing_at_broker = sorted(set(stored) - set(live))
-        unknown_locally = sorted(set(live) - set(stored))
-        changed_at_broker = sorted(ticket for ticket in set(live) & set(stored)
-                                   if any(getattr(live[ticket], field) != getattr(stored[ticket], field)
-                                          for field in ("symbol", "direction", "volume", "entry", "sl", "tp")))
-        for ticket, pos in live.items():
-            if ticket in changed_at_broker:
-                continue  # Keep the prior evidence until manual/history reconciliation.
-            self.db.execute(
-                "INSERT OR REPLACE INTO open_positions(ticket, payload, updated_at) VALUES(?,?,?)",
-                (ticket, json.dumps(pos.model_dump(), default=str), time.time()),
-            )
-        for ticket in missing_at_broker:
-            self.db.execute("DELETE FROM open_positions WHERE ticket = ?", (ticket,))
         status = {
             "ok": not missing_at_broker and not unknown_locally and not changed_at_broker,
             "broker_id": adapter.id,
@@ -395,6 +512,9 @@ class ExecutionGateway:
             "missing_at_broker": missing_at_broker,
             "unknown_locally": unknown_locally,
             "changed_at_broker": changed_at_broker,
+            "observation_events": new_observations,
+            "observation_transitions": observation_transitions,
+            "observations_added": len(new_observations),
             "reconciliation_required": bool(missing_at_broker or unknown_locally or changed_at_broker),
             "checked_at": time.time(),
         }
@@ -458,7 +578,9 @@ class ExecutionGateway:
             )
             cur.execute("DELETE FROM open_positions WHERE ticket = ?", (trade.ticket,))
 
-    def open_position_snapshot(self, positions: list[Position], broker_id: str | None = None) -> None:
+    def open_position_snapshot(self, positions: list[Position], broker_id: str | None = None, *,
+                               account_identity: dict | None = None,
+                               retain_unverified: bool = False) -> list[dict[str, str]]:
         """Replace the local mirror with the broker's current position list.
 
         Upsert-only snapshots leave rows behind after the last position closes,
@@ -468,6 +590,10 @@ class ExecutionGateway:
                 or not broker_id.strip() or broker_id != broker_id.strip()))
                 or (not positions and broker_id is None)):
             raise BrokerError("snapshot requires explicit nonblank broker scope")
+        if retain_unverified and (broker_id is None or not isinstance(account_identity, dict)
+                                  or account_identity.get("broker_id") != broker_id
+                                  or account_identity.get("workspace_id") != self.db.workspace_id):
+            raise BrokerError("safe snapshot requires verified account/workspace identity")
         live_tickets = {pos.ticket for pos in positions}
         if len(live_tickets) != len(positions):
             raise BrokerError("duplicate position tickets; manual reconciliation required")
@@ -476,6 +602,7 @@ class ExecutionGateway:
                 raise BrokerError("snapshot broker identity mismatch")
         # Serialize validation and replacement across connections to this database.
         # No broker I/O or nested Database helpers inside this transaction.
+        observation_events: list[dict[str, str]] = []
         with self.db.cursor() as cur:
             cur.execute("BEGIN IMMEDIATE")
             stored = {row["ticket"]: Position(**json.loads(row["payload"]))
@@ -483,15 +610,42 @@ class ExecutionGateway:
             for pos in positions:
                 if pos.ticket in stored and stored[pos.ticket].broker_id != pos.broker_id:
                     raise BrokerError("cross-account ticket collision; isolated storage required")
+            if retain_unverified:
+                ledger = PositionEventLog(self.db)
+                prior_scope = {ticket: pos for ticket, pos in stored.items()
+                               if pos.broker_id == broker_id}
+                incoming = {pos.ticket: pos for pos in positions}
+                for ticket in sorted(set(prior_scope) | set(incoming)):
+                    before = _position_evidence(prior_scope.get(ticket))
+                    observed = _position_evidence(incoming.get(ticket))
+                    status = ("missing_unverified" if ticket not in incoming else
+                              "unexpected_unverified" if ticket not in prior_scope else
+                              "changed_unverified" if before != observed else
+                              "baseline_restored")
+                    changed = ([key for key in POSITION_EVIDENCE_FIELDS if before and observed
+                                and before[key] != observed[key]]
+                               if before and observed else ["presence"])
+                    event_id = ledger.observe_broker_in_transaction(
+                        cur, broker_id=broker_id, ticket=ticket,
+                        account_identity=account_identity, status=status,
+                        detail={"before": before, "broker": observed,
+                                "changed_fields": changed, "attribution": "unverified_source"})
+                    if event_id is not None:
+                        observation_events.append({"event_id": event_id, "ticket": ticket,
+                                                   "status": status})
             for pos in positions:
+                if (retain_unverified and pos.ticket in stored
+                        and _position_evidence(stored[pos.ticket]) != _position_evidence(pos)):
+                    continue  # An unexplained change cannot rewrite the baseline.
                 cur.execute(
                     "INSERT OR REPLACE INTO open_positions(ticket, payload, updated_at) VALUES(?,?,?)",
                     (pos.ticket, json.dumps(pos.model_dump(), default=str), time.time()),
                 )
             scope = {broker_id} if broker_id is not None else {p.broker_id for p in positions}
             for ticket, pos in stored.items():
-                if ticket not in live_tickets and pos.broker_id in scope:
+                if ticket not in live_tickets and pos.broker_id in scope and not retain_unverified:
                     cur.execute("DELETE FROM open_positions WHERE ticket = ?", (ticket,))
+        return observation_events
 
     def history(self, limit: int = 100) -> list[dict[str, Any]]:
         rows = self.db.query("SELECT * FROM trades ORDER BY closed_at DESC LIMIT ?", (limit,))
