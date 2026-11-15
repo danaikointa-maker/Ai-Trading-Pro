@@ -5,16 +5,16 @@
   "status": "pass",
   "type": "explainer",
   "quality": "showcase",
-  "startedAt": "2026-11-12T16:31:06.927Z",
+  "startedAt": "2026-11-12T19:31:40.723Z",
   "specification": {
     "path": "C:\\workspace\\Ai-Trading-Pro\\.archify\\explainer-project-progress-20261109-114911\\candidate.archify.md",
-    "sha256": "2c76feceb5ecc10675372ff528d60625f341ae25a851e72f67114b721aba701b",
-    "bytes": 206495
+    "sha256": "1416af9e5be76839b6703642415f68f392675833bc77121dde5464beefbdd550",
+    "bytes": 210398
   },
   "artifact": {
     "path": "C:\\workspace\\Ai-Trading-Pro\\.archify\\explainer-project-progress-20261109-114911\\project-progress.html",
-    "sha256": "84f9fe6edc61dfdca3ed4f0b9f28417514446f7065bc6ff7778f9f178326fd70",
-    "bytes": 1094192
+    "sha256": "3b1f6b59d54a4c00e74f387658f7f395380f7ab7a9e472a50581a12110765477",
+    "bytes": 1110240
   },
   "stages": {
     "browser-check": {
@@ -42,8 +42,8 @@
         "ok": true,
         "command": "validate",
         "specification": {
-          "sha256": "2c76feceb5ecc10675372ff528d60625f341ae25a851e72f67114b721aba701b",
-          "bytes": 206495
+          "sha256": "1416af9e5be76839b6703642415f68f392675833bc77121dde5464beefbdd550",
+          "bytes": 210398
         },
         "validation": {
           "checksPassed": 4,
@@ -58,7 +58,7 @@
     "deliver": {
       "status": "pass",
       "exitCode": 0,
-      "durationMs": 1971,
+      "durationMs": 3821,
       "command": [
         "C:\\Users\\danai\\AppData\\Local\\Programs\\TradeAi\\node-v26.13.0-win-x64\\node.exe",
         "C:\\Users\\danai\\.cline\\skills\\archify\\bin\\archify.mjs",
@@ -72,23 +72,23 @@
       ],
       "receipt": {
         "schemaVersion": 1,
-        "receiptId": "57069cfc-1a3a-4c1d-ba7c-c8d3f19e0af3",
+        "receiptId": "93c961ec-7905-4168-9d7a-0ac669453a8e",
         "ok": true,
         "command": "deliver",
         "type": "explainer",
         "input": "C:\\workspace\\Ai-Trading-Pro\\.archify\\explainer-project-progress-20261109-114911\\candidate.archify.md",
         "output": "C:\\workspace\\Ai-Trading-Pro\\.archify\\explainer-project-progress-20261109-114911\\project-progress.html",
         "explainer": {
-          "preparedSha256": "9b220fb5ae7c0e85b7c10ef6e70321f71f59421d357e3dd27dd21ca50f5637e9",
+          "preparedSha256": "6a7c37a91ae17c9a753a8f6a5d02d0902924dfb87ea1df0e89d2a633628ee11f",
           "dependencies": []
         },
         "specification": {
-          "sha256": "2c76feceb5ecc10675372ff528d60625f341ae25a851e72f67114b721aba701b",
-          "bytes": 206495
+          "sha256": "1416af9e5be76839b6703642415f68f392675833bc77121dde5464beefbdd550",
+          "bytes": 210398
         },
         "artifact": {
-          "sha256": "84f9fe6edc61dfdca3ed4f0b9f28417514446f7065bc6ff7778f9f178326fd70",
-          "bytes": 1094192
+          "sha256": "3b1f6b59d54a4c00e74f387658f7f395380f7ab7a9e472a50581a12110765477",
+          "bytes": 1110240
         },
         "validation": {
           "checksPassed": 4,
@@ -102,9 +102,30 @@
           {
             "code": "explainer/writing-sentence-length",
             "severity": "warning",
+            "message": "Sentence has 31 reading units, above the configured en limit of 28.",
+            "subject": {
+              "line": 14,
+              "component": "list",
+              "panelId": "panel-9bd895a8ab56",
+              "input": "C:\\workspace\\Ai-Trading-Pro\\.archify\\explainer-project-progress-20261109-114911\\candidate.archify.md"
+            },
+            "evidence": {
+              "rule": "sentence-length",
+              "reason": "Sentence has 31 reading units, above the configured en limit of 28.",
+              "example": "先查缓存。未命中时再查数据库。 / Check the cache first. Query the database on a miss.",
+              "units": 31,
+              "limit": 28
+            },
+            "supportedFixes": [
+              "Split at a logical action or condition boundary while preserving qualifications and causal links."
+            ]
+          },
+          {
+            "code": "explainer/writing-sentence-length",
+            "severity": "warning",
             "message": "Sentence has 32 reading units, above the configured en limit of 28.",
             "subject": {
-              "line": 93,
+              "line": 107,
               "component": "prose",
               "panelId": "phase-2",
               "input": "C:\\workspace\\Ai-Trading-Pro\\.archify\\explainer-project-progress-20261109-114911\\candidate.archify.md"
@@ -125,7 +146,7 @@
             "severity": "warning",
             "message": "Sentence has 30 reading units, above the configured en limit of 28.",
             "subject": {
-              "line": 239,
+              "line": 253,
               "component": "comparison",
               "panelId": "documentation-loop",
               "input": "C:\\workspace\\Ai-Trading-Pro\\.archify\\explainer-project-progress-20261109-114911\\candidate.archify.md"
@@ -146,7 +167,7 @@
             "severity": "warning",
             "message": "Sentence has 36 reading units, above the configured en limit of 28.",
             "subject": {
-              "line": 255,
+              "line": 269,
               "component": "comparison",
               "panelId": "documentation-loop",
               "input": "C:\\workspace\\Ai-Trading-Pro\\.archify\\explainer-project-progress-20261109-114911\\candidate.archify.md"
@@ -167,7 +188,7 @@
             "severity": "warning",
             "message": "Sentence has 31 reading units, above the configured en limit of 28.",
             "subject": {
-              "line": 308,
+              "line": 322,
               "component": "list",
               "panelId": "close-all-results",
               "input": "C:\\workspace\\Ai-Trading-Pro\\.archify\\explainer-project-progress-20261109-114911\\candidate.archify.md"
@@ -188,7 +209,7 @@
             "severity": "warning",
             "message": "Sentence has 36 reading units, above the configured en limit of 28.",
             "subject": {
-              "line": 319,
+              "line": 333,
               "component": "list",
               "panelId": "close-all-partial",
               "input": "C:\\workspace\\Ai-Trading-Pro\\.archify\\explainer-project-progress-20261109-114911\\candidate.archify.md"
@@ -209,7 +230,7 @@
             "severity": "warning",
             "message": "Sentence has 31 reading units, above the configured en limit of 28.",
             "subject": {
-              "line": 330,
+              "line": 344,
               "component": "list",
               "panelId": "management-acknowledgements",
               "input": "C:\\workspace\\Ai-Trading-Pro\\.archify\\explainer-project-progress-20261109-114911\\candidate.archify.md"
@@ -230,7 +251,7 @@
             "severity": "warning",
             "message": "Sentence has 31 reading units, above the configured en limit of 28.",
             "subject": {
-              "line": 409,
+              "line": 423,
               "component": "list",
               "panelId": "model-provenance-quarantine",
               "input": "C:\\workspace\\Ai-Trading-Pro\\.archify\\explainer-project-progress-20261109-114911\\candidate.archify.md"
@@ -251,7 +272,7 @@
             "severity": "warning",
             "message": "Sentence has 29 reading units, above the configured en limit of 28.",
             "subject": {
-              "line": 683,
+              "line": 697,
               "component": "list",
               "panelId": "panel-1ec5234c7341",
               "input": "C:\\workspace\\Ai-Trading-Pro\\.archify\\explainer-project-progress-20261109-114911\\candidate.archify.md"
@@ -272,7 +293,7 @@
             "severity": "warning",
             "message": "Sentence has 29 reading units, above the configured en limit of 28.",
             "subject": {
-              "line": 1024,
+              "line": 1038,
               "component": "list",
               "panelId": "panel-5886a5a4014f",
               "input": "C:\\workspace\\Ai-Trading-Pro\\.archify\\explainer-project-progress-20261109-114911\\candidate.archify.md"
@@ -293,7 +314,7 @@
             "severity": "warning",
             "message": "Sentence has 34 reading units, above the configured en limit of 28.",
             "subject": {
-              "line": 1029,
+              "line": 1043,
               "component": "list",
               "panelId": "panel-9ef700230c39",
               "input": "C:\\workspace\\Ai-Trading-Pro\\.archify\\explainer-project-progress-20261109-114911\\candidate.archify.md"
@@ -314,7 +335,7 @@
             "severity": "warning",
             "message": "Sentence has 37 reading units, above the configured en limit of 28.",
             "subject": {
-              "line": 1031,
+              "line": 1045,
               "component": "list",
               "panelId": "panel-9ef700230c39",
               "input": "C:\\workspace\\Ai-Trading-Pro\\.archify\\explainer-project-progress-20261109-114911\\candidate.archify.md"
@@ -335,7 +356,7 @@
             "severity": "warning",
             "message": "Sentence has 34 reading units, above the configured en limit of 28.",
             "subject": {
-              "line": 1071,
+              "line": 1085,
               "component": "list",
               "panelId": "panel-44a235a3b926",
               "input": "C:\\workspace\\Ai-Trading-Pro\\.archify\\explainer-project-progress-20261109-114911\\candidate.archify.md"
@@ -356,7 +377,7 @@
             "severity": "warning",
             "message": "Sentence has 34 reading units, above the configured en limit of 28.",
             "subject": {
-              "line": 1123,
+              "line": 1137,
               "component": "list",
               "panelId": "panel-60dc356e36f5",
               "input": "C:\\workspace\\Ai-Trading-Pro\\.archify\\explainer-project-progress-20261109-114911\\candidate.archify.md"
@@ -377,7 +398,7 @@
             "severity": "warning",
             "message": "Sentence has 33 reading units, above the configured en limit of 28.",
             "subject": {
-              "line": 1125,
+              "line": 1139,
               "component": "list",
               "panelId": "panel-60dc356e36f5",
               "input": "C:\\workspace\\Ai-Trading-Pro\\.archify\\explainer-project-progress-20261109-114911\\candidate.archify.md"
@@ -398,7 +419,7 @@
             "severity": "warning",
             "message": "Sentence has 40 reading units, above the configured en limit of 28.",
             "subject": {
-              "line": 1150,
+              "line": 1164,
               "component": "list",
               "panelId": "panel-da59f60e3d66",
               "input": "C:\\workspace\\Ai-Trading-Pro\\.archify\\explainer-project-progress-20261109-114911\\candidate.archify.md"
@@ -419,7 +440,7 @@
             "severity": "warning",
             "message": "Sentence has 45 reading units, above the configured en limit of 28.",
             "subject": {
-              "line": 1163,
+              "line": 1177,
               "component": "list",
               "panelId": "panel-25eb471bae51",
               "input": "C:\\workspace\\Ai-Trading-Pro\\.archify\\explainer-project-progress-20261109-114911\\candidate.archify.md"
@@ -440,7 +461,7 @@
             "severity": "warning",
             "message": "Sentence has 31 reading units, above the configured en limit of 28.",
             "subject": {
-              "line": 1182,
+              "line": 1196,
               "component": "list",
               "panelId": "panel-45c872817c9d",
               "input": "C:\\workspace\\Ai-Trading-Pro\\.archify\\explainer-project-progress-20261109-114911\\candidate.archify.md"
@@ -461,7 +482,7 @@
             "severity": "warning",
             "message": "Sentence has 29 reading units, above the configured en limit of 28.",
             "subject": {
-              "line": 1188,
+              "line": 1202,
               "component": "prose",
               "panelId": "panel-4930c5ce44e2",
               "input": "C:\\workspace\\Ai-Trading-Pro\\.archify\\explainer-project-progress-20261109-114911\\candidate.archify.md"
@@ -482,7 +503,7 @@
             "severity": "warning",
             "message": "Sentence has 66 reading units, above the configured en limit of 28.",
             "subject": {
-              "line": 1197,
+              "line": 1211,
               "component": "list",
               "panelId": "panel-a9626da8adef",
               "input": "C:\\workspace\\Ai-Trading-Pro\\.archify\\explainer-project-progress-20261109-114911\\candidate.archify.md"
@@ -503,7 +524,7 @@
             "severity": "warning",
             "message": "Sentence has 34 reading units, above the configured en limit of 28.",
             "subject": {
-              "line": 1277,
+              "line": 1291,
               "component": "list",
               "panelId": "panel-daa69b244afb",
               "input": "C:\\workspace\\Ai-Trading-Pro\\.archify\\explainer-project-progress-20261109-114911\\candidate.archify.md"
@@ -524,7 +545,7 @@
             "severity": "warning",
             "message": "Sentence has 29 reading units, above the configured en limit of 28.",
             "subject": {
-              "line": 1292,
+              "line": 1306,
               "component": "list",
               "panelId": "history-h157",
               "input": "C:\\workspace\\Ai-Trading-Pro\\.archify\\explainer-project-progress-20261109-114911\\candidate.archify.md"
@@ -553,12 +574,12 @@
           "reason": "disabled"
         }
       },
-      "stderr": "archify: Sentence has 32 reading units, above the configured en limit of 28.\narchify: Sentence has 30 reading units, above the configured en limit of 28.\narchify: Sentence has 36 reading units, above the configured en limit of 28.\narchify: Sentence has 31 reading units, above the configured en limit of 28.\narchify: Sentence has 36 reading units, above the configured en limit of 28.\narchify: Sentence has 31 reading units, above the configured en limit of 28.\narchify: Sentence has 31 reading units, above the configured en limit of 28.\narchify: Sentence has 29 reading units, above the configured en limit of 28.\narchify: Sentence has 29 reading units, above the configured en limit of 28.\narchify: Sentence has 34 reading units, above the configured en limit of 28.\narchify: Sentence has 37 reading units, above the configured en limit of 28.\narchify: Sentence has 34 reading units, above the configured en limit of 28.\narchify: Sentence has 34 reading units, above the configured en limit of 28.\narchify: Sentence has 33 reading units, above the configured en limit of 28.\narchify: Sentence has 40 reading units, above the configured en limit of 28.\narchify: Sentence has 45 reading units, above the configured en limit of 28.\narchify: Sentence has 31 reading units, above the configured en limit of 28.\narchify: Sentence has 29 reading units, above the configured en limit of 28.\narchify: Sentence has 66 reading units, above the configured en limit of 28.\narchify: Sentence has 34 reading units, above the configured en limit of 28.\narchify: Sentence has 29 reading units, above the configured en limit of 28."
+      "stderr": "archify: Sentence has 31 reading units, above the configured en limit of 28.\narchify: Sentence has 32 reading units, above the configured en limit of 28.\narchify: Sentence has 30 reading units, above the configured en limit of 28.\narchify: Sentence has 36 reading units, above the configured en limit of 28.\narchify: Sentence has 31 reading units, above the configured en limit of 28.\narchify: Sentence has 36 reading units, above the configured en limit of 28.\narchify: Sentence has 31 reading units, above the configured en limit of 28.\narchify: Sentence has 31 reading units, above the configured en limit of 28.\narchify: Sentence has 29 reading units, above the configured en limit of 28.\narchify: Sentence has 29 reading units, above the configured en limit of 28.\narchify: Sentence has 34 reading units, above the configured en limit of 28.\narchify: Sentence has 37 reading units, above the configured en limit of 28.\narchify: Sentence has 34 reading units, above the configured en limit of 28.\narchify: Sentence has 34 reading units, above the configured en limit of 28.\narchify: Sentence has 33 reading units, above the configured en limit of 28.\narchify: Sentence has 40 reading units, above the configured en limit of 28.\narchify: Sentence has 45 reading units, above the configured en limit of 28.\narchify: Sentence has 31 reading units, above the configured en limit of 28.\narchify: Sentence has 29 reading units, above the configured en limit of 28.\narchify: Sentence has 66 reading units, above the configured en limit of 28.\narchify: Sentence has 34 reading units, above the configured en limit of 28.\narchify: Sentence has 29 reading units, above the configured en limit of 28."
     },
     "check": {
       "status": "pass",
       "exitCode": 0,
-      "durationMs": 1798,
+      "durationMs": 1192,
       "command": [
         "C:\\Users\\danai\\AppData\\Local\\Programs\\TradeAi\\node-v26.13.0-win-x64\\node.exe",
         "C:\\Users\\danai\\.cline\\skills\\archify\\bin\\archify.mjs",
@@ -571,15 +592,15 @@
         "file": "C:\\workspace\\Ai-Trading-Pro\\.archify\\explainer-project-progress-20261109-114911\\project-progress.html",
         "family": "explainer",
         "artifact": {
-          "sha256": "84f9fe6edc61dfdca3ed4f0b9f28417514446f7065bc6ff7778f9f178326fd70",
-          "bytes": 1094192
+          "sha256": "3b1f6b59d54a4c00e74f387658f7f395380f7ab7a9e472a50581a12110765477",
+          "bytes": 1110240
         },
         "checks": [
           {
             "name": "explainer_structure",
             "ok": true,
             "details": [
-              "372 unique DOM IDs"
+              "375 unique DOM IDs"
             ]
           },
           {
@@ -613,7 +634,7 @@
         },
         "diagnostics": [],
         "provenance": "current",
-        "deliveryReceiptId": "57069cfc-1a3a-4c1d-ba7c-c8d3f19e0af3"
+        "deliveryReceiptId": "93c961ec-7905-4168-9d7a-0ac669453a8e"
       }
     }
   },
@@ -625,10 +646,31 @@
     {
       "code": "explainer/writing-sentence-length",
       "severity": "warning",
+      "message": "Sentence has 31 reading units, above the configured en limit of 28.",
+      "subject": {
+        "input": "C:\\workspace\\Ai-Trading-Pro\\.archify\\explainer-project-progress-20261109-114911\\candidate.archify.md",
+        "line": 14,
+        "component": "list",
+        "panelId": "panel-9bd895a8ab56"
+      },
+      "evidence": {
+        "reason": "Sentence has 31 reading units, above the configured en limit of 28.",
+        "example": "先查缓存。未命中时再查数据库。 / Check the cache first. Query the database on a miss.",
+        "rule": "sentence-length",
+        "units": 31,
+        "limit": 28
+      },
+      "supportedFixes": [
+        "Split at a logical action or condition boundary while preserving qualifications and causal links."
+      ]
+    },
+    {
+      "code": "explainer/writing-sentence-length",
+      "severity": "warning",
       "message": "Sentence has 32 reading units, above the configured en limit of 28.",
       "subject": {
         "input": "C:\\workspace\\Ai-Trading-Pro\\.archify\\explainer-project-progress-20261109-114911\\candidate.archify.md",
-        "line": 93,
+        "line": 107,
         "component": "prose",
         "panelId": "phase-2"
       },
@@ -649,7 +691,7 @@
       "message": "Sentence has 30 reading units, above the configured en limit of 28.",
       "subject": {
         "input": "C:\\workspace\\Ai-Trading-Pro\\.archify\\explainer-project-progress-20261109-114911\\candidate.archify.md",
-        "line": 239,
+        "line": 253,
         "component": "comparison",
         "panelId": "documentation-loop"
       },
@@ -670,7 +712,7 @@
       "message": "Sentence has 36 reading units, above the configured en limit of 28.",
       "subject": {
         "input": "C:\\workspace\\Ai-Trading-Pro\\.archify\\explainer-project-progress-20261109-114911\\candidate.archify.md",
-        "line": 255,
+        "line": 269,
         "component": "comparison",
         "panelId": "documentation-loop"
       },
@@ -691,7 +733,7 @@
       "message": "Sentence has 31 reading units, above the configured en limit of 28.",
       "subject": {
         "input": "C:\\workspace\\Ai-Trading-Pro\\.archify\\explainer-project-progress-20261109-114911\\candidate.archify.md",
-        "line": 308,
+        "line": 322,
         "component": "list",
         "panelId": "close-all-results"
       },
@@ -712,7 +754,7 @@
       "message": "Sentence has 36 reading units, above the configured en limit of 28.",
       "subject": {
         "input": "C:\\workspace\\Ai-Trading-Pro\\.archify\\explainer-project-progress-20261109-114911\\candidate.archify.md",
-        "line": 319,
+        "line": 333,
         "component": "list",
         "panelId": "close-all-partial"
       },
@@ -733,7 +775,7 @@
       "message": "Sentence has 31 reading units, above the configured en limit of 28.",
       "subject": {
         "input": "C:\\workspace\\Ai-Trading-Pro\\.archify\\explainer-project-progress-20261109-114911\\candidate.archify.md",
-        "line": 330,
+        "line": 344,
         "component": "list",
         "panelId": "management-acknowledgements"
       },
@@ -754,7 +796,7 @@
       "message": "Sentence has 31 reading units, above the configured en limit of 28.",
       "subject": {
         "input": "C:\\workspace\\Ai-Trading-Pro\\.archify\\explainer-project-progress-20261109-114911\\candidate.archify.md",
-        "line": 409,
+        "line": 423,
         "component": "list",
         "panelId": "model-provenance-quarantine"
       },
@@ -775,7 +817,7 @@
       "message": "Sentence has 29 reading units, above the configured en limit of 28.",
       "subject": {
         "input": "C:\\workspace\\Ai-Trading-Pro\\.archify\\explainer-project-progress-20261109-114911\\candidate.archify.md",
-        "line": 683,
+        "line": 697,
         "component": "list",
         "panelId": "panel-1ec5234c7341"
       },
@@ -796,7 +838,7 @@
       "message": "Sentence has 29 reading units, above the configured en limit of 28.",
       "subject": {
         "input": "C:\\workspace\\Ai-Trading-Pro\\.archify\\explainer-project-progress-20261109-114911\\candidate.archify.md",
-        "line": 1024,
+        "line": 1038,
         "component": "list",
         "panelId": "panel-5886a5a4014f"
       },
@@ -817,7 +859,7 @@
       "message": "Sentence has 34 reading units, above the configured en limit of 28.",
       "subject": {
         "input": "C:\\workspace\\Ai-Trading-Pro\\.archify\\explainer-project-progress-20261109-114911\\candidate.archify.md",
-        "line": 1029,
+        "line": 1043,
         "component": "list",
         "panelId": "panel-9ef700230c39"
       },
@@ -838,7 +880,7 @@
       "message": "Sentence has 37 reading units, above the configured en limit of 28.",
       "subject": {
         "input": "C:\\workspace\\Ai-Trading-Pro\\.archify\\explainer-project-progress-20261109-114911\\candidate.archify.md",
-        "line": 1031,
+        "line": 1045,
         "component": "list",
         "panelId": "panel-9ef700230c39"
       },
@@ -859,7 +901,7 @@
       "message": "Sentence has 34 reading units, above the configured en limit of 28.",
       "subject": {
         "input": "C:\\workspace\\Ai-Trading-Pro\\.archify\\explainer-project-progress-20261109-114911\\candidate.archify.md",
-        "line": 1071,
+        "line": 1085,
         "component": "list",
         "panelId": "panel-44a235a3b926"
       },
@@ -880,7 +922,7 @@
       "message": "Sentence has 34 reading units, above the configured en limit of 28.",
       "subject": {
         "input": "C:\\workspace\\Ai-Trading-Pro\\.archify\\explainer-project-progress-20261109-114911\\candidate.archify.md",
-        "line": 1123,
+        "line": 1137,
         "component": "list",
         "panelId": "panel-60dc356e36f5"
       },
@@ -901,7 +943,7 @@
       "message": "Sentence has 33 reading units, above the configured en limit of 28.",
       "subject": {
         "input": "C:\\workspace\\Ai-Trading-Pro\\.archify\\explainer-project-progress-20261109-114911\\candidate.archify.md",
-        "line": 1125,
+        "line": 1139,
         "component": "list",
         "panelId": "panel-60dc356e36f5"
       },
@@ -922,7 +964,7 @@
       "message": "Sentence has 40 reading units, above the configured en limit of 28.",
       "subject": {
         "input": "C:\\workspace\\Ai-Trading-Pro\\.archify\\explainer-project-progress-20261109-114911\\candidate.archify.md",
-        "line": 1150,
+        "line": 1164,
         "component": "list",
         "panelId": "panel-da59f60e3d66"
       },
@@ -943,7 +985,7 @@
       "message": "Sentence has 45 reading units, above the configured en limit of 28.",
       "subject": {
         "input": "C:\\workspace\\Ai-Trading-Pro\\.archify\\explainer-project-progress-20261109-114911\\candidate.archify.md",
-        "line": 1163,
+        "line": 1177,
         "component": "list",
         "panelId": "panel-25eb471bae51"
       },
@@ -964,7 +1006,7 @@
       "message": "Sentence has 31 reading units, above the configured en limit of 28.",
       "subject": {
         "input": "C:\\workspace\\Ai-Trading-Pro\\.archify\\explainer-project-progress-20261109-114911\\candidate.archify.md",
-        "line": 1182,
+        "line": 1196,
         "component": "list",
         "panelId": "panel-45c872817c9d"
       },
@@ -985,7 +1027,7 @@
       "message": "Sentence has 29 reading units, above the configured en limit of 28.",
       "subject": {
         "input": "C:\\workspace\\Ai-Trading-Pro\\.archify\\explainer-project-progress-20261109-114911\\candidate.archify.md",
-        "line": 1188,
+        "line": 1202,
         "component": "prose",
         "panelId": "panel-4930c5ce44e2"
       },
@@ -1006,7 +1048,7 @@
       "message": "Sentence has 66 reading units, above the configured en limit of 28.",
       "subject": {
         "input": "C:\\workspace\\Ai-Trading-Pro\\.archify\\explainer-project-progress-20261109-114911\\candidate.archify.md",
-        "line": 1197,
+        "line": 1211,
         "component": "list",
         "panelId": "panel-a9626da8adef"
       },
@@ -1027,7 +1069,7 @@
       "message": "Sentence has 34 reading units, above the configured en limit of 28.",
       "subject": {
         "input": "C:\\workspace\\Ai-Trading-Pro\\.archify\\explainer-project-progress-20261109-114911\\candidate.archify.md",
-        "line": 1277,
+        "line": 1291,
         "component": "list",
         "panelId": "panel-daa69b244afb"
       },
@@ -1048,7 +1090,7 @@
       "message": "Sentence has 29 reading units, above the configured en limit of 28.",
       "subject": {
         "input": "C:\\workspace\\Ai-Trading-Pro\\.archify\\explainer-project-progress-20261109-114911\\candidate.archify.md",
-        "line": 1292,
+        "line": 1306,
         "component": "list",
         "panelId": "history-h157"
       },
@@ -1069,8 +1111,8 @@
     "summaryReceipt": "C:\\workspace\\Ai-Trading-Pro\\.archify\\explainer-project-progress-20261109-114911\\project-progress.finalize-summary.json"
   },
   "visualReview": "not-requested",
-  "finishedAt": "2026-11-12T16:31:12.038Z",
-  "durationMs": 5111,
+  "finishedAt": "2026-11-12T19:31:48.663Z",
+  "durationMs": 7940,
   "update": {
     "status": "unavailable",
     "installedVersion": null,
@@ -1080,6 +1122,6 @@
     "source": null,
     "noticeRequired": false,
     "noticeText": null,
-    "reason": "check-failed"
+    "reason": "timeout"
   }
 }

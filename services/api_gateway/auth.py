@@ -84,7 +84,7 @@ def decode_token(settings: Settings, token: str) -> dict[str, Any] | None:
 
 def authenticate(db: Database, settings: Settings, email: str, password: str) -> dict[str, Any] | None:
     row = db.query_one(
-        "SELECT email, password_hash, role, active FROM users WHERE email = ?",
+        "SELECT email, password_hash, role, active, tenant_id, platform_role FROM users WHERE email = ?",
         (email.lower().strip(),))
     if row is None:
         return None
@@ -98,7 +98,9 @@ def authenticate(db: Database, settings: Settings, email: str, password: str) ->
     db.execute("UPDATE users SET last_login_at = ? WHERE email = ?", (time.time(), row["email"]))
     token, ttl = create_token(settings, row["email"], role)
     db.audit(row["email"], "auth.login", {"role": role})
-    return {"token": token, "expires_in": ttl, "user": {"email": row["email"], "role": role},
+    return {"token": token, "expires_in": ttl,
+            "user": {"email": row["email"], "role": role, "tenant_id": row["tenant_id"],
+                     "platform_role": row["platform_role"]},
             "jwt_secret_is_default": settings.security["jwt_secret"] == "no7-dev-only-secret"
             or os.environ.get("NO7_JWT_SECRET", "") in ("", "change-me-to-a-long-random-string")
             or len(settings.security["jwt_secret"]) < 32}

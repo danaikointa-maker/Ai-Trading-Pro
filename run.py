@@ -21,6 +21,7 @@ def venv_python() -> Path:
 
 def local_environment() -> dict[str, str]:
     env = os.environ.copy()
+    credential_vault_key = env.get("NO7_CREDENTIAL_VAULT_KEY")
     for name in list(env):
         if name.upper().startswith(("NO7_", "MT5_")):
             env.pop(name)
@@ -41,7 +42,7 @@ def local_environment() -> dict[str, str]:
             "NO7_ALLOW_MULTI_RUNTIME": "false",
             "NO7_AUTO_TRAIN_ON_BOOT": "false",
             "NO7_RATELIMIT_STORE": "memory",
-            "NO7_DB_PATH": str(local_root / "db" / "no7.sqlite3"),
+            "NO7_DB_PATH": str(local_root / "db" / "no7-local-simulation.sqlite3"),
             "NO7_DATA_DIR": str(local_root / "datasets"),
             "NO7_MODEL_DIR": str(local_root / "models"),
             "NO7_BACKTEST_DIR": str(local_root / "backtests"),
@@ -52,6 +53,8 @@ def local_environment() -> dict[str, str]:
             "MT5_TERMINAL_PATH": str(local_root / "NO_TERMINAL.exe"),
         }
     )
+    if credential_vault_key:
+        env["NO7_CREDENTIAL_VAULT_KEY"] = credential_vault_key
     return env
 
 

@@ -5,6 +5,7 @@ import pytest
 import yaml
 
 from packages.shared_schemas.settings import Settings
+import run as local_launcher
 
 
 @pytest.fixture
@@ -73,3 +74,25 @@ def test_auto_training_can_be_disabled(monkeypatch, tmp_path):
 def test_local_storage_is_ignored():
     root = Path(__file__).resolve().parents[1]
     assert "storage/local-dev/" in (root / ".gitignore").read_text()
+
+
+def test_dotenv_does_not_load_credential_vault_master_key(tmp_path, monkeypatch):
+    from packages.shared_schemas.settings import _load_dotenv
+
+    monkeypatch.delenv("NO7_CREDENTIAL_VAULT_KEY", raising=False)
+    env_file = tmp_path / ".env"
+    env_file.write_text("NO7_CREDENTIAL_VAULT_KEY=must-not-load\n", encoding="utf-8")
+    _load_dotenv(env_file)
+    assert "NO7_CREDENTIAL_VAULT_KEY" not in __import__("os").environ
+
+
+def test_local_launcher_preserves_os_vault_key_but_clears_broker_credentials(monkeypatch):
+    monkeypatch.setenv("NO7_CREDENTIAL_VAULT_KEY", "os-secret-store-key")
+    monkeypatch.setenv("MT5_LOGIN", "do-not-inherit")
+    monkeypatch.setenv("NO7_OTHER_RUNTIME_OVERRIDE", "do-not-inherit")
+
+    env = local_launcher.local_environment()
+
+    assert env["NO7_CREDENTIAL_VAULT_KEY"] == "os-secret-store-key"
+    assert env["MT5_LOGIN"] == ""
+    assert "NO7_OTHER_RUNTIME_OVERRIDE" not in env

@@ -8,6 +8,47 @@
       <button class="btn ml-auto py-1.5" @click="load">Refresh</button>
     </header>
 
+    <section v-if="isPlatformSuperAdmin" class="panel">
+      <div class="panel-head">
+        <div class="panel-title">Platform tenants</div>
+        <span class="chip">{{ tenants.length }} tenants</span>
+      </div>
+      <form class="grid gap-2 border-b border-ink-700/60 p-3 md:grid-cols-[1fr_1fr_1fr_auto]" @submit.prevent="createTenant">
+        <label class="text-[10px] text-muted">ชื่อ tenant
+          <input v-model="newTenant.name" class="input mt-0.5 py-1.5 text-[11px]" required maxlength="120" />
+        </label>
+        <label class="text-[10px] text-muted">อีเมล tenant admin
+          <input v-model="newTenant.admin_email" class="input mt-0.5 py-1.5 text-[11px]" type="email" required autocomplete="off" />
+        </label>
+        <label class="text-[10px] text-muted">รหัสผ่านเริ่มต้น
+          <input v-model="newTenant.admin_password" class="input mt-0.5 py-1.5 text-[11px]" type="password" required minlength="8" autocomplete="new-password" />
+        </label>
+        <button class="btn self-end py-1.5" :disabled="tenantBusy">สร้าง tenant</button>
+      </form>
+      <div class="overflow-auto">
+        <table class="table-base">
+          <thead><tr><th>ชื่อ</th><th>ID</th><th>สถานะ</th><th>สร้างเมื่อ</th><th></th></tr></thead>
+          <tbody>
+            <tr v-for="tenant in tenants" :key="tenant.id">
+              <td>{{ tenant.name }}</td>
+              <td class="num text-[9px] text-muted">{{ tenant.id }}</td>
+              <td><span class="chip" :class="tenant.status === 'active' ? 'chip-up' : 'chip-down'">{{ tenant.status }}</span></td>
+              <td class="num">{{ datetime(tenant.created_at) }}</td>
+              <td class="text-right">
+                <button v-if="tenant.id !== 'default'" class="btn py-0.5 text-[9px]"
+                        @click="setTenantStatus(tenant)">{{ tenant.status === 'active' ? 'ระงับ' : 'เปิดใช้งาน' }}</button>
+              </td>
+            </tr>
+            <tr v-if="!tenants.length"><td colspan="5" class="py-4 text-center text-[11px] text-muted">ยังไม่มี tenant</td></tr>
+          </tbody>
+        </table>
+      </div>
+      <p class="border-t border-ink-700/60 px-3 py-2 text-[10px] text-amber-200/80">
+        Platform admin จัดการ tenant เท่านั้น ไม่มีสิทธิ์เข้าข้อมูลหรือ runtime สำหรับเทรด; tenant ใหม่ยังถูกปิดจาก trading runtime จนกว่าจะติดตั้ง worker isolation
+      </p>
+    </section>
+
+    <template v-else>
     <div class="grid grid-cols-2 gap-2 md:grid-cols-4">
       <Stat label="Status" :value="health?.status || '—'" :tone="health?.status === 'ok' ? 'text-up' : 'text-amber-300'" />
       <Stat label="Uptime" :value="`${fmt(health?.uptime_seconds, 0)}s`" :hint="health?.env" />
@@ -267,6 +308,58 @@
           </div>
         </section>
 
+        <section v-if="perms.canManageUsers" class="panel">
+          <div class="panel-head">
+            <div class="panel-title">ทีมดูแลบัญชี</div>
+            <span class="chip">{{ teams.length }} teams</span>
+          </div>
+          <div class="max-h-[180px] overflow-auto">
+            <table class="table-base">
+              <thead><tr><th>ทีม</th><th>สมาชิกและสิทธิ์ทีม</th></tr></thead>
+              <tbody>
+                <tr v-for="team in teams" :key="team.id">
+                  <td><div>{{ team.name }}</div><div class="num text-[9px] text-muted">{{ team.id }}</div></td>
+                  <td>
+                    <div v-for="member in team.members" :key="member.user_email" class="flex items-center justify-between gap-2 py-0.5">
+                      <span class="text-[10px]">{{ member.user_email }} <span class="chip">{{ member.team_role }}</span></span>
+                      <button class="btn py-0.5 text-[9px]" @click="removeTeamMember(team, member)">ถอด</button>
+                    </div>
+                    <span v-if="!team.members.length" class="text-[10px] text-muted">ยังไม่มีสมาชิก</span>
+                  </td>
+                </tr>
+                <tr v-if="!teams.length"><td colspan="2" class="py-3 text-center text-[11px] text-muted">ยังไม่มีทีม</td></tr>
+              </tbody>
+            </table>
+          </div>
+          <div class="grid gap-2 border-t border-ink-700/60 p-3 md:grid-cols-2">
+            <form class="flex items-end gap-1.5" @submit.prevent="createTeam">
+              <label class="min-w-0 flex-1 text-[9.5px] text-muted">ชื่อทีม
+                <input v-model="newTeamName" class="input mt-0.5 py-1 text-[10px]" required maxlength="80" />
+              </label>
+              <button class="btn py-1 text-[10px]" :disabled="teamBusy">สร้างทีม</button>
+            </form>
+            <form class="grid grid-cols-[1fr_1fr_auto] items-end gap-1.5" @submit.prevent="addTeamMember">
+              <label class="text-[9.5px] text-muted">ทีม
+                <select v-model="teamMember.team_id" class="input mt-0.5 py-1 text-[10px]" required>
+                  <option value="" disabled>เลือกทีม</option>
+                  <option v-for="team in teams" :key="team.id" :value="team.id">{{ team.name }}</option>
+                </select>
+              </label>
+              <label class="text-[9.5px] text-muted">อีเมลสมาชิก
+                <input v-model="teamMember.email" class="input mt-0.5 py-1 text-[10px]" type="email" required />
+              </label>
+              <button class="btn py-1 text-[10px]" :disabled="teamBusy || !teams.length">เพิ่มสมาชิก</button>
+              <select v-model="teamMember.team_role" class="input col-span-2 py-1 text-[10px]">
+                <option value="manager">ผู้ดูแลบัญชี (ต้องเป็น trader)</option>
+                <option value="member">ดู progress</option>
+              </select>
+            </form>
+          </div>
+          <p class="border-t border-ink-700/60 px-3 py-2 text-[9px] text-muted">
+            สมาชิกทีมไม่ใช่ login แทน managed subaccount; การควบคุมบัญชีขึ้นกับ assignment ของแต่ละบัญชี
+          </p>
+        </section>
+
         <section class="panel">
           <div class="panel-head"><div class="panel-title">Paths & config</div></div>
           <dl class="px-4 py-3 text-[10.5px]">
@@ -291,6 +384,7 @@
         <li>• ควรทำ Walk-forward / Out-of-sample / Paper trading อย่างน้อยหลายสัปดาห์ก่อนเพิ่มทุน</li>
       </ul>
     </section>
+    </template>
   </div>
 </template>
 
@@ -392,6 +486,10 @@ const users = ref([])
 const roles = ref([])
 const busy = ref(false)
 const newUser = ref({ email: '', password: '', role: 'viewer' })
+const teams = ref([])
+const teamBusy = ref(false)
+const newTeamName = ref('')
+const teamMember = ref({ team_id: '', email: '', team_role: 'manager' })
 const perms = computed(() => permissions.value)
 const me = computed(() => state.user?.email || '')
 const notify = computed(() => health.value?.notify || null)
@@ -410,6 +508,45 @@ const notifyTone = computed(() => {
 const errors = ref([])
 const models = ref([])
 const config = ref(null)
+const isPlatformSuperAdmin = computed(() => state.user?.platform_role === 'super_admin')
+const tenants = ref([])
+const tenantBusy = ref(false)
+const newTenant = ref({ name: '', admin_email: '', admin_password: '' })
+
+async function loadTenants() {
+  try {
+    const result = await api.get('/api/platform/tenants')
+    tenants.value = result.tenants || []
+  } catch (err) {
+    toast(err.message, 'error')
+  }
+}
+
+async function createTenant() {
+  if (tenantBusy.value) return
+  tenantBusy.value = true
+  try {
+    await api.post('/api/platform/tenants', { ...newTenant.value })
+    newTenant.value = { name: '', admin_email: '', admin_password: '' }
+    toast('สร้าง tenant และ tenant admin แล้ว', 'success')
+    await loadTenants()
+  } catch (err) {
+    toast(err.message, 'error')
+  } finally {
+    tenantBusy.value = false
+  }
+}
+
+async function setTenantStatus(tenant) {
+  const status = tenant.status === 'active' ? 'suspended' : 'active'
+  try {
+    await api.patch(`/api/platform/tenants/${encodeURIComponent(tenant.id)}`, { status })
+    toast(status === 'active' ? 'เปิด tenant แล้ว' : 'ระงับ tenant แล้ว', 'success')
+    await loadTenants()
+  } catch (err) {
+    toast(err.message, 'error')
+  }
+}
 
 async function loadUsers() {
   if (!perms.value.canManageUsers) return
@@ -417,6 +554,59 @@ async function loadUsers() {
     const res = await api.get('/api/users')
     users.value = res.users || []
     roles.value = res.roles || []
+  } catch (err) {
+    toast(err.message, 'error')
+  }
+}
+
+async function loadTeams() {
+  if (!perms.value.canManageUsers) return
+  try {
+    const res = await api.get('/api/teams')
+    teams.value = res.teams || []
+  } catch (err) {
+    toast(err.message, 'error')
+  }
+}
+
+async function createTeam() {
+  if (teamBusy.value) return
+  teamBusy.value = true
+  try {
+    await api.post('/api/teams', { name: newTeamName.value })
+    newTeamName.value = ''
+    toast('สร้างทีมแล้ว', 'success')
+    await loadTeams()
+  } catch (err) {
+    toast(err.message, 'error')
+  } finally {
+    teamBusy.value = false
+  }
+}
+
+async function addTeamMember() {
+  if (teamBusy.value) return
+  teamBusy.value = true
+  try {
+    await api.post(`/api/teams/${encodeURIComponent(teamMember.value.team_id)}/members`, {
+      email: teamMember.value.email,
+      team_role: teamMember.value.team_role,
+    })
+    teamMember.value.email = ''
+    toast('เพิ่มสมาชิกเข้าทีมแล้ว', 'success')
+    await loadTeams()
+  } catch (err) {
+    toast(err.message, 'error')
+  } finally {
+    teamBusy.value = false
+  }
+}
+
+async function removeTeamMember(team, member) {
+  try {
+    await api.del(`/api/teams/${encodeURIComponent(team.id)}/members/${encodeURIComponent(member.user_email)}`)
+    toast('ถอดสมาชิกออกจากทีมแล้ว', 'success')
+    await loadTeams()
   } catch (err) {
     toast(err.message, 'error')
   }
@@ -460,6 +650,10 @@ async function removeUser(user) {
 }
 
 async function load() {
+  if (isPlatformSuperAdmin.value) {
+    await loadTenants()
+    return
+  }
   try {
     const [h, a, m] = await Promise.all([
       api.get('/api/system/health'),
@@ -480,6 +674,7 @@ async function load() {
     bridge.value = null   // older server without the bridge: the card simply hides
   }
   await loadUsers()
+  await loadTeams()
 }
 
 async function sendTest() {

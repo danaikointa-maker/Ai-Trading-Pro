@@ -35,7 +35,7 @@ class UpdateUserRequest(BaseModel):
 
 @router.get("")
 def users(runtime: TradingRuntime = Depends(get_runtime), user=Depends(require_admin)):
-    return {"users": list_users(runtime.db), "roles": describe_roles(),
+    return {"users": list_users(runtime.db, user["tenant_id"]), "roles": describe_roles(),
             "require_auth": bool(get_settings().security.get("require_auth", True))}
 
 
@@ -43,7 +43,8 @@ def users(runtime: TradingRuntime = Depends(get_runtime), user=Depends(require_a
 def add(payload: CreateUserRequest, runtime: TradingRuntime = Depends(get_runtime),
         user=Depends(require_admin)):
     try:
-        created = create_user(runtime.db, payload.email, payload.password, payload.role)
+        created = create_user(runtime.db, payload.email, payload.password, payload.role,
+                              tenant_id=user["tenant_id"])
     except UserError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     runtime.db.audit(user["email"], "users.create",
@@ -56,7 +57,7 @@ def edit(email: str, payload: UpdateUserRequest, runtime: TradingRuntime = Depen
          user=Depends(require_admin)):
     try:
         updated = update_user(runtime.db, email, role=payload.role, active=payload.active,
-                              password=payload.password)
+                              password=payload.password, tenant_id=user["tenant_id"])
     except UserError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     changed: dict[str, Any] = {key: value for key, value in payload.model_dump().items()
@@ -74,7 +75,7 @@ def remove(email: str, runtime: TradingRuntime = Depends(get_runtime),
         raise HTTPException(status_code=400,
                             detail="you cannot delete the account you are signed in as")
     try:
-        delete_user(runtime.db, email)
+        delete_user(runtime.db, email, tenant_id=user["tenant_id"])
     except UserError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     runtime.db.audit(user["email"], "users.delete", {"email": email.strip().lower()})

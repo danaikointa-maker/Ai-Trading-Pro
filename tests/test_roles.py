@@ -11,12 +11,14 @@ These tests pin the matrix and the two properties that are easy to lose:
 from __future__ import annotations
 
 import time
+import sqlite3
 
 import pytest
 
 from packages.persistence.db import Database
 from services.api_gateway.auth import hash_password
-from services.api_gateway.roles import ADMIN, TRADER, VIEWER, at_least, normalize_role
+from services.api_gateway.roles import (ADMIN, PLATFORM_SUPER_ADMIN, TRADER, VIEWER,
+                                        at_least, is_platform_super_admin, normalize_role)
 from services.api_gateway.users import (UserError, active_admins, create_user, delete_user,
                                         get_user, list_users, update_user)
 
@@ -36,6 +38,36 @@ def test_role_ranking():
     assert not at_least(VIEWER, TRADER)
     # an unknown role degrades to viewer: it may read, it may not act
     assert at_least("garbage", VIEWER) and not at_least("garbage", TRADER)
+
+
+def test_platform_super_admin_is_not_a_trading_role():
+    assert is_platform_super_admin(PLATFORM_SUPER_ADMIN)
+    assert not is_platform_super_admin("admin")
+    assert normalize_role(PLATFORM_SUPER_ADMIN) == VIEWER
+    assert not at_least(PLATFORM_SUPER_ADMIN, TRADER)
+
+
+def test_tenant_metadata_migrates_existing_users_without_changing_workspace(tmp_path):
+    path = tmp_path / "legacy-users.sqlite3"
+    with sqlite3.connect(path) as conn:
+        conn.execute("CREATE TABLE workspace_identity (singleton INTEGER PRIMARY KEY, workspace_id TEXT NOT NULL)")
+        conn.execute("INSERT INTO workspace_identity VALUES(1, 'local')")
+        conn.execute("CREATE TABLE users (id INTEGER PRIMARY KEY, email TEXT UNIQUE, password_hash TEXT, "
+                     "role TEXT, created_at REAL, active INTEGER DEFAULT 1, last_login_at REAL)")
+        conn.execute("INSERT INTO users(email, password_hash, role, created_at) VALUES(?,?,?,?)",
+                     ("existing@example.com", "hash", ADMIN, time.time()))
+
+    db = Database(path, workspace_id="local")
+    try:
+        user = db.query_one("SELECT tenant_id, platform_role FROM users WHERE email = ?",
+                            ("existing@example.com",))
+        assert user["tenant_id"] == "default"
+        assert user["platform_role"] is None
+        tenant = db.query_one("SELECT id, status FROM tenants WHERE id = 'default'")
+        assert tenant["status"] == "active"
+        assert db.workspace_id == "local"
+    finally:
+        db.close()
 
 
 # ------------------------------------------------------------------ user store

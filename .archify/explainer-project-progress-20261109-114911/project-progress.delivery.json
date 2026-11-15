@@ -1,21 +1,21 @@
 {
   "schemaVersion": 1,
-  "receiptId": "57069cfc-1a3a-4c1d-ba7c-c8d3f19e0af3",
+  "receiptId": "93c961ec-7905-4168-9d7a-0ac669453a8e",
   "status": "current",
   "command": "deliver",
   "type": "explainer",
   "input": "C:\\workspace\\Ai-Trading-Pro\\.archify\\explainer-project-progress-20261109-114911\\candidate.archify.md",
   "output": "C:\\workspace\\Ai-Trading-Pro\\.archify\\explainer-project-progress-20261109-114911\\project-progress.html",
   "specification": {
-    "sha256": "2c76feceb5ecc10675372ff528d60625f341ae25a851e72f67114b721aba701b",
-    "bytes": 206495
+    "sha256": "1416af9e5be76839b6703642415f68f392675833bc77121dde5464beefbdd550",
+    "bytes": 210398
   },
   "artifact": {
-    "sha256": "84f9fe6edc61dfdca3ed4f0b9f28417514446f7065bc6ff7778f9f178326fd70",
-    "bytes": 1094192
+    "sha256": "3b1f6b59d54a4c00e74f387658f7f395380f7ab7a9e472a50581a12110765477",
+    "bytes": 1110240
   },
   "explainer": {
-    "preparedSha256": "9b220fb5ae7c0e85b7c10ef6e70321f71f59421d357e3dd27dd21ca50f5637e9",
+    "preparedSha256": "6a7c37a91ae17c9a753a8f6a5d02d0902924dfb87ea1df0e89d2a633628ee11f",
     "dependencies": []
   }
 }

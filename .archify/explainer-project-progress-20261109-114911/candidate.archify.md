@@ -1,5 +1,19 @@
 # TradeAi — แผน 8 เฟสและทะเบียนติดตามงาน {#project-progress}
 
+สถานะนี้แยกหลักฐานที่ยืนยันแล้วออกจากงานค้างและข้อเสนอเป้าหมาย เพื่อให้พัฒนาต่อโดยไม่สับสนระหว่าง local implementation กับความพร้อมใช้งานจริง
+
+## H166 — 12 พฤศจิกายน 2026: multi-account policy และ implementation gap
+
+- Policy target: control plane (tenant/identity/RBAC/assignment/audit) แยกจาก trading plane ที่แยก worker/risk/exposure/kill-switch/idempotency/reconciliation ต่อบัญชี; มี system-wide kill switch และไม่ mirror คำสั่งข้ามบัญชีโดย default.
+- Owner ควบคุมบัญชีได้ก่อน assign; หลัง assign เป็น progress-only และผู้รับมอบหมายควบคุมตาม role. Transfer/return ต้อง privileged, audited, ตรวจ worker state ก่อนคืนสิทธิ์. Super admin จัดการ tenant แต่ไม่มี secret/trading access.
+- Demo/Live ของ broker เดียวกันต้องแยก account records และ credentials. Broker credentials ห้ามอยู่ใน `.env`, YAML, source, command line หรือ logs; vault key เป็นคนละ secret และอยู่นอก repository.
+- Local worktree มี tenant/team/account CRUD, assignment, encrypted DB vault และ one-shot read-only Demo probe. ยังไม่มี persistent isolated per-account worker, worker-aware return/revoke, credential rotation/revocation, per-account order path หรือ Demo order acceptance; `run.py` คง simulated/paper เท่านั้น.
+- Gap สำคัญ: return assignment ไม่ตรวจ worker state; audit route-side ไม่ atomic กับ assignment write; vault ยัง local AES-GCM/master key จาก process environment ไม่ใช่ production secret manager. ยังไม่ยืนยันว่าไม่มี secrets ใน UI/browser/log ตลอดทุกเส้นทาง.
+- Working tree บน local `main` มี staged/unstaged/untracked edits ก่อนงานนี้; ห้ามล้างหรือรวมงานเหล่านั้น และรอบนี้ไม่ commit/push/merge. แก้ README, multi-tenant policy doc, handoff และ progress เท่านั้น.
+- Verification: pytest attempt ถูก PowerShell/PSReadLine terminal integration ขัดจังหวะก่อนมี exit/JUnit ที่ยืนยันได้; test status inconclusive/not-run verified. ไม่เชื่อม broker/MT5 และไม่ส่งคำสั่ง.
+- Next: security/redaction & super-admin negative tests → atomic audited worker-aware assignment/revoke/return → persistent isolated Demo workers + account risk/kill/reconciliation → multi-account failure/restart/ambiguous/duplicate acceptance → Demo execution approval แยก; Live เป็น gate แยก.
+- Verification correction: pytest subprocess จบ exit 1 (`8 passed, 3 warnings, 29 errors`). พบ permission denied ที่ pytest temp directory และ test DB guard เห็น inherited `NO7_DB_PATH=storage/db/no7.sqlite3`; หยุดโดยไม่แก้ guard หรือแตะ DB จริง. `git diff --check` และ cached check exit 0. Archify final finalize ล่าสุด validate/deliver/check pass, 22 writing warnings, browser-check not-run; candidate SHA `2683542baa129536f5d86b81b8c5a8e224b60854c3850f8b0417214bf0fc32be`, HTML SHA `006e09d367e954e14f51e4e7a4e94a835aa60d90b5f7a6199489184690badc23`.
+
 Next: Retry Architecture browser-check from a normally opened non-elevated PowerShell; H161 reached Chrome startup but its DevTools write pipe closed. Separately review and confirm H146 contract policy (claim ownership, partial-pair recovery, cancellation and filesystem scope) before fail-first tests and importer changes.
 
 ## H082–H084: model consumer gates (กำลังตรวจ) {#model-consumer-gates}

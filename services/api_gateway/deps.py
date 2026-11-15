@@ -7,8 +7,8 @@ from fastapi import Depends, HTTPException, Query, Request, status
 
 from packages.shared_schemas.settings import Settings, get_settings
 from services.api_gateway.auth import decode_token
-from services.api_gateway.roles import (ADMIN, MUTATING_METHODS, TRADER, at_least,
-                                        normalize_role)
+from services.api_gateway.roles import (ADMIN, MUTATING_METHODS, PLATFORM_SUPER_ADMIN, TRADER,
+                                        at_least, is_platform_super_admin, normalize_role)
 from services.api_gateway.state import TradingRuntime
 
 
@@ -53,18 +53,39 @@ async def current_user(request: Request, token: str | None = Query(default=None)
 
     email = str(payload.get("sub") or "").lower()
     db = getattr(getattr(request.app.state, "runtime", None), "db", None)
-    row = db.query_one("SELECT email, role, active FROM users WHERE email = ?", (email,)) if db else None
+    row = db.query_one("SELECT email, role, active, tenant_id, platform_role FROM users WHERE email = ?",
+                       (email,)) if db else None
     if row is None:
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED,
                             detail="account no longer exists — sign in again")
     if not bool(row["active"] if row["active"] is not None else 1):
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN,
                             detail="account is disabled")
+    if row["tenant_id"]:
+        tenant = db.query_one("SELECT status FROM tenants WHERE id = ?", (row["tenant_id"],)) if db else None
+        if tenant is None or tenant["status"] != "active":
+            raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="tenant is inactive")
 
     role = normalize_role(row["role"])
-    user = {"email": row["email"], "role": role, "token_role": payload.get("role")}
+    user = {"email": row["email"], "role": role, "tenant_id": row["tenant_id"],
+            "platform_role": row["platform_role"], "token_role": payload.get("role")}
+    platform_admin = is_platform_super_admin(row["platform_role"])
+    path = request.url.path
+    platform_path = path.startswith("/api/platform")
+    if platform_admin:
+        if not platform_path and path != "/api/auth/me":
+            raise HTTPException(status_code=status.HTTP_403_FORBIDDEN,
+                                detail="platform super admin has no tenant trading access")
+    else:
+        if not row["tenant_id"]:
+            raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="account has no tenant")
+        if row["tenant_id"] != "default" and not path.startswith(
+            ("/api/users", "/api/auth/me", "/api/teams", "/api/broker-accounts")):
+            raise HTTPException(status_code=status.HTTP_403_FORBIDDEN,
+                                detail="tenant runtime isolation is not configured")
 
-    if request.method in MUTATING_METHODS and not at_least(role, TRADER):
+    if (request.method in MUTATING_METHODS and not at_least(role, TRADER)
+            and not (platform_admin and platform_path)):
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
             detail=f"role '{role}' is read-only: {request.method} {request.url.path} "
@@ -85,6 +106,13 @@ def require_role(minimum: str):
 
 require_admin = require_role(ADMIN)
 require_trader = require_role(TRADER)
+
+
+async def require_platform_super_admin(user: dict[str, Any] = Depends(current_user)) -> dict[str, Any]:
+    if not is_platform_super_admin(user.get("platform_role")):
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN,
+                            detail=f"needs platform role '{PLATFORM_SUPER_ADMIN}'")
+    return user
 
 
 User = Depends(current_user)

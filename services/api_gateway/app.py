@@ -29,14 +29,17 @@ from services.api_gateway.routes import (
     auth,
     backtest,
     bridge,
+    broker_accounts,
     brokers,
     datasets,
     explain,
     market,
+    platform,
     risk,
     signals,
     system,
     trading,
+    teams,
     users,
     ws,
 )
@@ -120,7 +123,7 @@ def create_app(runtime: TradingRuntime | None = None) -> FastAPI:
     app.add_middleware(SecurityHeadersMiddleware, trusted_proxies=trusted,
                        csp_mode=str(sh.get("csp_mode", "enforce")),
                        hsts=bool(sh.get("hsts", True)))
-    for module in (auth, system, market, analysis, signals, trading, risk, brokers, backtest,
+    for module in (auth, platform, teams, broker_accounts, system, market, analysis, signals, trading, risk, brokers, backtest,
                datasets, users, bridge, explain, ws):
         app.include_router(module.router)
 

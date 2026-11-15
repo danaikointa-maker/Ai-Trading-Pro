@@ -22,6 +22,7 @@ from __future__ import annotations
 from typing import Any
 
 VIEWER, TRADER, ADMIN = "viewer", "trader", "admin"
+PLATFORM_SUPER_ADMIN = "super_admin"
 
 ROLE_RANK: dict[str, int] = {VIEWER: 1, TRADER: 2, ADMIN: 3}
 
@@ -59,6 +60,11 @@ def rank(role: Any) -> int:
 
 def at_least(role: Any, minimum: str) -> bool:
     return rank(role) >= ROLE_RANK[normalize_role(minimum)]
+
+
+def is_platform_super_admin(platform_role: Any) -> bool:
+    """Platform control-plane authority is separate from tenant trading roles."""
+    return isinstance(platform_role, str) and platform_role.strip().lower() == PLATFORM_SUPER_ADMIN
 
 
 def describe_roles() -> list[dict[str, Any]]:

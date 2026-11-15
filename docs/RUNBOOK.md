@@ -21,26 +21,25 @@ python3 -m uvicorn services.api_gateway.app:app --host 0.0.0.0 --port 8000
 เข้า `http://127.0.0.1:8000` → `demo@no7.ai` / `no7demo1234`
 (เปลี่ยนได้ผ่าน `NO7_DEMO_USER` / `NO7_DEMO_PASSWORD`)
 
-## 2. Windows + MT5 ( Demo ก่อนเสมอ )
+## 2. Windows + MT5 Demo (read-only diagnostics)
 
-1. ติดตั้ง MetaTrader 5 และล็อกอินบัญชี **Demo** ของ Connext
-2. เปิด *Tools → Options → Expert Advisors* → อนุญาต algorithmic trading
-3. `pip install MetaTrader5` (ใช้ได้เฉพาะ Windows)
-4. ตั้งใน `.env`:
-   ```
-   NO7_FEED_MODE=mt5
-   MT5_LOGIN=...
-   MT5_PASSWORD=...
-   MT5_SERVER=Connext-Demo
-   MT5_TERMINAL_PATH=C:\Program Files\MetaTrader 5\terminal64.exe
-   ```
-5. รัน `python -m uvicorn services.api_gateway.app:app --host 127.0.0.1 --port 8000`
-   (ผูกที่ `127.0.0.1` เพื่อไม่ให้ endpoint ส่งคำสั่งเข้าถึงจากอินเทอร์เน็ต)
-6. ตรวจ `GET /api/brokers` → `health: connected` และ `GET /api/brokers/{id}/symbols`
-   ต้องได้ `source: broker` (อ่าน spec จากเทอร์มินัลจริง)
+**อย่าใส่ broker login/password/server ใน `.env` หรือ YAML.** ENV ชุด MT5 แบบ global เป็น legacy path และ BrokerRegistry รุ่นนี้ไม่อ่าน account credentials จาก ENV แล้ว; `run.py` ยังคงเป็น simulated/paper launcher
 
-> ถ้า symbol ในโบรกเกอร์ชื่อ `XAUUSDm` หรือ `GOLD` ให้ตั้ง mapping ใน `config/brokers.yaml`
-> (`symbol_map: {XAUUSD: XAUUSDm}`) — ระบบอ่าน Digits/Point/TickSize/ContractSize/StopsLevel จากโบรกเกอร์เสมอ
+1. ติดตั้ง MetaTrader 5 และล็อกอินบัญชี **Demo** ที่ต้องการด้วยตนเอง
+2. ติดตั้ง optional package เข้า virtualenv: `python -m pip install -r requirements-mt5.txt`
+3. ตรวจ account identity และ quote แบบ read-only โดยแทนค่า login/server/symbol ด้วยบัญชี Demo ของคุณ:
+
+  ```powershell
+  powershell -NoProfile -ExecutionPolicy Bypass -File .\scripts\check-mt5-demo.ps1 -ExpectedLogin 123456 -ExpectedServer 'YourBroker-Demo' -Symbol 'XAUUSD'
+  ```
+
+diagnostic นี้แนบกับ terminal ที่เปิดและ login ไว้อยู่แล้ว, ตรวจว่า account เป็น Demo และ login/server ตรงกัน, อ่าน quote แล้วปิดเฉพาะ IPC connection; ไม่ส่งคำสั่งและไม่เชื่อม account เข้า trading runtime
+
+Broker Manager บันทึก Demo/Live เป็นคนละ managed-account record และเข้ารหัส credential รายบัญชีผ่าน vault; ปุ่ม **Validate Demo** เรียก one-shot subprocess แบบ read-only เพื่อตรวจ terminal ที่เปิด/login ไว้แล้วว่าตรง login/server/type และอ่าน quote โดยไม่ส่งคำสั่ง. ขั้นนี้ไม่ใช้หรือยืนยัน password ที่เก็บใน vault และไม่ใช่ MT5 worker ถาวร
+
+แม้สถานะขึ้น `ready_read_only` ก็ยังไม่มี order execution ต่อ managed account; ต้องทำ persistent account worker, credential lifecycle และ Demo order acceptance ก่อนใช้งานเทรดจริง. Live connection ยังคงปิดไว้
+
+`NO7_CREDENTIAL_VAULT_KEY` เป็น master key คนละชนิดกับ broker password: provision จาก OS/secret manager ให้ process ก่อนเริ่มระบบเท่านั้น; ห้ามใส่ลง `.env`, YAML, command line หรือ repository. หากยังไม่มี secret manager ให้ทดสอบเฉพาะ record ใน local Demo setup และอย่าเปิดระบบให้ผู้ใช้อื่นเข้าถึง
 
 ## 3. คำสั่งที่ใช้บ่อย
 

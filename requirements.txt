@@ -9,6 +9,7 @@ pandas>=3.1.1
 scikit-learn>=1.9.1
 lightgbm>=4.7.0
 PyJWT>=2.15.1
+cryptography>=44.0
 joblib>=1.6.0
 PyYAML>=6.0.3
 pytest>=9.2.0

@@ -31,6 +31,8 @@ def _load_dotenv(path: Path) -> None:
         key, _, value = line.partition("=")
         key = key.strip()
         value = value.strip().strip('"').strip("'")
+        if key == "NO7_CREDENTIAL_VAULT_KEY":
+            continue
         if key and key not in os.environ:
             os.environ[key] = value
 

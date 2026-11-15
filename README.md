@@ -1,4 +1,4 @@
-﻿# No7 AI Trading Pro — V1
+# No7 AI Trading Pro — V1
 
 [![gate](https://github.com/danaikointa-maker/TradeAi/actions/workflows/ci.yml/badge.svg)](https://github.com/danaikointa-maker/TradeAi/actions/workflows/ci.yml)
 
@@ -45,44 +45,160 @@
 | TLS (uvicorn หรือ reverse proxy) + security headers/CORS allowlist | ✅ |
 | Telegram / LINE แจ้งเตือน | ✅ ส่งจริงผ่าน HTTP (retry/pacing/redact) — ยังไม่ทดสอบกับปลายทางจริง |
 
-## Quickstart (Linux/macOS/Windows, ไม่ต้องมี MT5)
+## เริ่มต้นใช้งาน (Linux/macOS/Windows, ไม่ต้องมี MT5)
 
 ### Cross-platform local launcher
 
-Install Python 3.11+ and Node.js/npm, then run from the repository root. The
-setup command installs the local environment and starts the app.
+ติดตั้ง Python 3.11+ และ Node.js/npm แล้วเรียกจาก root ของ repository ตัวเลือก
+`--setup` เตรียม virtual environment, dependencies, dashboard build และ local
+configuration ก่อนเริ่มแอป; ไม่ใช่การติดตั้งเพื่อ deploy หรือเปิดเทรดจริง
 
-Windows PowerShell, first run:
+Windows PowerShell — ครั้งแรก:
 
 ```powershell
 py -3 run.py --setup
 ```
 
-Later runs:
+ครั้งถัดไป:
 
 ```powershell
 py -3 run.py
 ```
 
-macOS/Linux, first run:
+macOS/Linux — ครั้งแรก:
 
 ```bash
 python3 run.py --setup
 ```
 
-Later runs:
+ครั้งถัดไป:
 
 ```bash
 python3 run.py
 ```
 
-To validate the local configuration without starting the server, run `py -3
-run.py --check` on Windows or `python3 run.py --check` on macOS/Linux. Use
-`--port 8001` to choose another port. The launcher binds to `127.0.0.1` and
-forces simulated market data, paper/simulated broker profiles, authentication,
+To validate the local configuration without starting the server:
+
+- Windows: `py -3 run.py --check`
+- macOS/Linux: `python3 run.py --check`
+
+Add `--port 8001` to a run command to choose another port. The launcher binds
+to `127.0.0.1` and forces simulated market data, paper/simulated broker profiles, authentication,
 and disabled Full Auto/bridge/alerts. Runtime data stays under the ignored
 `storage/local-dev/` directory. Stop the foreground server with Ctrl+C. This
 launcher is for local development only, not live trading or server deployment.
+
+### ทางลัดและคำสั่งที่ใช้บ่อย
+
+| เป้าหมาย | Windows PowerShell | macOS/Linux |
+|---|---|---|
+| เตรียมเครื่องและ dashboard ครั้งแรก | `py -3 run.py --setup` | `python3 run.py --setup` |
+| ตรวจ config โดยไม่เริ่ม server | `py -3 run.py --check` | `python3 run.py --check` |
+| เริ่ม local simulation | `py -3 run.py` | `python3 run.py` |
+| เลือกพอร์ต เช่น 8001 | `py -3 run.py --port 8001` | `python3 run.py --port 8001` |
+| ตรวจ lint/build/tests แบบ local | อ่าน [คู่มือ Local Verification](docs/LOCAL-VERIFICATION.th.md) | อ่าน [คู่มือ Development](docs/DEVELOPMENT.md) |
+
+launcher ทำงานที่ `http://127.0.0.1:8000` ตามค่าเริ่มต้น ใช้ feed จำลอง, broker
+profiles แบบ paper/simulated, เปิด authentication และปิด Full Auto/EA bridge/การแจ้งเตือน
+ภายนอก ข้อมูล local อยู่ใต้ `storage/local-dev/`; หยุด foreground server ด้วย `Ctrl+C`.
+อย่าเปิดพอร์ตออกสู่เครือข่ายหรือใช้บัญชี/secret จริงกับ local demo โดยไม่อ่าน
+[`docs/RUNBOOK.md`](docs/RUNBOOK.md) และ [`docs/LIMITATIONS.md`](docs/LIMITATIONS.md) ก่อน
+
+ถ้าต้องพัฒนา dashboard แยกจาก API: เริ่ม API ด้วย local launcher แล้วเปิด terminal อีกหน้าต่าง
+และรัน `cd apps/web-dashboard; npm run dev` (PowerShell) หรือ `cd apps/web-dashboard && npm run dev`
+(macOS/Linux); ใช้ port/proxy ตาม `apps/web-dashboard/vite.config.*`. คำสั่งและ setup
+เฉพาะ Windows ดูหัวข้อถัดไปและ [`docs/DEVELOPMENT.md`](docs/DEVELOPMENT.md).
+
+### สถาปัตยกรรมระบบที่ตรวจพบ (As-is)
+
+ภาพนี้เป็นภาพรวมตามโค้ด ไม่ใช่แผน deployment: Vue dashboard ติดต่อ FastAPI ด้วย REST
+และ WebSocket; lifespan ของแอปเริ่ม/หยุด `TradingRuntime`; runtime ประสาน feed,
+analysis, forecast, strategy, risk และ execution ตาม config แล้ว persistence ใช้ SQLite
+สำหรับ local state. การมี adapter หรือ route ใน source ไม่ได้แปลว่ามี broker/MT5 เชื่อมต่ออยู่
+หรืออนุญาตให้ส่ง order.
+
+```mermaid
+flowchart LR
+  U[ผู้ใช้] --> UI[Vue 3 Dashboard / PWA]
+  UI <-->|REST + WebSocket| API[FastAPI API Gateway]
+  API -->|lifespan เริ่มและหยุด| RT[TradingRuntime]
+  FEED[Simulated / Replay / adapter ตาม config] --> MD[Market data]
+  RT --> MD
+  MD --> AN[Analysis และข้อมูลตลาด]
+  AN --> FC[Forecast / Strategy / Trade Planner]
+  FC --> RG{Risk Engine gate}
+  RG -->|ปฏิเสธ| RT
+  RG -->|อนุญาตตาม config| EG[Execution Gateway]
+  EG --> BA[Broker adapter ตาม config]
+  RT <-->|อ่าน/เขียน local state| DB[(SQLite workspace)]
+  API <-->|tenant, team, account, audit routes| CP[Control plane services]
+  CP <-->|account metadata / encrypted credentials| DB
+```
+
+**วิธีอ่านภาพ:** เส้นไปยัง Execution Gateway แสดงลำดับและ gate ในระบบทั่วไปเท่านั้น;
+local launcher บังคับ simulated/paper mode และปิด Full Auto/EA bridge. รายการ tenant/team/
+managed broker account เป็น control-plane slice ที่ยังอยู่ระหว่างตรวจ acceptance;
+ไม่เท่ากับ account-isolated trading worker. Credentials ใน vault ถูกเข้ารหัสใน DB ด้วย
+master key จาก environment แต่ยังไม่ใช่การเชื่อม secret manager สำหรับ production.
+รายละเอียดองค์ประกอบดู [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md)
+และข้อเสนอ multi-tenant ที่แยกจากสถานะจริงดู
+[`docs/MULTI-TENANT-BROKER-PLATFORM.th.md`](docs/MULTI-TENANT-BROKER-PLATFORM.th.md).
+
+### Flowchart: เพิ่มและมอบหมายบัญชีโบรกเกอร์ (As-is + จุดที่ยังไม่รองรับ)
+
+```mermaid
+flowchart TD
+  START([เริ่มใน local control plane]) --> CREATE[ผู้ใช้ที่ได้รับสิทธิ์ส่ง metadata และ credentials ผ่าน API]
+  CREATE --> ENCRYPT[CredentialVault เข้ารหัสและบันทึก broker account]
+  ENCRYPT --> MASK[API คืน account summary พร้อม masked login]
+  MASK --> ASSIGN{มอบหมายให้ทีม/manager หรือไม่}
+  ASSIGN -->|ไม่| OWNER[owner ควบคุมได้ตาม role]
+  ASSIGN -->|ใช่| CHECK[ตรวจ tenant, team, manager และ assignment version]
+  CHECK -->|ไม่ผ่าน| DENY[ปฏิเสธคำขอ]
+  CHECK -->|ผ่าน| SAVE[บันทึก assignment และ audit ใน transaction]
+  SAVE --> PROGRESS[owner ดูข้อมูลความคืบหน้า; assignee ควบคุมตาม role]
+  PROGRESS --> VALIDATE[Demo validation เป็น read-only เมื่อ operator เปิด terminal ที่ตรงบัญชี]
+  VALIDATE --> READONLY[ผลพร้อมตรวจเป็น read-only; execution_enabled ยังคง false]
+  READONLY --> BLOCK[credential rotation/revocation และ worker-aware return ยังไม่พร้อม]
+  BLOCK --> NOORDER[ไม่มี per-account order worker หรือ Demo order acceptance ใน scope นี้]
+```
+
+ผังนี้แยก flow ที่มีอยู่จากข้อจำกัดปัจจุบัน ไม่ใช่คำแนะนำให้ใส่ credentials จริงหรือเปิด
+การซื้อขาย หากต้องตั้ง platform super admin ใน local environment ให้ใช้
+`.venv/Scripts/python.exe -m services.api_gateway.bootstrap_platform_super_admin` (Windows)
+หรือ `.venv/bin/python -m services.api_gateway.bootstrap_platform_super_admin` (macOS/Linux) ตาม
+[`docs/MULTI-TENANT-BROKER-PLATFORM.th.md`](docs/MULTI-TENANT-BROKER-PLATFORM.th.md);
+คำสั่งรับ password แบบ prompt ไม่ควรส่ง secret ผ่าน command line หรือเอกสาร
+
+### โครงสร้าง repository (ส่วนหลัก)
+
+| Path | หน้าที่ |
+|---|---|
+| `apps/web-dashboard/` | Vue dashboard, PWA, หน้า API-driven UI |
+| `services/api_gateway/` | FastAPI app/routes, auth, runtime state และ control-plane services |
+| `packages/persistence/` | SQLite schema และ persistence adapter |
+| `packages/shared_schemas/` | settings/config parsing และ shared schemas |
+| `integrations/brokers/` | broker adapters/registry; การมีโค้ดไม่ยืนยันว่าต่อ broker อยู่ |
+| `config/` | YAML application, broker และ risk configuration ตัวอย่าง |
+| `scripts/` | setup, local run, verification, import/evaluate และ diagnostic scripts |
+| `tests/` | pytest tests และ isolated fixtures |
+| `docs/` | คู่มือระบบ, API, runbook และ safety handoff |
+| `storage/` | ข้อมูล local และ QA artifacts; ไม่ commit |
+
+ก่อนแก้โค้ด อ่าน [`docs/DEVELOPMENT.md`](docs/DEVELOPMENT.md) และ
+[`docs/LOCAL-VERIFICATION.th.md`](docs/LOCAL-VERIFICATION.th.md).
+runner แยก environment สำหรับ tests และบันทึก exit/JUnit; ห้ามข้าม DB safety guard.
+
+### ขอบเขตความปลอดภัยและการใช้งาน
+
+- Local quickstart ใช้ simulated/paper; signal ไม่ใช่คำสั่งเทรด.
+- Managed account เริ่ม `execution_enabled=false`; Demo validation เป็น read-only
+  และไม่ใช่ order acceptance.
+- อย่า commit `.env`, JWT/vault keys, broker passwords, tokens หรือ raw account/log data
+- ระบบ multi-tenant และ worker isolation ยังไม่ผ่าน acceptance; อย่าเปิดเป็น shared production service
+- ห้ามใช้ Live account หรือเงินจริงเพื่อทดสอบ; การทดสอบ Demo execution ต้องมีแผนและอนุมัติแยก
+- สถานะงาน/ข้อจำกัดล่าสุด: [`docs/SAFETY-HANDOFF.th.md`](docs/SAFETY-HANDOFF.th.md),
+  [`docs/LIMITATIONS.md`](docs/LIMITATIONS.md), และ [ทะเบียนความคืบหน้า](.archify/explainer-project-progress-20261109-114911/project-progress.html)
 
 ### Windows PowerShell: isolated local development
 
@@ -230,7 +346,7 @@ storage/                   db / datasets / models / backtests / logs (git-ignore
 - **โซน confirmed vs candidate แยกกัน** — confirmed ต้องมีการทดสอบซ้ำด้วยแท่งปิด
 - **Full Auto ปิดไว้เป็นค่าเริ่มต้น** ต้องเปิด env + toggle + โมเดลผ่าน OOS + บัญชี demo
 - **LLM อธิบายได้ แต่สั่งออร์เดอร์ไม่ได้**
-- **Secrets ไม่อยู่ใน git** (`NO7_JWT_SECRET`, MT5 password, bot tokens → `.env`)
+- **Secrets ไม่อยู่ใน git**: `NO7_JWT_SECRET` และค่าท้องถิ่นใช้ `.env` ที่ไม่แชร์; broker credentials ต้องเก็บแยกต่อ broker account ใน vault และห้ามใส่ `.env`, YAML, source, command line หรือ log. นี่เป็น policy/target design; vault implementation ปัจจุบันยังเป็น local encrypted storage ที่ใช้ master key จาก process environment ไม่ใช่ production secret manager.
 
 ## การใช้งานประจำวัน
 
@@ -276,6 +392,7 @@ Windows/local evidence runner ใช้คำสั่ง explicit Python/Node/G
 - [`docs/BASELINE-P1.th.md`](docs/BASELINE-P1.th.md) — baseline source/config/evidence และเกณฑ์ปิดเฟส 1 (ไม่ใช่ release sign-off)
 - [`docs/SAFETY-HANDOFF.th.md`](docs/SAFETY-HANDOFF.th.md) — สถานะ safety ปัจจุบันและประวัติที่แยกรอบชัดเจน
 - [`docs/LOCAL-VERIFICATION.th.md`](docs/LOCAL-VERIFICATION.th.md) — local runner, artifact exits และข้อจำกัด skips
+- [`docs/MULTI-TENANT-BROKER-PLATFORM.th.md`](docs/MULTI-TENANT-BROKER-PLATFORM.th.md) — policy และแผน target design สำหรับ tenant/team/account; มี local control-plane slice และ read-only Demo validation บางส่วน แต่ยังไม่ใช่ multi-account trading และยังไม่มี per-account order path หรือ Demo trade acceptance
 
 - [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) — ชั้นต่าง ๆ และเหตุผลการออกแบบ
 - [`docs/API.md`](docs/API.md) — รายการ endpoint ที่ dashboard ใช้
@@ -407,7 +524,10 @@ python3 -m uvicorn services.api_gateway.app:app --host 127.0.0.1 --port 8000
 - SQLite เป็น persistent local store หลัก; Redis เป็น optional integration ตาม config สำหรับบาง shared coordination/rate-limit paths ไม่ใช่ dependency ที่ยืนยันว่าถูก deploy
 - trade review เป็น retrospective จาก trade/signal ที่บันทึกไว้ ไม่ได้ฝึก AI อัตโนมัติ และไม่ยืนยันความครบถ้วนของ broker history หรือ deal attribution
 - single-writer lease, account ownership, idempotency และ adapter validation เป็น local safeguards; ไม่ใช่ broker-side fencing หรือ exactly-once guarantee
-- ห้าม commit `.env`, password, token, account identifier หรือ raw broker logs; เก็บข้อมูลส่วนบุคคลใน artifact ให้เหลือน้อยที่สุด
+- Multi-account target design แยก **control plane** (tenant, identity, roles, assignment, audit) จาก **trading plane** (worker, risk, execution และ reconciliation แยกต่อ broker account). ผู้ใช้ควบคุมบัญชีตนได้เมื่อยังไม่ assign; เมื่อ assign แล้วเจ้าของดู progress ได้อย่างเดียวและผู้รับมอบหมายควบคุมตาม role. การย้าย/คืน assignment ต้องทำโดยผู้มีสิทธิ์ มี audit และตรวจ worker ก่อนคืนสิทธิ์. Super admin จัดการ tenant แต่ไม่มีสิทธิ์เห็น secret หรือควบคุมการเทรด.
+- Broker หนึ่งรายอาจมี Demo/Live หลาย login/server; แต่ละ login/environment ต้องเป็น account record และ credential แยกกัน ห้ามสลับหรือ fallback ไปบัญชีอื่น. ค่าเริ่มต้นไม่มีการ mirror คำสั่งข้ามบัญชี; ทุกบัญชีต้องมี risk limit, exposure, kill switch, idempotency และ reconciliation ของตน พร้อม system-wide kill switch.
+- สถานะปัจจุบันเป็น implementation บางส่วนใน local worktree เท่านั้น: tenant/team/account records, encrypted credential storage, assignment และ one-shot read-only Demo probe. ยังไม่มี persistent isolated worker ต่อบัญชี, credential rotation/revocation ครบวงจร หรือ account-scoped order path; `run.py` ยังคงเป็น simulated/paper launcher. จึงยังไม่พร้อมสำหรับ multi-account execution หรือ Demo trade acceptance.
+- `NO7_JWT_SECRET` อยู่ใน `.env` เฉพาะเครื่อง; broker login/password ต้องเก็บแยกต่อ managed account ใน vault และห้ามใส่ใน `.env`, YAML, source, command line หรือ log. `NO7_CREDENTIAL_VAULT_KEY` เป็น master key ไม่ใช่ broker credential และต้อง provision นอก `.env`/repository ผ่าน OS หรือ secret manager.
 - MT5/EA/Redis/VM, disconnect/restart/crash, live account และ execution acceptance ต้องมีการทดสอบแยกจาก pytest/unit tests; เอกสาร/diagram ไม่ใช่หลักฐานว่าบริการเหล่านั้นเชื่อมต่ออยู่
 
 ### งานค้างที่ต้องติดตาม (snapshot)

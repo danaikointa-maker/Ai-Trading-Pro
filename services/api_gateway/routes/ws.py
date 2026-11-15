@@ -8,7 +8,7 @@ from fastapi import APIRouter, Query, WebSocket, WebSocketDisconnect
 
 from packages.shared_schemas.settings import get_settings
 from services.api_gateway.auth import decode_token
-from services.api_gateway.roles import normalize_role
+from services.api_gateway.roles import is_platform_super_admin, normalize_role
 
 router = APIRouter(tags=["websocket"])
 
@@ -40,13 +40,18 @@ def _authority(runtime, settings, token):
     if not payload or not payload.get("sub"):
         return None, 4401
     try:
-        row = runtime.db.query_one("SELECT email, role, active FROM users WHERE email = ?",
+        row = runtime.db.query_one("SELECT email, role, active, tenant_id, platform_role FROM users WHERE email = ?",
                                    (str(payload["sub"]).lower(),))
     except Exception:  # noqa: BLE001 - no frames when authority cannot be verified
         return None, 1011
     if row is None:
         return None, 4401
     if not bool(row["active"] if row["active"] is not None else 1):
+        return None, 4403
+    tenant = runtime.db.query_one("SELECT status FROM tenants WHERE id = ?", (row["tenant_id"],))
+    if tenant is None or tenant["status"] != "active":
+        return None, 4403
+    if is_platform_super_admin(row["platform_role"]) or row["tenant_id"] != "default":
         return None, 4403
     return (row["email"], normalize_role(row["role"])), None
 

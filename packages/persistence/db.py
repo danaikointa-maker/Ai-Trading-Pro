@@ -23,6 +23,10 @@ CREATE TABLE IF NOT EXISTS broker_deals (
     PRIMARY KEY (broker_id, account_key, deal_id)
 );
 CREATE TABLE IF NOT EXISTS workspace_identity (singleton INTEGER PRIMARY KEY CHECK(singleton=1), workspace_id TEXT NOT NULL);
+CREATE TABLE IF NOT EXISTS tenants (
+    id TEXT PRIMARY KEY, name TEXT NOT NULL, status TEXT NOT NULL DEFAULT 'active',
+    created_at REAL NOT NULL, created_by TEXT
+);
 CREATE TABLE IF NOT EXISTS candles (
     symbol TEXT NOT NULL, tf TEXT NOT NULL, t INTEGER NOT NULL,
     o REAL, h REAL, l REAL, c REAL, v REAL,
@@ -97,8 +101,42 @@ CREATE TABLE IF NOT EXISTS journal (
 CREATE TABLE IF NOT EXISTS users (
     id INTEGER PRIMARY KEY AUTOINCREMENT, email TEXT UNIQUE, password_hash TEXT,
     role TEXT DEFAULT 'trader', created_at REAL,
-    active INTEGER DEFAULT 1, last_login_at REAL
+    active INTEGER DEFAULT 1, last_login_at REAL,
+    tenant_id TEXT DEFAULT 'default', platform_role TEXT
 );
+
+CREATE TABLE IF NOT EXISTS teams (
+    id TEXT PRIMARY KEY, tenant_id TEXT NOT NULL, name TEXT NOT NULL,
+    status TEXT NOT NULL DEFAULT 'active', created_at REAL NOT NULL, created_by TEXT,
+    UNIQUE(tenant_id, name)
+);
+
+CREATE TABLE IF NOT EXISTS team_members (
+    team_id TEXT NOT NULL, user_email TEXT NOT NULL,
+    team_role TEXT NOT NULL DEFAULT 'member' CHECK(team_role IN ('manager', 'member')),
+    active INTEGER NOT NULL DEFAULT 1, created_at REAL NOT NULL,
+    PRIMARY KEY(team_id, user_email)
+);
+CREATE INDEX IF NOT EXISTS idx_team_members_user ON team_members(user_email, active);
+
+CREATE TABLE IF NOT EXISTS broker_accounts (
+    id TEXT PRIMARY KEY, tenant_id TEXT NOT NULL, owner_email TEXT NOT NULL,
+    provider TEXT NOT NULL, label TEXT NOT NULL, server TEXT NOT NULL,
+    account_type TEXT NOT NULL CHECK(account_type IN ('demo', 'live')),
+    terminal_path TEXT NOT NULL DEFAULT '', validation_symbol TEXT NOT NULL DEFAULT 'XAUUSD',
+    masked_login TEXT NOT NULL, login_fingerprint TEXT NOT NULL,
+    credentials_ciphertext BLOB NOT NULL, vault_key_version TEXT NOT NULL DEFAULT '1',
+    connection_status TEXT NOT NULL DEFAULT 'pending_validation',
+    assignment_team_id TEXT, assignment_manager_email TEXT,
+    assignment_version INTEGER NOT NULL DEFAULT 0,
+    execution_enabled INTEGER NOT NULL DEFAULT 0,
+    created_at REAL NOT NULL, created_by TEXT NOT NULL, updated_at REAL NOT NULL,
+    UNIQUE(tenant_id, provider, server, login_fingerprint)
+);
+CREATE INDEX IF NOT EXISTS idx_broker_accounts_owner
+    ON broker_accounts(tenant_id, owner_email, created_at);
+CREATE INDEX IF NOT EXISTS idx_broker_accounts_assignee
+    ON broker_accounts(tenant_id, assignment_manager_email, created_at);
 
 CREATE TABLE IF NOT EXISTS kv (
     key TEXT PRIMARY KEY, value TEXT, updated_at REAL
@@ -189,7 +227,16 @@ class Database:
     # EXISTS` will not add them, and a missing `users.active` would either crash
     # the login path or (worse) be read as "active" — so add them explicitly.
     MIGRATIONS: dict[str, dict[str, str]] = {
-        "users": {"active": "INTEGER DEFAULT 1", "last_login_at": "REAL"},
+        "users": {
+            "active": "INTEGER DEFAULT 1",
+            "last_login_at": "REAL",
+            "tenant_id": "TEXT",
+            "platform_role": "TEXT",
+        },
+        "broker_accounts": {
+            "terminal_path": "TEXT NOT NULL DEFAULT ''",
+            "validation_symbol": "TEXT NOT NULL DEFAULT 'XAUUSD'",
+        },
     }
 
     def _migrate(self) -> None:
@@ -205,6 +252,11 @@ class Database:
                         # another worker added it between the PRAGMA and the ALTER
                         if "duplicate column" not in str(exc).lower():
                             raise
+        self._conn.execute(
+            "INSERT OR IGNORE INTO tenants(id, name, status, created_at) VALUES(?,?,?,?)",
+            ("default", "Default", "active", time.time()),
+        )
+        self._conn.execute("UPDATE users SET tenant_id = 'default' WHERE tenant_id IS NULL OR tenant_id = ''")
 
     # ------------------------------------------------------------------ core
     @contextmanager

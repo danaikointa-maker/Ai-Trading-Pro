@@ -47,9 +47,11 @@ class BrokerRegistry:
                     broker = MT5Broker(
                         profile,
                         terminal_path=os.environ.get("MT5_TERMINAL_PATH", ""),
-                        login=int(os.environ.get("MT5_LOGIN") or 0) or None,
-                        password=os.environ.get("MT5_PASSWORD", ""),
-                        server=os.environ.get("MT5_SERVER", profile.get("server", "")),
+                        # Broker identity and secrets are account-scoped and must
+                        # come from the credential vault worker, never global ENV.
+                        login=None,
+                        password="",
+                        server=profile.get("server", ""),
                         timeout_ms=int(os.environ.get("MT5_TIMEOUT_MS", 5000)),
                     )
                     broker.connect()

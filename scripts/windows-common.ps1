@@ -49,7 +49,7 @@ function Set-LocalSimulation {
     $env:NO7_ALLOW_MULTI_RUNTIME = 'false'
     $env:NO7_AUTO_TRAIN_ON_BOOT = 'false'
     $env:NO7_RATELIMIT_STORE = 'memory'
-    $env:NO7_DB_PATH = Join-Path $RepoRoot 'storage\local-dev\db\no7.sqlite3'
+    $env:NO7_DB_PATH = Join-Path $RepoRoot 'storage\local-dev\db\no7-local-simulation.sqlite3'
     $env:NO7_DATA_DIR = Join-Path $RepoRoot 'storage\local-dev\datasets'
     $env:NO7_MODEL_DIR = Join-Path $RepoRoot 'storage\local-dev\models'
     $env:NO7_BACKTEST_DIR = Join-Path $RepoRoot 'storage\local-dev\backtests'

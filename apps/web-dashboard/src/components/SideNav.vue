@@ -16,7 +16,11 @@
       </RouterLink>
     </nav>
 
-    <div class="mt-4 rounded-lg border border-ink-700/70 bg-ink-850/80 p-3">
+    <div v-if="isPlatformSuperAdmin" class="mt-4 rounded-lg border border-ink-700/70 bg-ink-850/80 p-3">
+      <div class="label mb-1.5">Platform control plane</div>
+      <div class="text-[10.5px] leading-relaxed text-slate-300">Tenant administration only · no broker or trading access</div>
+    </div>
+    <div v-else class="mt-4 rounded-lg border border-ink-700/70 bg-ink-850/80 p-3">
       <div class="label mb-1.5">Connection</div>
       <div class="flex items-center gap-2 text-[11.5px]">
         <span class="h-1.5 w-1.5 rounded-full" :class="state.connected ? 'bg-up' : 'bg-amber-400'" />
@@ -29,18 +33,19 @@
         <span>feed</span><span class="num">{{ state.live?.feed || '—' }}</span>
       </div>
     </div>
-    <div class="mt-3 rounded-lg border border-amber-400/20 bg-amber-400/5 p-3 text-[10.5px] leading-relaxed text-amber-200/80">
+    <div v-if="!isPlatformSuperAdmin" class="mt-3 rounded-lg border border-amber-400/20 bg-amber-400/5 p-3 text-[10.5px] leading-relaxed text-amber-200/80">
       Demo / paper account. ตรวจสอบสถานะทางกฎหมายของโบรกเกอร์ก่อนใช้เงินจริง
     </div>
   </aside>
 </template>
 
 <script setup>
+import { computed } from 'vue'
 import { state } from '../lib/store'
 
 const icon = (path) => `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" class="h-4 w-4">${path}</svg>`
 
-const nav = [
+const navItems = [
   { to: '/', label: 'Terminal', badge: 'live', icon: icon('<path d="M3 17l5-6 4 3 5-7 4 4"/><path d="M3 21h18"/>') },
   { to: '/forecast', label: 'AI Forecast', icon: icon('<path d="M4 19V5"/><path d="M4 15c3 0 4-8 8-8s5 6 8 6"/><path d="M16 19h4"/>') },
   { to: '/zones', label: 'Zones S/R', icon: icon('<path d="M4 7h16M4 12h16M4 17h16"/>') },
@@ -51,4 +56,8 @@ const nav = [
   { to: '/brokers', label: 'Brokers', icon: icon('<path d="M3 10h18M5 10V6l7-3 7 3v4"/><path d="M5 10v9h14v-9"/>') },
   { to: '/system', label: 'System', icon: icon('<circle cx="12" cy="12" r="3"/><path d="M12 3v3m0 12v3M3 12h3m12 0h3M5.6 5.6l2.1 2.1m8.6 8.6l2.1 2.1m0-12.8l-2.1 2.1M7.7 16.3l-2.1 2.1"/>') },
 ]
+const isPlatformSuperAdmin = computed(() => state.user?.platform_role === 'super_admin')
+const nav = computed(() => isPlatformSuperAdmin.value
+  ? navItems.filter((item) => item.to === '/system')
+  : navItems)
 </script>
