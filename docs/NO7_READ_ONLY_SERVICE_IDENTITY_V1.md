@@ -76,6 +76,10 @@ Keep the feature disabled until a separate reviewed change supplies and validate
    credentials, certificate material and tokens never appear in responses, logs or
    task events.
 
+The operator preparation and acceptance sequence is documented in
+[`NO7_SERVICE_IDENTITY_PROVISIONING_RUNBOOK.md`](NO7_SERVICE_IDENTITY_PROVISIONING_RUNBOOK.md).
+That runbook is also a draft; it does not count as provisioning evidence.
+
 No broker connection, MT5 action, account mutation or live order is an authentication
 acceptance test. A read-only integration must not influence the deterministic risk or
 execution engines.
