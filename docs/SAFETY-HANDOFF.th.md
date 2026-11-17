@@ -5,7 +5,7 @@
 - ผู้ใช้รายงานผล `10 passed, 1 failed, 1 warning`; `tenant_missing` ได้ close `1011` แทน `4403`.
 - Trace ไปยัง test double: branch `else` ตั้ง DB query ทั้งหมดให้ throw offline หลังส่งเฟรมแรก แม้ test เป็น tenant missing; แยกกรณี `db` ออกจาก tenant missing. `_authority()` จับ tenant-query exception และ fail closed ด้วย `1011`; tenant missing/inactive คง `4403`.
 - การรันซ้ำผ่าน terminal tool ไม่คืนผล/exit ที่สังเกตได้ จึงยังไม่ยืนยัน GREEN. ห้ามอ้างว่าชุดนี้ผ่าน; รันจาก shell ปกติและเก็บ exit code จากคำสั่งที่ผู้ใช้ระบุ.
-- Worktree อยู่บน `integration/unified-tradeai`, มี staged changes เดิมในส่วนอื่นและ WebSocket edits เป็น unstaged. ไม่เปลี่ยน index และไม่ commit/push/reset/abort/pop stash. ไม่มี Redis production/MT5 execution.
+- Worktree อยู่บน `integration/unified-Ai-Trading-Pro`, มี staged changes เดิมในส่วนอื่นและ WebSocket edits เป็น unstaged. ไม่เปลี่ยน index และไม่ commit/push/reset/abort/pop stash. ไม่มี Redis production/MT5 execution.
 - H168: snippet จากผู้ใช้ยืนยัน indentation error ของ `elif change == "db"`; แก้เป็น sibling branch ของ `tenant_disabled`. `py_compile` และ pytest ถูก terminal tool ขัดจังหวะก่อนมีผลสังเกตได้; focused run ยัง pending.
 - Next: ยืนยัน focused WebSocket test → เมื่อผ่านให้รัน authentication/tenant/related WebSocket suites → ตรวจ diff/staged files โดยคง staged changes เดิม.
 
@@ -20,7 +20,7 @@
 ## H161 — 8 พฤศจิกายน 2026: Architecture browser-check retry
 
 - ทวน README, Progress candidate/receipts และ H146 contract draft ก่อนเลือกงานถัดไป; H146 ยังรอการตัดสินใจจากผู้รับผิดชอบ จึงยังไม่เขียน implementation/tests ใหม่.
-- ลอง Archify browser-check ซ้ำบน Architecture HTML โดยใช้ output evidence directory แยก `review-h161` และ `--require-provenance`; provenance/output path ผ่านไปถึง Chrome startup แต่ browser-check ล้ม: `Chrome DevTools write pipe failed: stream closed`, process ยัง running, ได้ 0 bytes ทาง read pipe. ไม่มี screenshot หรือ visual review; บันทึก receipt ที่ `.archify/architecture-tradeai-20261112/review-h161/architecture-tradeai.browser-check.json` และ log/exit ที่ `storage/local-dev/qa/safety/h161-architecture-browser-check.*`.
+- ลอง Archify browser-check ซ้ำบน Architecture HTML โดยใช้ output evidence directory แยก `review-h161` และ `--require-provenance`; provenance/output path ผ่านไปถึง Chrome startup แต่ browser-check ล้ม: `Chrome DevTools write pipe failed: stream closed`, process ยัง running, ได้ 0 bytes ทาง read pipe. ไม่มี screenshot หรือ visual review; บันทึก receipt ที่ `.archify/architecture-Ai-Trading-Pro-20261112/review-h161/architecture-Ai-Trading-Pro.browser-check.json` และ log/exit ที่ `storage/local-dev/qa/safety/h161-architecture-browser-check.*`.
 - Architecture candidate/HTML ไม่เปลี่ยนในรอบนี้; คง source pin commit `098a8f87bd3012de16c08a1ee6240ecc91591591`. README ปรับข้อความให้แยก artifact verification จาก browser acceptance.
 - ทดสอบซ้ำ `tests/test_dataset_provenance.py`: 25 passed, exit 0 (tests เดิม ไม่ใช่ H146 matrix). Project Progress เดิม H160 finalize ผ่าน `validate/deliver/check`; จะ finalize ใหม่หลังบันทึก H161.
 - ถัดไป: ลอง browser-check จาก non-elevated PowerShell ที่เปิดตามปกติ (คำแนะนำจาก error); ทำ H146 policy review และ regression RED หลังมีการยืนยัน; คง Redis/VM/MT5/crash/execution acceptance เป็น not tested.
@@ -42,7 +42,7 @@
 ## H159 — 12 พฤศจิกายน 2026: เอกสาร/Architecture ต่อเนื่อง
 
 - README ภาษาไทยเพิ่มภาพ flow, ขั้นตอน local Windows setup, CSV import, dashboard usage และข้อควรระวัง; Mermaid เป็นแหล่งแก้ไขได้ ส่วน Archify HTML แสดงภาพ architecture แบบ As-is.
-- Git identity ที่ตรวจได้: HEAD `098a8f87bd3012de16c08a1ee6240ecc91591591`, origin `https://github.com/danaikointa-maker/TradeAi.git`. มี uncommitted documentation/artifact changes; diagram source evidence อ้าง committed HEAD เท่านั้น.
+- Git identity ที่ตรวจได้: HEAD `098a8f87bd3012de16c08a1ee6240ecc91591591`, origin `https://github.com/danaikointa-maker/Ai-Trading-Pro.git`. มี uncommitted documentation/artifact changes; diagram source evidence อ้าง committed HEAD เท่านั้น.
 - Architecture candidate pin ตรง HEAD; validate/deliver/check ผ่านและ provenance current. `finalize` overall ยัง fail ที่ browser-check: ครั้งแรกชน evidence path เก่า; retry แยก out-dir แล้ว Chrome DevTools pipe ปิดก่อน inspection. Visual review ยังไม่ทำ; README ระบุสถานะตามนี้.
 - H146 source audit: `import_candles` อ่าน bytes หนึ่งครั้งแล้ว parse/hash; ปฏิเสธ destination ที่มีอยู่ก่อนอ่าน source; CSV และ sidecar สร้างแบบ exclusive แยกไฟล์. ขอบเขต concurrency, incomplete pair recovery, cancellation และ external source mutation ยังไม่กำหนด/ทดสอบ; ไม่มี runtime code/test changes ในรอบนี้.
 - H155 importer/API/Vite results เป็นหลักฐานรอบก่อน ไม่ได้ rerun ใน H159. Redis/VM/MT5/crash/execution acceptance ยังไม่ได้ทำ.
@@ -1356,7 +1356,7 @@ NO7_ALLOW_FULL_AUTO=false
 
 - ปรับ `README.md` เพิ่มคู่มือไทย: ภาพระบบ, flow, install/local use, dashboard, ข้อจำกัด และลิงก์เอกสารเดิม
 - Architecture candidate มี 12 components, 13 connections, 3 views พร้อม source line references; เป็น As-is source view ไม่ใช่ deployment topology
-- HTML `architecture-tradeai.html` ผ่าน validate/deliver/check แบบ showcase (9/9; 0 warning/error), 860819 bytes, SHA-256 `98061547468bde15a1a09f6b919405efaad64f98af9bd82fbda879198b3dcebf`
+- HTML `architecture-Ai-Trading-Pro.html` ผ่าน validate/deliver/check แบบ showcase (9/9; 0 warning/error), 860819 bytes, SHA-256 `98061547468bde15a1a09f6b919405efaad64f98af9bd82fbda879198b3dcebf`
 - Browser-check ไม่ผ่าน: Chrome DevTools pipe ปิดก่อนตรวจ viewport. ไม่อ้าง visual/browser acceptance
 - Progress candidate/HTML re-render แล้วด้วย profile `standard`: validate/deliver/check ผ่าน; HTML 957282 bytes, SHA-256 `2070e81e0a4b147a56438abe5fa8352dec14a530b58379b396400610dece3233`; browser-check not-run
 - H147 pending: full API จบ status `3221225786` และ browser interaction ไม่มีหลักฐาน; H146 open: importer lifecycle/source mutation ยังไม่เริ่มแก้
