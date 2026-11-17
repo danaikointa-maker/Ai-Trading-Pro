@@ -1,5 +1,14 @@
 # งานความปลอดภัย local และขั้นตอนส่งต่อ MT5
 
+## H167 — 12 พฤศจิกายน 2026: WebSocket reauthorization regression
+
+- ผู้ใช้รายงานผล `10 passed, 1 failed, 1 warning`; `tenant_missing` ได้ close `1011` แทน `4403`.
+- Trace ไปยัง test double: branch `else` ตั้ง DB query ทั้งหมดให้ throw offline หลังส่งเฟรมแรก แม้ test เป็น tenant missing; แยกกรณี `db` ออกจาก tenant missing. `_authority()` จับ tenant-query exception และ fail closed ด้วย `1011`; tenant missing/inactive คง `4403`.
+- การรันซ้ำผ่าน terminal tool ไม่คืนผล/exit ที่สังเกตได้ จึงยังไม่ยืนยัน GREEN. ห้ามอ้างว่าชุดนี้ผ่าน; รันจาก shell ปกติและเก็บ exit code จากคำสั่งที่ผู้ใช้ระบุ.
+- Worktree อยู่บน `integration/unified-tradeai`, มี staged changes เดิมในส่วนอื่นและ WebSocket edits เป็น unstaged. ไม่เปลี่ยน index และไม่ commit/push/reset/abort/pop stash. ไม่มี Redis production/MT5 execution.
+- H168: snippet จากผู้ใช้ยืนยัน indentation error ของ `elif change == "db"`; แก้เป็น sibling branch ของ `tenant_disabled`. `py_compile` และ pytest ถูก terminal tool ขัดจังหวะก่อนมีผลสังเกตได้; focused run ยัง pending.
+- Next: ยืนยัน focused WebSocket test → เมื่อผ่านให้รัน authentication/tenant/related WebSocket suites → ตรวจ diff/staged files โดยคง staged changes เดิม.
+
 ## H162 — 12 พฤศจิกายน 2026: ยืนยัน Git และลำดับงานค้าง
 
 - ยืนยันสดว่า HEAD คือ `a62b012d95b9c7ce7c5a09822994f286e7952fb4` (`chore: update Thai docs and architecture progress H161`) และ `git status --short` ว่าง; commit H161 สำเร็จ.

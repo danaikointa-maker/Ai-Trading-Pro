@@ -4,6 +4,15 @@
 
 ## H166 — 12 พฤศจิกายน 2026: multi-account policy และ implementation gap
 
+## H167 — 12 พฤศจิกายน 2026: WebSocket reauthorization fail-closed regression
+
+- ปรับ regression fixtures ให้แยก user/tenant query โดย tenant active, user `tenant_id=default` และไม่มี platform super-admin role. เพิ่ม tenant disabled/missing/query failure cases; แก้ test double ให้กรณี tenant missing ไม่ทำให้ user query หายตามไปด้วย.
+- `services/api_gateway/routes/ws.py::_authority()` จับ exception จาก tenant query และคืน close code 1011; tenant missing/disabled ยังคง 4403. `live_socket()` ปิดก่อนส่งเฟรมเมื่อ authority query ล้ม และ `finally` คืน quota lease.
+- Verification: ผู้ใช้ให้ผล pytest 10 passed, 1 failed, 1 warning (`tenant_missing` ปิด 1011 แทน 4403). ตรวจพบ test branch ทั่วไปตั้ง side effect DB offline หลังเฟรมแรก แม้กรณี tenant missing; แก้ test double ให้แยกเหตุการณ์ db กับ tenant_missing แล้ว แต่การรันซ้ำใน tool ไม่ได้คืน output ที่สังเกตได้; จึงยังไม่มีผลยืนยันหลังแก้.
+- H168 correction: ผู้ใช้ส่ง snippet ยืนยันว่า `elif change == "db"` ถูก indent ผิดใต้ `tenant_disabled`; แก้ indent ผ่าน patch. Tool ไม่คืนผล `py_compile`/pytest ที่ยืนยันได้ จึงคงสถานะ verification pending.
+- Worktree มี staged changes เดิมในไฟล์อื่น; ไฟล์ WebSocket ทั้งสองเป็น unstaged. ไม่ stage/commit/push/reset/abort/pop stash; ไม่แตะ Redis production หรือ MT5.
+- Next: รัน `\.venv\Scripts\python.exe -m pytest -q -p no:cacheprovider tests/test_ws_reauthorization.py` ใน shell ที่ยืนยัน exit code; เมื่อผ่านให้รัน authentication/tenant/websocket suites แล้วตรวจ staged/index diff.
+
 - Policy target: control plane (tenant/identity/RBAC/assignment/audit) แยกจาก trading plane ที่แยก worker/risk/exposure/kill-switch/idempotency/reconciliation ต่อบัญชี; มี system-wide kill switch และไม่ mirror คำสั่งข้ามบัญชีโดย default.
 - Owner ควบคุมบัญชีได้ก่อน assign; หลัง assign เป็น progress-only และผู้รับมอบหมายควบคุมตาม role. Transfer/return ต้อง privileged, audited, ตรวจ worker state ก่อนคืนสิทธิ์. Super admin จัดการ tenant แต่ไม่มี secret/trading access.
 - Demo/Live ของ broker เดียวกันต้องแยก account records และ credentials. Broker credentials ห้ามอยู่ใน `.env`, YAML, source, command line หรือ logs; vault key เป็นคนละ secret และอยู่นอก repository.

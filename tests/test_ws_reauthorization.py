@@ -9,12 +9,29 @@ from services.api_gateway.routes import ws as routes
 
 
 @pytest.mark.parametrize("change,code", [("disabled", 4403), ("deleted", 4401),
-                                        ("expired", 4401), ("role", 4403), ("db", 1011)])
+                                        ("expired", 4401), ("role", 4403), ("db", 1011),
+                                        ("tenant_disabled", 4403), ("tenant_missing", 4403),
+                                        ("tenant_db", 1011)])
 def test_stream_stops_after_authority_changes(monkeypatch, change, code):
-    row = {"email": "test@example.invalid", "role": "admin", "active": 1}
+    row = {"email": "test@example.invalid", "role": "admin", "active": 1,
+           "tenant_id": "default", "platform_role": None}
+    tenant = {"status": "active"}
+    changed = {"value": False}
     db = Mock()
     db.workspace_id = "local"
-    db.query_one.side_effect = lambda *_: row
+
+    def query_one(sql, _params=()):
+        if "FROM users" in sql:
+            return row
+        if "FROM tenants" in sql:
+            if change == "tenant_missing" and changed["value"]:
+                return None
+            if change == "tenant_db" and changed["value"]:
+                raise RuntimeError("database offline")
+            return tenant
+        raise AssertionError(f"unexpected SQL: {sql}")
+
+    db.query_one.side_effect = query_one
     quota = Mock()
     quota.acquire.return_value = SimpleNamespace(expires_at=9999999999)
     claims = {"sub": row["email"], "role": "admin", "exp": 9999999999}
@@ -41,6 +58,7 @@ def test_stream_stops_after_authority_changes(monkeypatch, change, code):
         async def send_text(self, _):
             self.frames += 1
             assert self.frames == 1, "a revoked session received another frame"
+            changed["value"] = True
             if change == "disabled":
                 row["active"] = 0
             elif change == "deleted":
@@ -49,8 +67,10 @@ def test_stream_stops_after_authority_changes(monkeypatch, change, code):
                 claims.clear()
             elif change == "role":
                 row["role"] = "viewer"
-            else:
-                db.query_one.side_effect = RuntimeError("database offline")
+            elif change == "tenant_disabled":
+                tenant["status"] = "disabled"
+            elif change == "db":
+                db.query_one.side_effect = lambda *_: (_ for _ in ()).throw(RuntimeError("database offline"))
 
     socket = Socket()
     asyncio.run(routes.live_socket(socket, "test-token"))
@@ -66,9 +86,16 @@ def test_accept_failure_releases_reserved_lease(monkeypatch):
     monkeypatch.setattr(routes, "decode_token", lambda *_: {"sub": "test", "exp": 9999999999})
     quota = Mock()
     quota.acquire.return_value = SimpleNamespace(expires_at=9999999999)
+    def query_one(sql, _params=()):
+        if "FROM users" in sql:
+            return {"email": "test", "role": "viewer", "active": 1,
+                    "tenant_id": "default", "platform_role": None}
+        if "FROM tenants" in sql:
+            return {"status": "active"}
+        raise AssertionError(f"unexpected SQL: {sql}")
+
     socket = SimpleNamespace(app=SimpleNamespace(state=SimpleNamespace(ws_quota=quota,
-        runtime=SimpleNamespace(db=SimpleNamespace(workspace_id="local", query_one=lambda *_: {
-            "email": "test", "role": "viewer", "active": 1})))),
+        runtime=SimpleNamespace(db=SimpleNamespace(workspace_id="local", query_one=query_one)))),
         accept=AsyncMock(side_effect=RuntimeError("disconnect")), close=AsyncMock())
     asyncio.run(routes.live_socket(socket, "token"))
     quota.release.assert_called_once_with(quota.acquire.return_value)
