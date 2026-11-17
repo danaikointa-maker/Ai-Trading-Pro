@@ -3,7 +3,7 @@
 Status convention: `[ ]` pending; `[x]` tested pass; `[!]` blocked. A phase is DONE only if evidence exists: commands/results/screenshots, versions, acceptance gates and rollback.
 
 ## Phase 00 — Safety and baseline (DO FIRST)
-- [ ] Freeze changes in TradeAi, `git status`, branch `infra/unified-v3`, record Git commit SHA and config inventory.
+- [ ] Freeze changes in Ai-Trading-Pro, `git status`, branch `infra/unified-v3`, record Git commit SHA and config inventory.
 - [ ] Inspect `qm list`, `qm config 100/200`, `pvesm status`, `lsblk`, system logs and guest health. Preserve current VM configs.
 - [ ] Confirm External Seagate is OUT OF BACKUP rotation due hardware I/O errors.
 - [ ] Obtain healthy external backup, test BOTH VM backups and isolated restore; NO partition/LVM or VM disk migration before pass.
@@ -11,7 +11,7 @@ Status convention: `[ ]` pending; `[x]` tested pass; `[!]` blocked. A phase is D
 **Gate G0:** healthy recovery path proven; machine inventory documented. Otherwise proceed only with non-destructive development/audit.
 
 ## Phase 01 — Dev PC and repo
-- [ ] `git clone https://github.com/danaikointa-maker/TradeAi.git` if not already present; never overwrite existing worktree.
+- [ ] `git clone https://github.com/danaikointa-maker/Ai-Trading-Pro.git` if not already present; never overwrite existing worktree.
 - [ ] Install VS Code, Git, Python compatible with requirements, Node LTS, SSH client; pin supported versions.
 - [ ] Run `scripts/check-dev.ps1` and save evidence outside repo secrets.
 - [ ] Create Python venv, install requirements in isolation; `python -m pytest tests -q` baseline.
