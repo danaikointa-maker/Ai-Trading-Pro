@@ -1,7 +1,7 @@
-# TRADEAI UNIFIED PLATFORM — AGENT CONTRACT V2
+# Ai-Trading-Pro UNIFIED PLATFORM — AGENT CONTRACT V2
 
 ## Source of truth
-Use https://github.com/danaikointa-maker/TradeAi as the ONLY main application repository. Read its README.md, docs/ARCHITECTURE.md, docs/RUNBOOK.md, docs/LIMITATIONS.md, config/app.yaml, config/brokers.yaml, config/risk.yaml, and this file before changing code. Preserve existing Python FastAPI, Vue 3, MQL5 bridge, broker adapters, and tests. Do NOT scaffold Laravel or reimplement existing modules without an approved migration.
+Use https://github.com/danaikointa-maker/Ai-Trading-Pro as the ONLY main application repository. Read its README.md, docs/ARCHITECTURE.md, docs/RUNBOOK.md, docs/LIMITATIONS.md, config/app.yaml, config/brokers.yaml, config/risk.yaml, and this file before changing code. Preserve existing Python FastAPI, Vue 3, MQL5 bridge, broker adapters, and tests. Do NOT scaffold Laravel or reimplement existing modules without an approved migration.
 
 ## Host roles
 - Developer Windows PC: write/test/review/commit/deploy. Never store live trading keys in git or agent prompts.
@@ -36,5 +36,5 @@ Every delivered phase includes actual command outputs, installed versions, open 
 
 
 ## Master v3 precedence (2026-11-08)
-This pack supersedes *paths and role assumptions* in earlier blueprints. **Source on DEV PC: `C:\workspace\TradeAi`**. **Windows VM200 deployed runtime: `C:\app\app\No7-Ai-Trading-Pro`**. Ubuntu VM100 `/opt/no7-ai-trading-pro`. Proxmox host `192.168.1.254`. Other VM IPs are unknown until verified.
-Before changing files inspect existing `TradeAi` code, history, and tests; merge AGENTS rules, do not overwrite them blindly. Follow `docs/06-DATA-CONTRACTS.md` through `docs/12-RELEASE-AND-ACCEPTANCE.md`. No live orders or automatic promotion. Dedicated Windows execution guard, one account one active executor, mandatory broker reconciliation. Preserve current FastAPI/Vue stack; add PostgreSQL later by planned migration. Do not use failed Seagate 3TB for backup.
+This pack supersedes *paths and role assumptions* in earlier blueprints. **Source on DEV PC: `C:\workspace\Ai-Trading-Pro`**. **Windows VM200 deployed runtime: `C:\app\app\No7-Ai-Trading-Pro`**. Ubuntu VM100 `/opt/no7-ai-trading-pro`. Proxmox host `192.168.1.254`. Other VM IPs are unknown until verified.
+Before changing files inspect existing `Ai-Trading-Pro` code, history, and tests; merge AGENTS rules, do not overwrite them blindly. Follow `docs/06-DATA-CONTRACTS.md` through `docs/12-RELEASE-AND-ACCEPTANCE.md`. No live orders or automatic promotion. Dedicated Windows execution guard, one account one active executor, mandatory broker reconciliation. Preserve current FastAPI/Vue stack; add PostgreSQL later by planned migration. Do not use failed Seagate 3TB for backup.
