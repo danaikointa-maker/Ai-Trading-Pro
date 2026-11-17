@@ -15,7 +15,7 @@
 คัดลอกไฟล์ต้นฉบับทั้ง 28 ไฟล์โดยคงชื่อ โครงสร้าง และเนื้อหาเดิมจาก:
 
 ```text
-C:\Users\danai\Downloads\TradeAi-Professional-Master-Blueprint-v3\TradeAi-Professional-Master-Blueprint
+C:\Users\danai\Downloads\Ai-Trading-Pro-Professional-Master-Blueprint-v3\Ai-Trading-Pro-Professional-Master-Blueprint
 ```
 
 สำเนาครอบคลุม master document, README, AGENTS, เอกสาร 00–12,
@@ -30,7 +30,7 @@ config ตัวอย่าง, check/preflight scripts และ templates ไ
 - โฟลเดอร์นี้เป็น snapshot อ้างอิง ไม่ใช่หลักฐานว่าบริการหรือ VM ติดตั้งแล้ว
 - ไม่คัดลอกทับ README, AGENTS, config หรือ scripts ที่รากโปรเจกต์
 - `AGENTS.md` ภายในชุดเป็นเอกสารต้นฉบับ ไม่ได้ย้ายมาเป็นกฎที่รากโปรเจกต์
-- พาธ DEV ในต้นฉบับ `C:\workspace\TradeAi` เป็นตัวอย่างที่ไม่ตรงเครื่องนี้
+- พาธ DEV ในต้นฉบับ `C:\workspace\Ai-Trading-Pro` เป็นตัวอย่างที่ไม่ตรงเครื่องนี้
   พาธจริงคือ `C:\workspace\Ai-Trading-Pro` ไม่ย้ายหรือ clone ซ้ำตามตัวอย่าง
 - IP/OS/ทรัพยากร/สิทธิ์ของ VM ต้องตรวจจริงก่อนใช้; ค่า config เป็นตัวอย่าง
 - อย่ารัน scripts หรือนำ config ไปเปิดใช้โดยอัตโนมัติ ต้องตรวจเทียบ implementation
