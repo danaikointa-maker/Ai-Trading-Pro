@@ -6,7 +6,7 @@
 A robust, auditable **AI-assisted trading research and DEMO execution platform**, not a system guaranteeing profit. The assistant analyses markets, evaluates strategies, documents wins/losses, and recommends changes, subject to risk veto and evidence-based release gates.
 
 ## One architecture, three roles
-1. Dev PC `C:\workspace\TradeAi`: edit/review source, develop/tests, Git/CI, SSH deploy. No broker secrets in repository.
+1. Dev PC `C:\workspace\Ai-Trading-Pro`: edit/review source, develop/tests, Git/CI, SSH deploy. No broker secrets in repository.
 2. Ubuntu VM100 `/opt/no7-ai-trading-pro`: Vue+FastAPI product, research services, quant, models, database, queue, user data/journal/reporting, AI agent supervisor.
 3. Windows VM200 `C:\app\app\No7-Ai-Trading-Pro`: MT5 Connext Demo, compiled EA and/or scoped Python read-only connector, exclusive execution guard and broker reconciliation.
 Proxmox host `192.168.1.254` provides virtualization and storage only. VM addresses unconfirmed until observed.
@@ -28,7 +28,7 @@ DEV SOURCE -> tested release artifact -> Ubuntu API + research -> secure authent
 # 01 — Unified Architecture and Integration Contract
 
 ## 1. Physical and logical topology
-- Development PC: `C:\workspace\TradeAi`, Git clone + VS Code + tests + Release tooling. SSH to VM100/VM200; Proxmox management limited.
+- Development PC: `C:\workspace\Ai-Trading-Pro`, Git clone + VS Code + tests + Release tooling. SSH to VM100/VM200; Proxmox management limited.
 - Dell OptiPlex 7040, 32GiB, Proxmox `192.168.1.254` management node only.
 - VM100 Ubuntu 16GiB/2vCPU: app runtime at `/opt/no7-ai-trading-pro`. FastAPI serves Vue static SPA and JSON/WS API; Python analysis, risk and inference; SQLite initially; optional PostgreSQL later. Trading leader process single-worker initially. Background heavy jobs throttle and pause on load.
 - VM200 Windows 8GiB/2vCPU: `C:\app\app\No7-Ai-Trading-Pro` selective checkout; MT5/MetaEditor, outbound EA bridge, optional Python diagnostic probe. Broker credentials remain in terminal Windows account.
@@ -36,7 +36,7 @@ DEV SOURCE -> tested release artifact -> Ubuntu API + research -> secure authent
 - Prefer separate Proxmox bridge/VLAN for VM-to-VM trading and VPN for management. Use LAN+host firewalls until VLAN available. Never expose Proxmox UI/SSH, MT5, DB or Redis publicly.
 
 ## 2. Shared components without duplicating runtime
-- Git/source + build artifacts: GitHub TradeAi is canonical, build from tagged commit.
+- Git/source + build artifacts: GitHub Ai-Trading-Pro is canonical, build from tagged commit.
 - Core config: `config/app.yaml`, `config/brokers.yaml`, `config/risk.yaml`, `.env` secrets; add `config/deploy/` only for non-secret host overrides. Path from `NO7_ROOT`.
 - Python types: Pydantic `packages/shared_schemas`, schema version; use REST JSON + WS event contract. Clients reject unknown critical schema versions.
 - Data: UTC timestamps + monotonic sequence where available; `source` enum simulate/replay/broker, broker_id, account_id, symbol_original, symbol_canonical, tick_size, decimals, freshness.
@@ -83,7 +83,7 @@ DEV SOURCE -> tested release artifact -> Ubuntu API + research -> secure authent
 Status convention: `[ ]` pending; `[x]` tested pass; `[!]` blocked. A phase is DONE only if evidence exists: commands/results/screenshots, versions, acceptance gates and rollback.
 
 ## Phase 00 — Safety and baseline (DO FIRST)
-- [ ] Freeze changes in TradeAi, `git status`, branch `infra/unified-v3`, record Git commit SHA and config inventory.
+- [ ] Freeze changes in Ai-Trading-Pro, `git status`, branch `infra/unified-v3`, record Git commit SHA and config inventory.
 - [ ] Inspect `qm list`, `qm config 100/200`, `pvesm status`, `lsblk`, system logs and guest health. Preserve current VM configs.
 - [ ] Confirm External Seagate is OUT OF BACKUP rotation due hardware I/O errors.
 - [ ] Obtain healthy external backup, test BOTH VM backups and isolated restore; NO partition/LVM or VM disk migration before pass.
@@ -91,7 +91,7 @@ Status convention: `[ ]` pending; `[x]` tested pass; `[!]` blocked. A phase is D
 **Gate G0:** healthy recovery path proven; machine inventory documented. Otherwise proceed only with non-destructive development/audit.
 
 ## Phase 01 — Dev PC and repo
-- [ ] `git clone https://github.com/danaikointa-maker/TradeAi.git` if not already present; never overwrite existing worktree.
+- [ ] `git clone https://github.com/danaikointa-maker/Ai-Trading-Pro.git` if not already present; never overwrite existing worktree.
 - [ ] Install VS Code, Git, Python compatible with requirements, Node LTS, SSH client; pin supported versions.
 - [ ] Run `scripts/check-dev.ps1` and save evidence outside repo secrets.
 - [ ] Create Python venv, install requirements in isolation; `python -m pytest tests -q` baseline.
@@ -379,7 +379,7 @@ Alert on broker/bridge disconnect, quotes > freshness limit, no ack, ambiguous o
 
 | Node | Source / runtime | Deploy | Prerequisites | Must NOT do |
 |---|---|---|---|---|
-| DEV PC | `C:\workspace\TradeAi` | Git, VS Code, Python venv, Node LTS, test, SSH, release packaging | verify real OS/versions | live broker secrets or root auto-approve |
+| DEV PC | `C:\workspace\Ai-Trading-Pro` | Git, VS Code, Python venv, Node LTS, test, SSH, release packaging | verify real OS/versions | live broker secrets or root auto-approve |
 | Proxmox | host `192.168.1.254` | VM, bridge/vLAN, backup, alerts, QEMU agent | verify storage, SMART and backup | business services / Docker |
 | Ubuntu VM100 | `/opt/no7-ai-trading-pro` | FastAPI, Vue build/static, Nginx proxy/TLS, quant/risk, PostgreSQL target, optional Redis, low-priority AI workers | secure SSH, clock sync, Python deps, disk, backup | local MT5 Python terminal adapter or broker secrets in Git |
 | Windows VM200 | `C:\app\app\No7-Ai-Trading-Pro` | Connext Demo terminal, MetaEditor, `bridge/No7BridgeEA.mq5`, optional diagnostic `MetaTrader5` Python, Windows defender, Guest Agent, broker reconciliation | patched supported OS, real IP, TLS trust, Windows account | quant/model training, central DB or exposing order listener |
@@ -402,7 +402,7 @@ Alert on broker/bridge disconnect, quotes > freshness limit, no ack, ambiguous o
 ## Capacity & paths
 - VM100 assumed 16GB/2 vCPU, VM200 8GB/2 vCPU; check actual `qm config` and RAM headroom. CPU-only training can starve inference; schedule/limit training and LLM.
 - Keep source and data separate; DB/images/model snapshots on backed-up managed storage; avoid placing large runtime data inside Git checkout or VM boot image without backup policy.
-- VM200 runtime path explicitly `C:\app\app\No7-Ai-Trading-Pro`, DEV source explicitly `C:\workspace\TradeAi`.
+- VM200 runtime path explicitly `C:\app\app\No7-Ai-Trading-Pro`, DEV source explicitly `C:\workspace\Ai-Trading-Pro`.
 
 
 ---
