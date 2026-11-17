@@ -3,8 +3,8 @@
 **Baseline date:** 2026-11-08 | **Mode:** DEMO-first, fail-closed | **Status:** design/install pack, NOT deployed or verified on VMs.
 
 ## Source of truth
-- Existing repository: https://github.com/danaikointa-maker/TradeAi, branch `main`; do not scaffold a replacement.
-- **Dev PC source:** `C:\workspace\TradeAi` (Git workspace and VS Code).
+- Existing repository: https://github.com/danaikointa-maker/Ai-Trading-Pro, branch `main`; do not scaffold a replacement.
+- **Dev PC source:** `C:\workspace\Ai-Trading-Pro` (Git workspace and VS Code).
 - **Windows VM 200 runtime:** `C:\app\app\No7-Ai-Trading-Pro` (MT5 bridge/EA release, not full app).
 - **Ubuntu VM 100 runtime:** `/opt/no7-ai-trading-pro` (FastAPI, Vue build, services, DB, AI workers).
 - **Proxmox host:** `192.168.1.254`, hypervisor only. IPs for VMs MUST be discovered and entered in the uncommitted inventory.
@@ -13,7 +13,7 @@
 1. Read `AGENTS.md` and `docs/00-EXECUTIVE-SUMMARY.md` through `docs/12-RELEASE-AND-ACCEPTANCE.md`.
 2. Snapshot/commit source changes, work on `infra/unified-v3` feature branch. Before copying, merge with any existing AGENTS.md; do not overwrite app files.
 3. Run read-only audits; capture OS, IP, VM state, storage, backup, MT5 account type, Python/Node versions.
-4. Check that TradeAi unit tests and Vue build work without installing destructive dependencies.
+4. Check that Ai-Trading-Pro unit tests and Vue build work without installing destructive dependencies.
 5. Complete ordered checklist in `docs/02-INSTALL-CHECKLIST.md`, log evidence in `docs/12-RELEASE-AND-ACCEPTANCE.md`.
 
 ## Repository components already observed on GitHub
