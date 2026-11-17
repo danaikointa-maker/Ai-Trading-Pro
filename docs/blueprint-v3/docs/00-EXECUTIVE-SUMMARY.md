@@ -4,7 +4,7 @@
 A robust, auditable **AI-assisted trading research and DEMO execution platform**, not a system guaranteeing profit. The assistant analyses markets, evaluates strategies, documents wins/losses, and recommends changes, subject to risk veto and evidence-based release gates.
 
 ## One architecture, three roles
-1. Dev PC `C:\workspace\TradeAi`: edit/review source, develop/tests, Git/CI, SSH deploy. No broker secrets in repository.
+1. Dev PC `C:\workspace\Ai-Trading-Pro`: edit/review source, develop/tests, Git/CI, SSH deploy. No broker secrets in repository.
 2. Ubuntu VM100 `/opt/no7-ai-trading-pro`: Vue+FastAPI product, research services, quant, models, database, queue, user data/journal/reporting, AI agent supervisor.
 3. Windows VM200 `C:\app\app\No7-Ai-Trading-Pro`: MT5 Connext Demo, compiled EA and/or scoped Python read-only connector, exclusive execution guard and broker reconciliation.
 Proxmox host `192.168.1.254` provides virtualization and storage only. VM addresses unconfirmed until observed.
