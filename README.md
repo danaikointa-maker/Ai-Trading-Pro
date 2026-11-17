@@ -393,6 +393,7 @@ Windows/local evidence runner ใช้คำสั่ง explicit Python/Node/G
 - [`docs/SAFETY-HANDOFF.th.md`](docs/SAFETY-HANDOFF.th.md) — สถานะ safety ปัจจุบันและประวัติที่แยกรอบชัดเจน
 - [`docs/LOCAL-VERIFICATION.th.md`](docs/LOCAL-VERIFICATION.th.md) — local runner, artifact exits และข้อจำกัด skips
 - [`docs/MULTI-TENANT-BROKER-PLATFORM.th.md`](docs/MULTI-TENANT-BROKER-PLATFORM.th.md) — policy และแผน target design สำหรับ tenant/team/account; มี local control-plane slice และ read-only Demo validation บางส่วน แต่ยังไม่ใช่ multi-account trading และยังไม่มี per-account order path หรือ Demo trade acceptance
+- [`docs/NO7_READ_ONLY_SERVICE_IDENTITY_V1.md`](docs/NO7_READ_ONLY_SERVICE_IDENTITY_V1.md) — disabled proposal สำหรับ No7 read-only identity, exact route/scope allowlist และ acceptance gates; ยังไม่มี runtime service auth
 
 - [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) — ชั้นต่าง ๆ และเหตุผลการออกแบบ
 - [`docs/API.md`](docs/API.md) — รายการ endpoint ที่ dashboard ใช้
