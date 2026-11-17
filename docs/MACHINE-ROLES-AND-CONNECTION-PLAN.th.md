@@ -1,4 +1,4 @@
-# TradeAi — หน้าที่เครื่องและแผนเชื่อมต่อเป็นรอบ
+# Ai-Trading-Pro — หน้าที่เครื่องและแผนเชื่อมต่อเป็นรอบ
 
 วันที่ทบทวน: 8 พฤศจิกายน 2026
 
@@ -6,9 +6,9 @@
 
 เอกสารนี้เป็นแผนประยุกต์ Blueprint v3 กับ repository ปัจจุบัน ไม่ใช่หลักฐานว่าติดตั้งหรือเชื่อม VM สำเร็จแล้ว
 
-- Source จริง: `C:\workspace\Ai-Trading-Pro` ไม่ใช่ `C:\workspace\TradeAi` ตามตัวอย่าง Blueprint ไม่ย้าย/clone ซ้ำโดยอัตโนมัติ
+- Source จริง: `C:\workspace\Ai-Trading-Pro` ไม่ใช่ `C:\workspace\Ai-Trading-Pro` ตามตัวอย่าง Blueprint ไม่ย้าย/clone ซ้ำโดยอัตโนมัติ
 - Commit ที่ตรวจ: `e25e72335600d189c7893a805b2c902b9d511e43` พร้อมงานแก้ไขที่ยังไม่ commit
-- Blueprint ต้นทาง: `C:\Users\danai\Downloads\TradeAi-Professional-Master-Blueprint-v3\TradeAi-Professional-Master-Blueprint`
+- Blueprint ต้นทาง: `C:\Users\danai\Downloads\Ai-Trading-Pro-Professional-Master-Blueprint-v3\Ai-Trading-Pro-Professional-Master-Blueprint`
 - สำเนาต้นฉบับครบชุดอยู่ในโปรเจกต์แล้ว: [Blueprint v3 และหมายเหตุนำเข้า](blueprint-v3/IMPORT-NOTES.md) ใช้ลิงก์นี้ต่อได้โดยไม่ต้องมีโฟลเดอร์ Downloads ต้นทาง
 - อ่านเอกสารหลัก README, AGENTS, เอกสาร 00–12, config ตัวอย่าง, inspection/preflight scripts และ templates แล้ว; ไม่ได้รันสคริปต์บน VM
 - รอบนี้ตรวจ source และเขียนแผนเท่านั้น ไม่เปิดพอร์ต ไม่ตั้ง SSH/TLS ไม่คัดลอก secrets ไม่ deploy และไม่ส่งออร์เดอร์
