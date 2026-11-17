@@ -1,6 +1,6 @@
 # Agent work order — copy for each change
 ## Goal / Scope
-## Existing relevant TradeAi files inspected
+## Existing relevant Ai-Trading-Pro files inspected
 ## Target VM(s), deployment path(s), API contracts
 ## Prior Git commit, baseline, backup and rollback
 ## Threat model / permissions / privacy
