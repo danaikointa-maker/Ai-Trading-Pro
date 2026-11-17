@@ -1,6 +1,6 @@
 # No7 AI Trading Pro — V1
 
-[![gate](https://github.com/danaikointa-maker/TradeAi/actions/workflows/ci.yml/badge.svg)](https://github.com/danaikointa-maker/TradeAi/actions/workflows/ci.yml)
+[![gate](https://github.com/danaikointa-maker/Ai-Trading-Pro/actions/workflows/ci.yml/badge.svg)](https://github.com/danaikointa-maker/Ai-Trading-Pro/actions/workflows/ci.yml)
 
 แพลตฟอร์มเทรดส่วนตัวแบบ **Local-First + Hybrid Quant AI + Multi-Broker**
 รวมกราฟราคาแบบ TradingView, การวิเคราะห์โครงสร้างตลาด, แนวรับ–แนวต้านแบบ confluence,
@@ -226,8 +226,8 @@ Stop the process with Ctrl+C. No main-server address or production credential
 is needed. Do not use this launcher for live trading or server deployment.
 
 The check script runs `pip check`, Ruff (`F,E9`), pytest and the dashboard build.
-In VS Code, use **Terminal > Run Task** and choose `TradeAi: Run local simulation`
-or `TradeAi: Check tests and build`. The setup task installs dependencies, so do
+In VS Code, use **Terminal > Run Task** and choose `Ai-Trading-Pro: Run local simulation`
+or `Ai-Trading-Pro: Check tests and build`. The setup task installs dependencies, so do
 not run setup while a build/check task is using `node_modules`. If port 8000 is
 already occupied by your local simulation, use that running instance rather than
 starting a second one. Stop the foreground local task with Ctrl+C before restarting.
@@ -437,7 +437,7 @@ Windows/local evidence runner ใช้คำสั่ง explicit Python/Node/G
 
 ### Architecture และ Flow (ตรวจพบจาก source)
 
-ภาพย่อด้านล่างเป็น Mermaid source ที่แก้ไขต่อได้ ผู้อ่าน Markdown ต้องใช้ตัวแสดงผลที่รองรับ Mermaid; เปิด [Architecture Flow Diagram (HTML)](.archify/architecture-tradeai-20261112/architecture-tradeai.html) สำหรับภาพ native จาก Archify
+ภาพย่อด้านล่างเป็น Mermaid source ที่แก้ไขต่อได้ ผู้อ่าน Markdown ต้องใช้ตัวแสดงผลที่รองรับ Mermaid; เปิด [Architecture Flow Diagram (HTML)](.archify/architecture-Ai-Trading-Pro-20261112/architecture-Ai-Trading-Pro.html) สำหรับภาพ native จาก Archify
 
 ```mermaid
 flowchart LR
@@ -546,7 +546,7 @@ python3 -m uvicorn services.api_gateway.app:app --host 127.0.0.1 --port 8000
 
 ### ภาพ Architecture HTML และการดูแลเอกสาร
 
-- [Architecture Flow Diagram (HTML)](.archify/architecture-tradeai-20261112/architecture-tradeai.html) — ภาพ As-is จาก source ที่ pin commit `098a8f87bd3012de16c08a1ee6240ecc91591591`; ตรวจซ้ำรอบ H161 โดยไม่เปลี่ยน source runtime. Automated artifact checks แยกจาก browser-check ซึ่งยังติด Chrome DevTools write pipe ปิด; ยังไม่มี visual review. แสดง dashboard/API/runtime, market/analysis/forecast/strategy/risk, execution/broker และ SQLite; ไม่ใช่ deployment diagram และไม่ยืนยันบริการที่กำลังเชื่อมต่อ
+- [Architecture Flow Diagram (HTML)](.archify/architecture-Ai-Trading-Pro-20261112/architecture-Ai-Trading-Pro.html) — ภาพ As-is จาก source ที่ pin commit `098a8f87bd3012de16c08a1ee6240ecc91591591`; ตรวจซ้ำรอบ H161 โดยไม่เปลี่ยน source runtime. Automated artifact checks แยกจาก browser-check ซึ่งยังติด Chrome DevTools write pipe ปิด; ยังไม่มี visual review. แสดง dashboard/API/runtime, market/analysis/forecast/strategy/risk, execution/broker และ SQLite; ไม่ใช่ deployment diagram และไม่ยืนยันบริการที่กำลังเชื่อมต่อ
 - [เปิด Project Progress (HTML)](.archify/explainer-project-progress-20261109-114911/project-progress.html) — H160 finalize `validate/deliver/check` ผ่าน; มี writing warnings 20 รายการ. H161 browser/visual review ไม่ได้ทำ.
 - ก่อนส่งงานเอกสารหรือโค้ดในแต่ละ loop ให้อัปเดต README ภาษาไทย, handoff/register, สร้าง HTML ผ่าน Archify จาก candidate, ตรวจ receipt/hash และระบุสิ่งที่ยังไม่ได้ทดสอบ; อย่าถือว่า HTML เก่าอัปเดตเอง
 
