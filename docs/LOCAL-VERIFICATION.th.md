@@ -8,7 +8,7 @@
 จาก `C:\workspace\Ai-Trading-Pro`:
 
 ```powershell
-& 'C:\workspace\Ai-Trading-Pro\.venv\Scripts\python.exe' 'C:\workspace\Ai-Trading-Pro\scripts\verify_local.py' --node 'C:\Users\danai\AppData\Local\Programs\TradeAi\node-v26.13.0-win-x64\node.exe' --git 'C:\Program Files\Git\cmd\git.exe'
+& 'C:\workspace\Ai-Trading-Pro\.venv\Scripts\python.exe' 'C:\workspace\Ai-Trading-Pro\scripts\verify_local.py' --node 'C:\Users\danai\AppData\Local\Programs\Ai-Trading-Pro\node-v26.13.0-win-x64\node.exe' --git 'C:\Program Files\Git\cmd\git.exe'
 ```
 
 หรือใช้ `C:\workspace\Ai-Trading-Pro\scripts\check-windows.ps1` ซึ่งใช้ตัวค้นหาเดิม
