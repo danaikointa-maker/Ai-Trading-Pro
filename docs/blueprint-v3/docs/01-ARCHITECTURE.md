@@ -1,7 +1,7 @@
 # 01 — Unified Architecture and Integration Contract
 
 ## 1. Physical and logical topology
-- Development PC: `C:\workspace\TradeAi`, Git clone + VS Code + tests + Release tooling. SSH to VM100/VM200; Proxmox management limited.
+- Development PC: `C:\workspace\Ai-Trading-Pro`, Git clone + VS Code + tests + Release tooling. SSH to VM100/VM200; Proxmox management limited.
 - Dell OptiPlex 7040, 32GiB, Proxmox `192.168.1.254` management node only.
 - VM100 Ubuntu 16GiB/2vCPU: app runtime at `/opt/no7-ai-trading-pro`. FastAPI serves Vue static SPA and JSON/WS API; Python analysis, risk and inference; SQLite initially; optional PostgreSQL later. Trading leader process single-worker initially. Background heavy jobs throttle and pause on load.
 - VM200 Windows 8GiB/2vCPU: `C:\app\app\No7-Ai-Trading-Pro` selective checkout; MT5/MetaEditor, outbound EA bridge, optional Python diagnostic probe. Broker credentials remain in terminal Windows account.
@@ -9,7 +9,7 @@
 - Prefer separate Proxmox bridge/VLAN for VM-to-VM trading and VPN for management. Use LAN+host firewalls until VLAN available. Never expose Proxmox UI/SSH, MT5, DB or Redis publicly.
 
 ## 2. Shared components without duplicating runtime
-- Git/source + build artifacts: GitHub TradeAi is canonical, build from tagged commit.
+- Git/source + build artifacts: GitHub Ai-Trading-Pro is canonical, build from tagged commit.
 - Core config: `config/app.yaml`, `config/brokers.yaml`, `config/risk.yaml`, `.env` secrets; add `config/deploy/` only for non-secret host overrides. Path from `NO7_ROOT`.
 - Python types: Pydantic `packages/shared_schemas`, schema version; use REST JSON + WS event contract. Clients reject unknown critical schema versions.
 - Data: UTC timestamps + monotonic sequence where available; `source` enum simulate/replay/broker, broker_id, account_id, symbol_original, symbol_canonical, tick_size, decimals, freshness.
