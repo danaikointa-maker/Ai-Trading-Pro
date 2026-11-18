@@ -13,6 +13,7 @@
       <span v-else-if="!marketAccounts.length" class="text-muted">ยังไม่ผูกบัญชี · ดูกราฟอย่างเดียว</span>
       <span class="text-muted">การเลือกกราฟไม่เปิดสิทธิ์ซื้อขาย</span>
     </div>
+    <div v-if="quoteWarning" role="status" class="border-b border-amber-400/30 bg-amber-400/10 px-3 py-2 text-[11px] text-amber-200">{{ quoteWarning }}</div>
     <div class="flex flex-wrap items-center gap-1.5 border-b border-ink-700/60 px-2 py-2" aria-label="ชั้นข้อมูลบนกราฟ">
       <span class="mr-1 text-[10px] text-muted">แสดงเส้น:</span>
       <button v-for="item in layerChoices" :key="item.key" type="button"
@@ -66,6 +67,15 @@ const bars = ref(0)
 const lastBar = ref(null)
 const chartFeed = ref('')
 const chartSymbol = ref('')
+const quoteWarning = ref('')
+function showFreshness(data) {
+  const freshness = data?.freshness
+  quoteWarning.value = freshness?.clock_issue === 'future_timestamp'
+    ? 'เวลาราคาจาก MT5 อยู่ในอนาคตเมื่อเทียบกับเซิร์ฟเวอร์ · ยังยืนยันราคาปัจจุบันไม่ได้'
+    : freshness?.stale ? 'ราคาล่าสุดเกิน 30 วินาที · กราฟนี้เป็นข้อมูลล่าสุดที่ได้รับ ไม่ใช่ราคาปัจจุบัน'
+    : data?.feed === 'simulated' ? 'กราฟจำลอง · ขณะนี้ไม่มีข้อมูลตลาดจริงเชื่อมต่อ'
+    : data?.feed === 'replay' ? 'กราฟย้อนหลังจากไฟล์ · ไม่ใช่ราคาตลาดปัจจุบัน' : ''
+}
 const selectedAccount = ref('')
 const marketAccounts = ref([])
 const contextError = ref(false)
@@ -196,7 +206,7 @@ function buildChart() {
 const lastBarText = computed(() => {
   if (!lastBar.value) return '—'
   const d = new Date(lastBar.value * 1000)
-  return `${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}`
+  return d.toLocaleString('th-TH', { timeZoneName: 'short' })
 })
 
 async function retry() {
@@ -216,6 +226,7 @@ async function load() {
       `/api/market/candles?symbol=${encodeURIComponent(state.symbol)}&timeframe=${state.timeframe}&limit=${state.range}${accountQuery()}`,
     )
     chartFeed.value = data.feed || ''
+    showFreshness(data)
     chartSymbol.value = data.source_symbol || data.symbol || state.symbol
     const raw = Array.isArray(data.candles) ? data.candles : []
     // lightweight-charts demands strictly ascending, unique timestamps.
@@ -283,7 +294,7 @@ function drawOverlays() {
   clearLines()
   // Runtime signals and positions may belong to a different feed/account. Keep
   // the actual MT5 chart clean until the whole analysis runtime uses that source.
-  if (chartFeed.value === 'mt5-live') return
+  if (chartFeed.value.startsWith('mt5-')) return
   const signal = state.live?.signal
   const analysis = state.live?.analysis
   const plan = signal?.plan
@@ -332,7 +343,8 @@ function updateLast(tick = state.live?.ticker) {
   if (!tick || !lastCandle) return
   const seconds = { M1: 60, M5: 300, M15: 900, H1: 3600, H4: 14400 }[state.timeframe] || 300
   const bucket = Math.floor(tick.t / seconds) * seconds
-  const price = Number(tick.last)
+  const price = Number(chartFeed.value === 'mt5-live' ? tick.bid : tick.last)
+  if (!Number.isFinite(price) || bucket < lastCandle.time) return
   if (bucket > lastCandle.time) {
     lastCandle = { time: bucket, open: price, high: price, low: price, close: price }
   } else {
@@ -344,20 +356,23 @@ function updateLast(tick = state.live?.ticker) {
     }
   }
   candleSeries.update(lastCandle)
+  lastBar.value = lastCandle.time
 }
 
 watch(() => [state.symbol, state.timeframe, state.range], load)
 watch(() => state.live?.version, () => {
-  if (chartFeed.value !== 'mt5-live') updateLast()
+  if (!chartFeed.value.startsWith('mt5-')) updateLast()
   drawOverlays()
 })
 watch(() => state.live?.ticker?.last, (tick) => {
-  if (chartFeed.value !== 'mt5-live') updateLast(state.live?.ticker)
+  if (!chartFeed.value.startsWith('mt5-')) updateLast(state.live?.ticker)
 })
 watch(positions, drawOverlays)
 
 async function refreshChartQuote() {
   const data = await api.get(`/api/market/ticker?symbol=${encodeURIComponent(state.symbol)}${accountQuery()}`, { silent: true }).catch(() => null)
+  if (data?.feed) showFreshness(data)
+  if (data?.feed === 'mt5-live' && data.stale) return
   if (data?.feed === 'mt5-live' && data.tick && data.stale === false) {
     const reconnected = chartFeed.value !== 'mt5-live'
     chartFeed.value = 'mt5-live'
@@ -365,7 +380,10 @@ async function refreshChartQuote() {
     updateLast(data.tick)
     return
   }
-  if (chartFeed.value === 'mt5-live') chartFeed.value = 'mt5-disconnected'
+  if (chartFeed.value === 'mt5-live') {
+    chartFeed.value = 'mt5-disconnected'
+    quoteWarning.value = 'MT5 ขาดการเชื่อมต่อ · คงกราฟล่าสุดไว้และหยุดอัปเดตราคา'
+  }
 }
 
 onMounted(async () => {
