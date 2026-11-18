@@ -1,5 +1,18 @@
 <template>
   <div class="relative">
+    <div class="flex flex-wrap items-center gap-2 border-b border-ink-700/60 px-3 py-2 text-[11px]">
+      <label for="chart-account">แหล่งข้อมูลกราฟ</label>
+      <select id="chart-account" v-model="selectedAccount" class="input w-auto py-1" @change="load">
+        <option value="">ตลาดกลาง · ดูกราฟได้โดยไม่ผูกบัญชี</option>
+        <option v-for="account in marketAccounts" :key="account.id" :value="account.id">
+          {{ account.label }} · {{ account.account_type.toUpperCase() }} · {{ account.market_connected ? 'เชื่อมต่อแล้ว' : 'รอเชื่อม MT5' }}
+        </option>
+      </select>
+      <RouterLink to="/brokers" class="text-gold">ผูกบัญชีโบรกเกอร์</RouterLink>
+      <span v-if="contextError" class="text-amber-200">โหลดสถานะบัญชีไม่ได้ · ยังดูกราฟตลาดกลางได้</span>
+      <span v-else-if="!marketAccounts.length" class="text-muted">ยังไม่ผูกบัญชี · ดูกราฟอย่างเดียว</span>
+      <span class="text-muted">การเลือกกราฟไม่เปิดสิทธิ์ซื้อขาย</span>
+    </div>
     <div class="flex flex-wrap items-center gap-1.5 border-b border-ink-700/60 px-2 py-2" aria-label="ชั้นข้อมูลบนกราฟ">
       <span class="mr-1 text-[10px] text-muted">แสดงเส้น:</span>
       <button v-for="item in layerChoices" :key="item.key" type="button"
@@ -53,6 +66,27 @@ const bars = ref(0)
 const lastBar = ref(null)
 const chartFeed = ref('')
 const chartSymbol = ref('')
+const selectedAccount = ref('')
+const marketAccounts = ref([])
+const contextError = ref(false)
+let contextTimer = null
+function accountQuery() {
+  return selectedAccount.value ? `&account_id=${encodeURIComponent(selectedAccount.value)}` : ''
+}
+async function refreshMarketContext() {
+  try {
+    const data = await api.get('/api/market/context', { silent: true })
+    marketAccounts.value = data.accounts || []
+    contextError.value = false
+    // Prefer only verified account sessions; a saved record alone is not a connection.
+    if (!selectedAccount.value && !userChoseSource) {
+      const connected = marketAccounts.value.find(a => a.market_connected)
+      if (connected) { selectedAccount.value = connected.id; await load() }
+    }
+  } catch { contextError.value = true }
+}
+let userChoseSource = false
+watch(selectedAccount, () => { userChoseSource = true })
 let chart = null
 let candleSeries = null
 let ema20 = null
@@ -179,7 +213,7 @@ async function load() {
   chartSymbol.value = ''
   try {
     const data = await api.get(
-      `/api/market/candles?symbol=${encodeURIComponent(state.symbol)}&timeframe=${state.timeframe}&limit=${state.range}`,
+      `/api/market/candles?symbol=${encodeURIComponent(state.symbol)}&timeframe=${state.timeframe}&limit=${state.range}${accountQuery()}`,
     )
     chartFeed.value = data.feed || ''
     chartSymbol.value = data.source_symbol || data.symbol || state.symbol
@@ -323,7 +357,7 @@ watch(() => state.live?.ticker?.last, (tick) => {
 watch(positions, drawOverlays)
 
 async function refreshChartQuote() {
-  const data = await api.get(`/api/market/ticker?symbol=${encodeURIComponent(state.symbol)}`, { silent: true }).catch(() => null)
+  const data = await api.get(`/api/market/ticker?symbol=${encodeURIComponent(state.symbol)}${accountQuery()}`, { silent: true }).catch(() => null)
   if (data?.feed === 'mt5-live' && data.tick && data.stale === false) {
     const reconnected = chartFeed.value !== 'mt5-live'
     chartFeed.value = 'mt5-live'
@@ -343,11 +377,14 @@ onMounted(async () => {
     return
   }
   await load()
+  await refreshMarketContext()
+  contextTimer = setInterval(refreshMarketContext, 10000)
   quoteTimer = setInterval(refreshChartQuote, 2000)
 })
 onBeforeUnmount(() => {
   resizeObs?.disconnect()
   if (quoteTimer) clearInterval(quoteTimer)
+  if (contextTimer) clearInterval(contextTimer)
   chart?.remove()
   chart = null
 })

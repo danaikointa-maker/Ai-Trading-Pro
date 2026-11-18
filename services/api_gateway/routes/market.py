@@ -5,11 +5,18 @@ from fastapi import APIRouter, Depends, HTTPException, Query
 from packages.shared_schemas.settings import get_settings
 from services.api_gateway.deps import current_user, get_runtime
 from services.api_gateway.state import TradingRuntime
+from services.api_gateway.market_access import chart_source, market_accounts
 from integrations.brokers.base import BrokerError
 from services.market_data.simulator import candles_from_df
 from services.risk_engine.planner import points_calculator
 
 router = APIRouter(prefix="/api/market", tags=["market"])
+
+
+@router.get("/context")
+def market_context(runtime: TradingRuntime = Depends(get_runtime), user=Depends(current_user)):
+    return {"accounts": market_accounts(runtime, user), "default_source": "shared_market",
+            "account_required_for_chart": False, "chart_read_only": True}
 
 
 @router.get("/symbols")
@@ -26,8 +33,9 @@ def symbols(runtime: TradingRuntime = Depends(get_runtime), user=Depends(current
 
 @router.get("/candles")
 def candles(symbol: str = "XAUUSD", timeframe: str = "M5", limit: int = Query(400, ge=20, le=2000),
+            account_id: str | None = None,
             runtime: TradingRuntime = Depends(get_runtime), user=Depends(current_user)):
-    adapter, feed = runtime.market.chart_source(symbol)
+    adapter, feed = chart_source(runtime, user, symbol, account_id)
     source_symbol = runtime.market.resolve_chart_symbol(adapter, symbol)
     try:
         df = runtime.market.candles(source_symbol, timeframe, limit, broker_id=adapter.id)
@@ -47,9 +55,9 @@ def candles(symbol: str = "XAUUSD", timeframe: str = "M5", limit: int = Query(40
 
 
 @router.get("/ticker")
-def ticker(symbol: str = "XAUUSD", runtime: TradingRuntime = Depends(get_runtime),
+def ticker(symbol: str = "XAUUSD", account_id: str | None = None, runtime: TradingRuntime = Depends(get_runtime),
            user=Depends(current_user)):
-    adapter, feed = runtime.market.chart_source(symbol)
+    adapter, feed = chart_source(runtime, user, symbol, account_id)
     source_symbol = runtime.market.resolve_chart_symbol(adapter, symbol)
     quote = runtime.market.latest_quote(source_symbol, broker_id=adapter.id)
     if quote is None:
