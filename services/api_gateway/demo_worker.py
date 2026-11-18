@@ -37,6 +37,7 @@ def validate(database: Path, workspace_id: str, tenant_id: str,
     if sys.platform != "win32":
         raise ProbeError("MT5 validation requires the Windows host that owns the terminal")
     db = Database(database, workspace_id=workspace_id)
+    row = None
     try:
         row = db.query_one("SELECT * FROM broker_accounts WHERE id = ? AND tenant_id = ?",
                            (account_id, tenant_id))
@@ -57,16 +58,19 @@ def validate(database: Path, workspace_id: str, tenant_id: str,
 
         result = probe_demo(terminal, str(terminal_path), int(credentials["login"]),
                             row["server"], row["validation_symbol"])
-        db.execute("UPDATE broker_accounts SET connection_status = 'ready_read_only', updated_at = ? "
-                   "WHERE id = ? AND tenant_id = ? AND account_type = 'demo'",
-                   (time.time(), account_id, tenant_id))
+        updated = db.execute("UPDATE broker_accounts SET connection_status = 'ready_read_only', updated_at = ? "
+                             "WHERE id = ? AND tenant_id = ? AND account_type = 'demo' AND updated_at = ?",
+                             (time.time(), account_id, tenant_id, row["updated_at"]))
+        if updated != 1:
+            raise ProbeError("Account changed during validation; refresh and validate again")
         result.update({"account_id": account_id, "connection_status": "ready_read_only",
                        "execution_enabled": False})
         return result
     except Exception:
-        db.execute("UPDATE broker_accounts SET connection_status = 'validation_failed', updated_at = ? "
-                   "WHERE id = ? AND tenant_id = ? AND account_type = 'demo'",
-                   (time.time(), account_id, tenant_id))
+        if row is not None:
+            db.execute("UPDATE broker_accounts SET connection_status = 'validation_failed', updated_at = ? "
+                       "WHERE id = ? AND tenant_id = ? AND account_type = 'demo' AND updated_at = ?",
+                       (time.time(), account_id, tenant_id, row["updated_at"]))
         raise
     finally:
         db.close()

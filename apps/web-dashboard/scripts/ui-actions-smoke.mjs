@@ -182,5 +182,52 @@ try {
     assert.equal(store.mode.value, 'semi_auto', 'failed requests cannot light up the requested mode')
     assert.equal(store.modeChanging.value, false)
   } finally { api.post = post }
-  console.log(`PASS: ${handlers} template event bindings audited; chart actions and mode confirmation/permission failures exercised with mocked API only`)
+  const { default: Brokers } = await server.ssrLoadModule('/src/views/Brokers.vue')
+  let manager
+  const TestBrokers = { ...Brokers, setup(props, context) { manager = Brokers.setup(props, context); return manager } }
+  const brokerApp = createSSRApp(TestBrokers)
+  brokerApp.component('RouterLink', { template: '<a><slot /></a>' })
+  store.state.user = { role: 'trader', tenant_id: 'default' }
+  await renderToString(brokerApp)
+  const originalApi = { get: api.get, put: api.put, del: api.del }
+  const mutations = []
+  try {
+    api.get = async path => path === '/api/teams' ? { teams: [] } : path === '/api/market/context' ? { accounts: [] } : { accounts: [] }
+    api.put = async (url, body) => { mutations.push({ method: 'PUT', url, body }); return { ok: true } }
+    api.del = async url => { mutations.push({ method: 'DELETE', url }); return { ok: true } }
+    const account = { id: 'fixture-account', label: 'Gold Demo', server: 'Demo', login: '****1234',
+      can_manage: true, updated_at: 100, terminal_path: 'terminal64.exe', account_type: 'demo', validation_symbol: 'XAUUSD.s' }
+    manager.startAccountEdit(account)
+    manager.editDraft.value.password = 'fixture-unsaved'
+    manager.cancelAccountEdit()
+    assert.deepEqual(manager.editDraft.value, {})
+    assert.equal(mutations.length, 0, 'cancel edit must not write')
+    manager.startAccountEdit(account)
+    manager.editDraft.value.label = 'Renamed Demo'
+    await manager.saveAccountEdit()
+    assert.equal(mutations[0].body.label, 'Renamed Demo')
+    assert.equal(mutations[0].body.expected_updated_at, 100)
+    await manager.requestRemoval('account', account)
+    manager.cancelRemoval()
+    assert.equal(mutations.length, 1, 'cancel deletion must not send DELETE')
+    await manager.requestRemoval('account', account)
+    api.del = async () => { throw new Error('stale fixture') }
+    await manager.confirmRemoval()
+    assert.match(manager.removalError.value, /stale/)
+    assert.ok(manager.removal.value, 'failed delete stays reviewable')
+    api.del = async url => { mutations.push({ method: 'DELETE', url }); return { ok: true } }
+    await manager.confirmRemoval()
+    assert.match(mutations.at(-1).url, /expected_updated_at=100/)
+    assert.equal(manager.removal.value, null)
+    manager.startTerminalEdit({ id: 'fixture-link', label: 'Old' })
+    manager.terminalEdit.value.label = 'New'
+    await manager.saveTerminalLabel()
+    assert.deepEqual(mutations.at(-1).body, { label: 'New', expected_label: 'Old' })
+    store.state.user = { role: 'viewer', tenant_id: 'default' }
+    manager.startAccountEdit(account)
+    await manager.requestRemoval('account', account)
+    assert.equal(manager.editingAccount.value, null)
+    assert.equal(manager.removal.value, null)
+  } finally { Object.assign(api, originalApi) }
+  console.log(`PASS: ${handlers} template event bindings audited; chart, broker edit/cancel/delete/rename and role guards exercised with mocked API only`)
 } finally { await server.close() }

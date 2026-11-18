@@ -319,6 +319,12 @@ def test_private_terminal_positions_require_one_use_owner_link(client, auth, bri
                                                  "password": "viewerpass123"}).json()["token"]
     other_auth = {"Authorization": f"Bearer {viewer}"}
     assert client.get(url, headers=other_auth).status_code == 404
+    rename_url = f"/api/market/terminal-links/{link_id}"
+    previous_label = next(row["label"] for row in client.get("/api/market/context", headers=auth).json()["accounts"] if row["id"] == link_id)
+    rename = {"label": "My Gold Terminal", "expected_label": previous_label}
+    assert client.put(rename_url, headers=other_auth, json=rename).status_code == 404
+    assert client.put(rename_url, headers=auth, json=rename).status_code == 200
+    assert client.put(rename_url, headers=auth, json=rename).status_code == 409
     assert client.delete(f"/api/market/terminal-links/{link_id}", headers=other_auth).status_code == 404
     active = runtime.adapter.id
     assert client.post(f"/api/brokers/{ACCOUNT}/activate", headers=auth).status_code == 409

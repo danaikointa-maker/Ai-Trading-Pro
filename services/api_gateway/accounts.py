@@ -17,6 +17,10 @@ _PROVIDER_RE = re.compile(r"^[a-z0-9][a-z0-9._-]{0,63}$")
 class AccountError(ValueError):
     """An account/team request that cannot be honoured."""
 
+    def __init__(self, message: str, status_code: int = 400):
+        super().__init__(message)
+        self.status_code = status_code
+
 
 def create_team(db: Database, tenant_id: str, name: str, created_by: str) -> dict[str, Any]:
     clean_name = " ".join(str(name or "").split())
@@ -117,7 +121,9 @@ def _account_access(db: Database, row: Any, user: dict[str, Any]) -> dict[str, b
                  and bool(row["execution_enabled"])
                  and row["connection_status"] == "ready")
     return {"can_view": can_view, "can_control": can_control,
-            "can_assign": can_assign, "can_trade": can_trade}
+            "can_assign": can_assign, "can_trade": can_trade,
+            "can_manage": role in {ADMIN, TRADER} and (is_owner or is_admin)
+            and not assigned and not bool(row["execution_enabled"])}
 
 
 def _public_account(db: Database, row: Any, user: dict[str, Any]) -> dict[str, Any]:
@@ -126,6 +132,8 @@ def _public_account(db: Database, row: Any, user: dict[str, Any]) -> dict[str, A
         "provider": row["provider"], "label": row["label"], "server": row["server"],
         "account_type": row["account_type"], "login": row["masked_login"],
         "terminal_path_configured": bool(row["terminal_path"]),
+        "terminal_path": row["terminal_path"], "validation_symbol": row["validation_symbol"],
+        "updated_at": row["updated_at"],
         "connection_status": row["connection_status"],
         "assigned_team_id": row["assignment_team_id"],
         "assigned_manager_email": row["assignment_manager_email"],
@@ -206,6 +214,74 @@ def get_broker_account(db: Database, tenant_id: str, account_id: str,
         return None
     account = _public_account(db, row, user)
     return account if account["can_view"] else None
+
+
+def _management_row(db, tenant_id, account_id, actor, expected_updated_at):
+    row = db.query_one("SELECT * FROM broker_accounts WHERE id=? AND tenant_id=?", (account_id, tenant_id))
+    if row is None or not _account_access(db, row, actor)["can_view"]:
+        raise AccountError("broker account not found", 404)
+    if actor.get("role") not in {ADMIN, TRADER} or (
+            actor.get("role") != ADMIN and row["owner_email"] != actor.get("email")):
+        raise AccountError("only owner or tenant admin may manage this account", 403)
+    if row["assignment_team_id"] or row["assignment_manager_email"]:
+        raise AccountError("คืนสิทธิ์จากทีมให้ owner ก่อนแก้ไขหรือลบบัญชี", 409)
+    if row["execution_enabled"]:
+        raise AccountError("หยุด execution ก่อนแก้ไขหรือลบบัญชี", 409)
+    if row["updated_at"] != expected_updated_at:
+        raise AccountError("ข้อมูลเปลี่ยนแล้ว กรุณา Refresh และลองใหม่", 409)
+    return row
+
+
+def update_broker_account(db, tenant_id, account_id, actor, expected_updated_at, changes):
+    with db.cursor() as cur:
+        row = _management_row(db, tenant_id, account_id, actor, expected_updated_at)
+        values = dict(row)
+        for key in ("label", "server", "terminal_path", "validation_symbol", "account_type"):
+            if key in changes:
+                values[key] = str(changes[key]).strip()
+        values["label"] = " ".join(values["label"].split())
+        if not 2 <= len(values["label"]) <= 100 or not values["server"] or not values["validation_symbol"]:
+            raise AccountError("ชื่อบัญชีต้องยาว 2–100 ตัวอักษร และต้องระบุ server กับ symbol")
+        if values["account_type"] not in {"demo", "live"}:
+            raise AccountError("account type must be demo or live")
+        login, password = str(changes.get("login") or "").strip(), changes.get("password") or ""
+        credential_change = bool(login or password or values["server"] != row["server"])
+        if credential_change:
+            vault = CredentialVault()
+            old = vault.decrypt(account_id, row["credentials_ciphertext"])
+            login, password = login or old["login"], password or old["password"]
+            values["credentials_ciphertext"] = vault.encrypt(account_id, login, password)
+            values["masked_login"] = mask_login(login)
+            values["login_fingerprint"] = vault.fingerprint(tenant_id, row["provider"], values["server"], login)
+        reset = credential_change or any(values[k] != row[k] for k in ("terminal_path", "validation_symbol", "account_type"))
+        status = ("pending_validation" if values["account_type"] == "demo" else "live_disabled") if reset else row["connection_status"]
+        try:
+            cur.execute("UPDATE broker_accounts SET label=?,server=?,account_type=?,terminal_path=?,validation_symbol=?,"
+                        "credentials_ciphertext=?,masked_login=?,login_fingerprint=?,connection_status=?,updated_at=? "
+                        "WHERE id=? AND tenant_id=? AND updated_at=? AND execution_enabled=0 "
+                        "AND assignment_team_id IS NULL AND assignment_manager_email IS NULL",
+                        tuple(values[k] for k in ("label", "server", "account_type", "terminal_path", "validation_symbol",
+                                                 "credentials_ciphertext", "masked_login", "login_fingerprint"))
+                        + (status, time.time(), account_id, tenant_id, expected_updated_at))
+            if cur.rowcount != 1:
+                raise AccountError("ข้อมูลเปลี่ยนแล้ว กรุณา Refresh และลองใหม่", 409)
+        except sqlite3.IntegrityError as exc:
+            raise AccountError("this broker login is already registered in the tenant", 409) from exc
+        db.audit(actor["email"], "broker_account.update", {"account_id": account_id,
+                 "fields": sorted(changes), "validation_reset": reset})
+    return get_broker_account(db, tenant_id, account_id, actor)
+
+
+def delete_broker_account(db, tenant_id, account_id, actor, expected_updated_at):
+    with db.cursor() as cur:
+        _management_row(db, tenant_id, account_id, actor, expected_updated_at)
+        cur.execute("DELETE FROM broker_accounts WHERE id=? AND tenant_id=? AND updated_at=? AND execution_enabled=0 "
+                    "AND assignment_team_id IS NULL AND assignment_manager_email IS NULL",
+                    (account_id, tenant_id, expected_updated_at))
+        if cur.rowcount != 1:
+            raise AccountError("ข้อมูลเปลี่ยนแล้ว กรุณา Refresh และลองใหม่", 409)
+        db.audit(actor["email"], "broker_account.delete", {"account_id": account_id})
+    return {"ok": True, "orders_sent": False}
 
 
 def assign_broker_account(db: Database, tenant_id: str, account_id: str, team_id: str,

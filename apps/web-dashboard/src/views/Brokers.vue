@@ -21,11 +21,18 @@
         <button class="btn" :disabled="linkingTerminal || !terminalCode.trim()">{{ linkingTerminal ? 'กำลังผูก…' : 'ผูกเพื่อดูไม้จริง' }}</button>
       </form>
       <div v-for="view in terminalViews" :key="view.id" class="mt-2 flex flex-wrap items-center gap-2 text-[11px]">
+        <span class="font-medium">{{ view.label }}</span>
         <span>{{ view.server }} · {{ view.login }} · {{ view.account_type.toUpperCase() }}</span>
         <span class="chip" :class="view.market_connected ? 'chip-up' : 'chip-warn'">{{ view.market_connected ? 'เชื่อมแล้ว · อ่านอย่างเดียว' : 'รอ terminal' }}</span>
         <RouterLink to="/" class="btn px-2 py-1">ดูกราฟ</RouterLink>
-        <button v-if="perms.canTrade" class="btn px-2 py-1" @click="unlinkTerminal(view.id)">ยกเลิกผูก</button>
+        <button v-if="perms.canTrade" class="btn px-2 py-1" title="เปลี่ยนชื่อ" aria-label="เปลี่ยนชื่อ terminal" @click="startTerminalEdit(view)"><ToolIcon name="edit" /></button>
+        <button v-if="perms.canTrade" class="btn px-2 py-1" @click="requestRemoval('terminal', view)">ยกเลิกผูก</button>
       </div>
+      <form v-if="terminalEdit" class="mt-2 flex gap-2" @submit.prevent="saveTerminalLabel">
+        <input v-model="terminalEdit.label" class="input min-w-0 flex-1" aria-label="ชื่อ terminal" minlength="2" maxlength="100" required :disabled="savingEdit" />
+        <button class="btn" :disabled="savingEdit">บันทึก</button>
+        <button type="button" class="btn" :disabled="savingEdit" @click="terminalEdit = null">ยกเลิก</button>
+      </form>
     </section>
     <section class="panel">
       <div class="panel-head">
@@ -63,6 +70,7 @@
         <button class="btn py-1.5 text-[10px] md:col-span-3 xl:col-span-8" :disabled="creatingAccount">
           {{ creatingAccount ? 'Saving encrypted credentials…' : 'Add account record' }}
         </button>
+        <button type="button" class="btn py-1 text-[10px] md:col-span-3 xl:col-span-8" :disabled="creatingAccount" @click="resetCreateForm">ล้าง / ยกเลิกข้อมูลที่กรอก</button>
       </form>
       <p class="border-b border-ink-700/60 px-3 py-2 text-[9.5px] leading-relaxed text-muted">
         Credentials are write-only and encrypted per account; they are never shown again. Set the vault master key through the OS/secret manager, not `.env`.
@@ -98,6 +106,26 @@
                         class="text-[9px] text-muted">Set terminal path to validate</span>
                   <button v-if="account.assigned_team_id && state.user?.role === 'admin'" class="btn py-0.5 text-[9px]"
                           @click="unassignManagedAccount(account)">คืนให้ owner</button>
+                  <span v-if="account.can_manage && perms.canTrade" class="ml-1 inline-flex gap-1">
+                    <button class="btn p-1" title="แก้ไขบัญชี" :aria-label="`แก้ไข ${account.label}`" @click="startAccountEdit(account)"><ToolIcon name="edit" /></button>
+                    <button class="btn p-1 text-red-300" title="ลบบัญชี" :aria-label="`ลบ ${account.label}`" @click="requestRemoval('account', account)"><ToolIcon name="trash" /></button>
+                  </span>
+                  <span v-else-if="account.assigned_team_id" class="ml-1 text-[9px] text-muted">คืนสิทธิ์ก่อนแก้ไข/ลบ</span>
+                </td>
+              </tr>
+              <tr v-if="editingAccount?.id === account.id">
+                <td colspan="6" class="bg-ink-800/50 p-3">
+                  <form class="grid gap-2 md:grid-cols-3" @submit.prevent="saveAccountEdit">
+                    <label class="text-[10px]">ชื่อบัญชี<input v-model="editDraft.label" class="input mt-1" minlength="2" maxlength="100" required :disabled="savingEdit" /></label>
+                    <label class="text-[10px]">Server<input v-model="editDraft.server" class="input mt-1" maxlength="200" required :disabled="savingEdit" /></label>
+                    <label class="text-[10px]">ประเภท<select v-model="editDraft.account_type" class="input mt-1" :disabled="savingEdit"><option value="demo">Demo</option><option value="live">Live · ปิดการเทรด</option></select></label>
+                    <label class="text-[10px]">Login ใหม่<input v-model="editDraft.login" class="input mt-1" :placeholder="`${account.login} · เว้นว่างใช้เดิม`" autocomplete="off" :disabled="savingEdit" /></label>
+                    <label class="text-[10px]">รหัสผ่านใหม่<input v-model="editDraft.password" type="password" class="input mt-1" placeholder="เว้นว่างใช้เดิม" autocomplete="new-password" :disabled="savingEdit" /></label>
+                    <label class="text-[10px]">Symbol<input v-model="editDraft.validation_symbol" class="input mt-1" required :disabled="savingEdit" /></label>
+                    <label class="text-[10px] md:col-span-3">MT5 terminal path<input v-model="editDraft.terminal_path" class="input mt-1" :disabled="savingEdit" /></label>
+                    <p class="text-[10px] text-muted md:col-span-3">เปลี่ยนข้อมูลเชื่อมต่อต้องตรวจสอบ Demo ใหม่ · บันทึกแล้วจะยังไม่ส่งคำสั่งซื้อขาย</p>
+                    <div class="flex gap-2 md:col-span-3"><button class="btn" :disabled="savingEdit">{{ savingEdit ? 'กำลังบันทึก…' : 'บันทึก' }}</button><button type="button" class="btn" :disabled="savingEdit" @click="cancelAccountEdit">ยกเลิก</button></div>
+                  </form>
                 </td>
               </tr>
               <tr v-if="account.can_assign && !account.assigned_team_id && teams.length" :key="`${account.id}-assignment`">
@@ -225,14 +253,24 @@
       </section>
     </div>
     </template>
+    <div v-if="removal" class="fixed inset-0 z-50 flex items-center justify-center bg-black/70 p-4" @keydown.esc="cancelRemoval" @keydown.tab="trapRemovalFocus">
+      <section role="alertdialog" aria-modal="true" aria-labelledby="broker-removal-title" aria-describedby="broker-removal-detail" class="panel w-full max-w-md p-4">
+        <h2 id="broker-removal-title" class="font-semibold">{{ removal.kind === 'account' ? 'ลบบัญชีที่บันทึกไว้?' : 'ยกเลิกการผูก terminal?' }}</h2>
+        <p class="mt-2 text-sm">{{ removal.account.label }} · {{ removal.account.server }} · {{ removal.account.login }}</p>
+        <p id="broker-removal-detail" class="mt-2 text-[11px] text-muted">{{ removal.kind === 'account' ? 'ลบข้อมูลบัญชีและข้อมูลล็อกอินที่บันทึกในระบบ ต้องเพิ่มใหม่หากต้องการใช้ต่อ' : 'หยุดแสดงไม้และ SL/TP ส่วนตัวในบัญชีผู้ใช้นี้ ต้องใช้รหัสใหม่เพื่อผูกอีกครั้ง' }} · บัญชีที่โบรกเกอร์และไม้ใน MT5 จะยังอยู่</p>
+        <p v-if="removalError" role="alert" class="mt-2 text-[11px] text-red-300">{{ removalError }}</p>
+        <div class="mt-4 flex justify-end gap-2"><button autofocus class="btn" :disabled="removing" @click="cancelRemoval">ยกเลิก</button><button class="btn text-red-300" :disabled="removing" @click="confirmRemoval">{{ removing ? 'กำลังดำเนินการ…' : 'ยืนยัน' }}</button></div>
+      </section>
+    </div>
   </div>
 </template>
 
 <script setup>
-import { computed, onMounted, ref } from 'vue'
+import { computed, nextTick, onMounted, onUnmounted, ref } from 'vue'
 import { api } from '../lib/api'
 import { fmt, money } from '../lib/format'
 import { permissions, state, toast } from '../lib/store'
+import ToolIcon from '../components/ToolIcon.vue'
 
 const brokers = ref([])
 const active = ref('')
@@ -246,6 +284,99 @@ const validatingAccountId = ref('')
 const terminalCode = ref('')
 const terminalViews = ref([])
 const linkingTerminal = ref(false)
+const editingAccount = ref(null)
+const editDraft = ref({})
+const savingEdit = ref(false)
+const terminalEdit = ref(null)
+const removal = ref(null)
+const removing = ref(false)
+const removalError = ref('')
+function cancelAccountEdit() {
+  if (savingEdit.value) return
+  editDraft.value.password = ''
+  editDraft.value = {}
+  editingAccount.value = null
+}
+function startAccountEdit(account) {
+  if (!perms.value.canTrade || !account.can_manage || savingEdit.value) return
+  cancelAccountEdit()
+  editingAccount.value = { ...account }
+  editDraft.value = { label: account.label, server: account.server, account_type: account.account_type,
+    terminal_path: account.terminal_path || '', validation_symbol: account.validation_symbol || 'XAUUSD', login: '', password: '' }
+}
+async function saveAccountEdit() {
+  if (!perms.value.canTrade || !editingAccount.value?.can_manage || savingEdit.value) return
+  savingEdit.value = true
+  try {
+    const { id, updated_at } = editingAccount.value
+    await api.put(`/api/broker-accounts/${encodeURIComponent(id)}`, { ...editDraft.value, expected_updated_at: updated_at })
+    editDraft.value = {}
+    editingAccount.value = null
+    await loadManagedAccounts()
+    toast('บันทึกข้อมูลบัญชีแล้ว', 'success')
+  } catch (error) { toast(error.message, 'error') }
+  finally { editDraft.value.password = ''; savingEdit.value = false }
+}
+function startTerminalEdit(view) {
+  if (!perms.value.canTrade || savingEdit.value) return
+  terminalEdit.value = { id: view.id, label: view.label, expected_label: view.label }
+}
+async function saveTerminalLabel() {
+  if (!perms.value.canTrade || !terminalEdit.value || savingEdit.value) return
+  savingEdit.value = true
+  try {
+    const { id, label, expected_label } = terminalEdit.value
+    await api.put(`/api/market/terminal-links/${encodeURIComponent(id)}`, { label, expected_label })
+    terminalEdit.value = null
+    await loadTerminalViews()
+    toast('เปลี่ยนชื่อแล้ว', 'success')
+  } catch (error) { toast(error.message, 'error') }
+  finally { savingEdit.value = false }
+}
+let removalTrigger = null
+async function requestRemoval(kind, account) {
+  if (!perms.value.canTrade || removing.value || (kind === 'account' && !account.can_manage)) return
+  removalTrigger = document.activeElement
+  removalError.value = ''
+  removal.value = { kind, account: { ...account } }
+  await nextTick()
+  document.querySelector?.('[role="alertdialog"] button')?.focus()
+}
+function cancelRemoval() {
+  if (removing.value) return
+  removal.value = null
+  removalTrigger?.focus?.()
+}
+function trapRemovalFocus(event) {
+  const buttons = [...event.currentTarget.querySelectorAll('button:not(:disabled)')]
+  if (!buttons.length) { event.preventDefault(); return }
+  const target = event.shiftKey ? buttons.at(-1) : buttons[0]
+  if ((event.shiftKey && document.activeElement === buttons[0]) || (!event.shiftKey && document.activeElement === buttons.at(-1))) {
+    event.preventDefault()
+    target.focus()
+  }
+}
+async function confirmRemoval() {
+  if (!perms.value.canTrade || !removal.value || removing.value) return
+  removing.value = true
+  removalError.value = ''
+  try {
+    const { kind, account } = removal.value
+    if (kind === 'account') {
+      await api.del(`/api/broker-accounts/${encodeURIComponent(account.id)}?expected_updated_at=${account.updated_at}`)
+      if (editingAccount.value?.id === account.id) cancelAccountEdit()
+      await loadManagedAccounts()
+    } else {
+      await api.del(`/api/market/terminal-links/${encodeURIComponent(account.id)}`)
+      if (terminalEdit.value?.id === account.id) terminalEdit.value = null
+      await loadTerminalViews()
+    }
+    removal.value = null
+    toast(kind === 'account' ? 'ลบข้อมูลบัญชีแล้ว' : 'ยกเลิกการผูกแล้ว', 'success')
+  } catch (error) { removalError.value = error.message }
+  finally { removing.value = false }
+}
+onUnmounted(() => { editDraft.value.password = ''; terminalCode.value = ''; accountForm.value.password = '' })
 async function loadTerminalViews() {
   const data = await api.get('/api/market/context')
   terminalViews.value = (data.accounts || []).filter(account => account.kind === 'terminal_read_only')
@@ -261,15 +392,15 @@ async function claimTerminalCode() {
   } catch (error) { toast(error.message, 'error') }
   finally { linkingTerminal.value = false }
 }
-async function unlinkTerminal(id) {
-  try {
-    await api.del(`/api/market/terminal-links/${encodeURIComponent(id)}`)
-    await loadTerminalViews()
-  } catch (error) { toast(error.message, 'error') }
-}
 const defaultTerminalPath = 'C:\\Program Files\\MetaTrader 5\\terminal64.exe'
 const accountForm = ref({ provider: 'mt5', label: '', server: '', account_type: 'demo', login: '', password: '',
   terminal_path: defaultTerminalPath, validation_symbol: 'XAUUSD' })
+function resetCreateForm() {
+  if (creatingAccount.value) return
+  accountForm.value.password = ''
+  accountForm.value = { provider: 'mt5', label: '', server: '', account_type: 'demo', login: '', password: '',
+    terminal_path: defaultTerminalPath, validation_symbol: 'XAUUSD' }
+}
 const isPlatformSuperAdmin = computed(() => state.user?.platform_role === 'super_admin')
 const isDefaultTenant = computed(() => state.user?.tenant_id === 'default')
 const perms = computed(() => permissions.value)

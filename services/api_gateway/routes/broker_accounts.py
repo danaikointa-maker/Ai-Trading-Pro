@@ -3,14 +3,21 @@ from __future__ import annotations
 from typing import Literal
 
 from fastapi import APIRouter, Depends, HTTPException
-from pydantic import BaseModel
+from pydantic import BaseModel, ConfigDict, Field
 
-from services.api_gateway.accounts import (AccountError, assign_broker_account, create_broker_account,
-                                           get_broker_account, list_broker_accounts,
-                                           unassign_broker_account)
+from services.api_gateway.accounts import (
+    AccountError,
+    assign_broker_account,
+    create_broker_account,
+    delete_broker_account,
+    get_broker_account,
+    list_broker_accounts,
+    unassign_broker_account,
+    update_broker_account,
+)
 from services.api_gateway.credential_vault import CredentialVault, VaultError
-from services.api_gateway.deps import Runtime, current_user, require_admin
 from services.api_gateway.demo_validation import validate_demo_account
+from services.api_gateway.deps import Runtime, current_user, require_admin
 from services.api_gateway.state import TradingRuntime
 
 router = APIRouter(prefix="/api/broker-accounts", tags=["broker-accounts"])
@@ -31,6 +38,40 @@ class AssignBrokerAccountRequest(BaseModel):
     team_id: str
     manager_email: str
     expected_version: int
+
+
+class UpdateBrokerAccountRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    expected_updated_at: float = Field(allow_inf_nan=False)
+    label: str | None = Field(default=None, min_length=2, max_length=100)
+    server: str | None = Field(default=None, min_length=1, max_length=200)
+    account_type: Literal["demo", "live"] | None = None
+    terminal_path: str | None = Field(default=None, max_length=1024)
+    validation_symbol: str | None = Field(default=None, min_length=1, max_length=100)
+    login: str | None = Field(default=None, max_length=200)
+    password: str | None = Field(default=None, max_length=1024)
+
+
+@router.put("/{account_id}")
+def edit_account(account_id: str, payload: UpdateBrokerAccountRequest,
+                 runtime: TradingRuntime = Runtime, user=Depends(current_user)):
+    changes = payload.model_dump(exclude_none=True, exclude={"expected_updated_at"})
+    try:
+        return update_broker_account(runtime.db, user["tenant_id"], account_id, user,
+                                     payload.expected_updated_at, changes)
+    except AccountError as exc:
+        raise HTTPException(exc.status_code, str(exc)) from exc
+    except VaultError as exc:
+        raise HTTPException(503, "credential vault unavailable; account was not changed") from exc
+
+
+@router.delete("/{account_id}")
+def remove_account(account_id: str, expected_updated_at: float,
+                   runtime: TradingRuntime = Runtime, user=Depends(current_user)):
+    try:
+        return delete_broker_account(runtime.db, user["tenant_id"], account_id, user, expected_updated_at)
+    except AccountError as exc:
+        raise HTTPException(exc.status_code, str(exc)) from exc
 
 
 @router.get("")

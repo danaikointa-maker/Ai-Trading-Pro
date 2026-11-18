@@ -8,6 +8,8 @@
 <script setup>
 defineProps({ name: { type: String, required: true } })
 const paths = {
+  edit: 'm14 5 5 5M4 20l5-1L21 7l-5-5L4 14v6Z',
+  trash: 'M3 6h18M9 6V3h6v3M5 6l1 15h12l1-15M10 10v7m4-7v7',
   sidebarClose: 'M3 3h18v18H3ZM9 3v18m8-13-4 4 4 4',
   sidebarOpen: 'M3 3h18v18H3ZM9 3v18m4-13 4 4-4 4',
   close: 'm5 5 14 14M5 19 19 5',

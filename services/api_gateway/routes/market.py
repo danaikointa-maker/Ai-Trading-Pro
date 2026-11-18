@@ -24,6 +24,28 @@ class TerminalClaim(BaseModel):
     code: str = Field(min_length=20, max_length=64)
 
 
+class TerminalLabel(BaseModel):
+    label: str = Field(min_length=2, max_length=100)
+    expected_label: str
+
+
+@router.put("/terminal-links/{link_id}")
+def rename_terminal(link_id: str, body: TerminalLabel, runtime: TradingRuntime = Depends(get_runtime), user=Depends(current_user)):
+    label = " ".join(body.label.split())
+    if len(label) < 2:
+        raise HTTPException(400, "ชื่อบัญชีต้องยาว 2–100 ตัวอักษร")
+    with runtime.db.cursor() as cur:
+        row = cur.execute("SELECT label FROM terminal_view_links WHERE id=? AND tenant_id=? AND owner_email=?",
+                          (link_id, user["tenant_id"], user["email"])).fetchone()
+        if row is None:
+            raise HTTPException(404, "terminal link not found")
+        if row["label"] != body.expected_label:
+            raise HTTPException(409, "ข้อมูลเปลี่ยนแล้ว กรุณา Refresh และลองใหม่")
+        cur.execute("UPDATE terminal_view_links SET label=? WHERE id=?", (label, link_id))
+        runtime.db.audit(user["email"], "terminal_view.rename", {"id": link_id})
+    return {"ok": True, "label": label, "orders_sent": False}
+
+
 @router.post("/terminal-links")
 def link_terminal(body: TerminalClaim, runtime: TradingRuntime = Depends(get_runtime), user=Depends(current_user)):
     return claim_terminal(runtime, user, body.code)

@@ -226,7 +226,8 @@ def test_demo_validation_worker_receives_account_id_not_broker_secrets(tmp_path,
         db.close()
 
 
-def test_demo_worker_marks_only_matching_read_only_demo_ready(tmp_path, monkeypatch):
+@pytest.mark.parametrize("changed_during_probe", [False, True])
+def test_demo_worker_marks_only_matching_read_only_demo_ready(tmp_path, monkeypatch, changed_during_probe):
     db_path = tmp_path / "demo-worker.sqlite3"
     db = Database(db_path)
     vault_key = CredentialVault.generate_key()
@@ -273,6 +274,29 @@ def test_demo_worker_marks_only_matching_read_only_demo_ready(tmp_path, monkeypa
     monkeypatch.setattr(demo_worker.sys, "platform", "win32")
     monkeypatch.setattr(demo_worker, "terminal_is_running", lambda path: path == terminal_path)
     monkeypatch.setitem(sys.modules, "MetaTrader5", FakeTerminal)
+
+    if changed_during_probe:
+        probe = demo_worker.probe_demo
+
+        def changing_probe(*args):
+            result = probe(*args)
+            concurrent = Database(db_path)
+            try:
+                concurrent.execute("UPDATE broker_accounts SET server='Changed-Demo', updated_at=updated_at+1, "
+                                   "connection_status='pending_validation' WHERE id=?", (account["id"],))
+            finally:
+                concurrent.close()
+            return result
+
+        monkeypatch.setattr(demo_worker, "probe_demo", changing_probe)
+        with pytest.raises(demo_worker.ProbeError, match="changed during validation"):
+            demo_worker.validate(db_path, "local", tenant["id"], account["id"])
+        check = Database(db_path)
+        try:
+            assert check.query_one("SELECT connection_status FROM broker_accounts WHERE id=?", (account["id"],))[0] == "pending_validation"
+        finally:
+            check.close()
+        return
 
     result = demo_worker.validate(db_path, "local", tenant["id"], account["id"])
     reopened = Database(db_path)
