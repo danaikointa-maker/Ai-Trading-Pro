@@ -18,7 +18,10 @@
         <div class="panel-title">Managed broker accounts</div>
         <span class="chip chip-warn">Demo validation pending · execution disabled</span>
       </div>
-      <form v-if="state.user?.role !== 'viewer'" class="grid gap-2 border-b border-ink-700/60 p-3 md:grid-cols-3 xl:grid-cols-8" @submit.prevent="createManagedAccount">
+      <p v-if="!perms.canTrade" class="border-b border-ink-700/60 px-3 py-2 text-[10px] text-amber-200/80">
+        บทบาท viewer อ่านสถานะได้อย่างเดียว; เพิ่มบัญชี ตรวจสอบ Demo และเปลี่ยน broker ไม่ได้
+      </p>
+      <form v-if="perms.canTrade" class="grid gap-2 border-b border-ink-700/60 p-3 md:grid-cols-3 xl:grid-cols-8" @submit.prevent="createManagedAccount">
         <label class="text-[9.5px] text-muted">Provider
           <select v-model="accountForm.provider" class="input mt-0.5 py-1.5 text-[10px]"><option value="mt5">MetaTrader 5</option></select>
         </label>
@@ -72,12 +75,12 @@
                   <span class="chip chip-down ml-1">orders off</span>
                 </td>
                 <td class="text-right">
-                  <button v-if="account.account_type === 'demo' && account.can_control && account.terminal_path_configured && account.connection_status !== 'ready_read_only'"
+                  <button v-if="perms.canTrade && account.account_type === 'demo' && account.can_control && account.terminal_path_configured && account.connection_status !== 'ready_read_only'"
                           class="btn mr-1 py-0.5 text-[9px]" :disabled="validatingAccountId === account.id"
                           @click="validateDemoAccount(account)">
                     {{ validatingAccountId === account.id ? 'Checking…' : 'Validate Demo' }}
                   </button>
-                  <span v-else-if="account.account_type === 'demo' && account.can_control && !account.terminal_path_configured"
+                  <span v-else-if="perms.canTrade && account.account_type === 'demo' && account.can_control && !account.terminal_path_configured"
                         class="text-[9px] text-muted">Set terminal path to validate</span>
                   <button v-if="account.assigned_team_id && state.user?.role === 'admin'" class="btn py-0.5 text-[9px]"
                           @click="unassignManagedAccount(account)">คืนให้ owner</button>
@@ -130,9 +133,12 @@
           <div class="kv"><dt>Leverage</dt><dd>1:{{ b.account?.leverage }}</dd></div>
         </dl>
         <p class="mt-2 line-clamp-3 text-[9.5px] leading-relaxed text-muted">{{ b.regulated_note }}</p>
-        <button class="btn mt-2 w-full py-1.5" :disabled="b.id === active" @click="activate(b.id)">
+        <button v-if="perms.canTrade" class="btn mt-2 w-full py-1.5" :disabled="b.id === active" @click="activate(b.id)">
           {{ b.id === active ? 'Active' : 'Use this broker' }}
         </button>
+        <div v-else class="mt-2 rounded border border-ink-700 px-2 py-1.5 text-center text-[10px] text-muted">
+          Read-only · เปลี่ยน broker ไม่ได้
+        </div>
       </article>
     </div>
 
@@ -212,7 +218,7 @@
 import { computed, onMounted, ref } from 'vue'
 import { api } from '../lib/api'
 import { fmt, money } from '../lib/format'
-import { state, toast } from '../lib/store'
+import { permissions, state, toast } from '../lib/store'
 
 const brokers = ref([])
 const active = ref('')
@@ -228,6 +234,7 @@ const accountForm = ref({ provider: 'mt5', label: '', server: '', account_type: 
   terminal_path: defaultTerminalPath, validation_symbol: 'XAUUSD' })
 const isPlatformSuperAdmin = computed(() => state.user?.platform_role === 'super_admin')
 const isDefaultTenant = computed(() => state.user?.tenant_id === 'default')
+const perms = computed(() => permissions.value)
 
 const healthMap = computed(() => Object.fromEntries(brokers.value.map((b) => [b.id, b.health])))
 const reconcile = computed(() => state.live?.reconcile || null)

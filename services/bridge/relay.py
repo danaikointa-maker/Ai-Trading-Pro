@@ -223,6 +223,17 @@ class BridgeRelay:
             seen.append(self._apply_result(session.account_id, raw, ts))
 
         if snapshot is not None:
+            # The MT5 EA sends quotes on every poll and history only periodically.
+            # An empty `rates` object means "no rate refresh this poll"; preserve
+            # the last terminal-provided bars instead of wiping the chart cache.
+            incoming_rates = snapshot.get("rates")
+            prior_rates = (session.snapshot or {}).get("rates") or {}
+            if snapshot.get("rates_unchanged") is True and not incoming_rates and prior_rates:
+                snapshot = dict(snapshot)
+                snapshot["rates"] = prior_rates
+                prior_rates_at = (session.snapshot or {}).get("rates_updated_at")
+                if prior_rates_at is not None:
+                    snapshot["rates_updated_at"] = prior_rates_at
             if not self.store.save_snapshot(session.account_id, session.session_id, snapshot, ts):
                 raise BridgeError("unknown or superseded session; call register again")
         # Reload before writing: the results above may have changed counters, and a

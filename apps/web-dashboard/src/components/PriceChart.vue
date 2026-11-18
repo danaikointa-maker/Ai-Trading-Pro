@@ -15,7 +15,8 @@
     <div class="pointer-events-none absolute left-3 top-12 flex flex-wrap items-center gap-1.5">
       <span class="chip chip-gold">{{ state.symbol }} · {{ state.timeframe }}</span>
       <span class="chip" :class="feedWarn ? 'chip-warn' : ''" :title="feedTitle">{{ feedLabel }}</span>
-      <span v-if="state.live?.analysis?.regime" class="chip">{{ state.live.analysis.regime.regime.replace('_',' ') }}</span>
+      <span v-if="chartFeed !== 'mt5-live' && state.live?.analysis?.regime" class="chip">{{ state.live.analysis.regime.regime.replace('_',' ') }}</span>
+      <span v-if="chartFeed === 'mt5-live'" class="chip chip-warn" title="สัญญาณและสถานะบัญชียังมาจาก runtime อีกชุด; ซ่อนไว้จากกราฟ MT5 นี้">ซ่อน overlay จาก runtime</span>
     </div>
     <div v-if="loading" class="absolute inset-x-0 bottom-0 top-10 grid place-items-center bg-ink-900/40 text-[12px] text-muted">loading chart…</div>
     <!-- Never fail silently: a blank panel tells nobody anything. -->
@@ -50,6 +51,7 @@ const loading = ref(false)
 const error = ref('')
 const bars = ref(0)
 const lastBar = ref(null)
+const chartFeed = ref('')
 let chart = null
 let candleSeries = null
 let ema20 = null
@@ -58,6 +60,7 @@ let ema200 = null
 let priceLines = []
 let lastCandle = null
 let resizeObs = null
+let quoteTimer = null
 
 // UI preferences only: never write these switches into state.live or send an
 // API request. Engine, risk controls and persisted trade decisions are unchanged.
@@ -171,10 +174,12 @@ async function load() {
   if (!candleSeries) return
   loading.value = true
   error.value = ''
+  chartFeed.value = ''
   try {
     const data = await api.get(
       `/api/market/candles?symbol=${encodeURIComponent(state.symbol)}&timeframe=${state.timeframe}&limit=${state.range}`,
     )
+    chartFeed.value = data.feed || ''
     const raw = Array.isArray(data.candles) ? data.candles : []
     // lightweight-charts demands strictly ascending, unique timestamps.
     const seen = new Set()
@@ -204,6 +209,7 @@ async function load() {
     chart.timeScale().fitContent()
     drawOverlays()
   } catch (err) {
+    if (err?.status === 503) chartFeed.value = 'mt5-disconnected'
     error.value = String((err && err.message) || err)
     console.error('[PriceChart] load failed', err)
   } finally {
@@ -238,6 +244,9 @@ function addLine(price, color, title, style = 2, width = 1) {
 function drawOverlays() {
   if (!candleSeries) return
   clearLines()
+  // Runtime signals and positions may belong to a different feed/account. Keep
+  // the actual MT5 chart clean until the whole analysis runtime uses that source.
+  if (chartFeed.value === 'mt5-live') return
   const signal = state.live?.signal
   const analysis = state.live?.analysis
   const plan = signal?.plan
@@ -282,8 +291,7 @@ function drawOverlays() {
   }
 }
 
-function updateLast() {
-  const tick = state.live?.ticker
+function updateLast(tick = state.live?.ticker) {
   if (!tick || !lastCandle) return
   const seconds = { M1: 60, M5: 300, M15: 900, H1: 3600, H4: 14400 }[state.timeframe] || 300
   const bucket = Math.floor(tick.t / seconds) * seconds
@@ -303,11 +311,25 @@ function updateLast() {
 
 watch(() => [state.symbol, state.timeframe, state.range], load)
 watch(() => state.live?.version, () => {
-  updateLast()
+  if (chartFeed.value !== 'mt5-live') updateLast()
   drawOverlays()
 })
-watch(() => state.live?.ticker?.last, updateLast)
+watch(() => state.live?.ticker?.last, (tick) => {
+  if (chartFeed.value !== 'mt5-live') updateLast(state.live?.ticker)
+})
 watch(positions, drawOverlays)
+
+async function refreshChartQuote() {
+  const data = await api.get(`/api/market/ticker?symbol=${encodeURIComponent(state.symbol)}`, { silent: true }).catch(() => null)
+  if (data?.feed === 'mt5-live' && data.tick && data.stale === false) {
+    const reconnected = chartFeed.value !== 'mt5-live'
+    chartFeed.value = 'mt5-live'
+    if (reconnected) await load()
+    updateLast(data.tick)
+    return
+  }
+  if (chartFeed.value === 'mt5-live') chartFeed.value = 'mt5-disconnected'
+}
 
 onMounted(async () => {
   try {
@@ -318,9 +340,11 @@ onMounted(async () => {
     return
   }
   await load()
+  quoteTimer = setInterval(refreshChartQuote, 2000)
 })
 onBeforeUnmount(() => {
   resizeObs?.disconnect()
+  if (quoteTimer) clearInterval(quoteTimer)
   chart?.remove()
   chart = null
 })
@@ -331,14 +355,18 @@ const FEED_LABELS = {
   simulated: 'SIMULATED FEED',
   replay: 'REPLAY FEED',
   mt5: 'MT5 LIVE',
-  'mt5-live': 'MT5 LIVE',
+  'mt5-live': 'MT5 REAL · READ-ONLY',
+  'mt5-disconnected': 'MT5 DISCONNECTED',
 }
-const feedLabel = computed(() => FEED_LABELS[state.live?.feed] || (state.live?.feed ? String(state.live.feed).toUpperCase() : 'FEED —'))
-const feedWarn = computed(() => state.live?.feed !== 'mt5' && state.live?.feed !== 'mt5-live')
+const displayedFeed = computed(() => chartFeed.value || state.live?.feed || '')
+const feedLabel = computed(() => FEED_LABELS[displayedFeed.value] || (displayedFeed.value ? String(displayedFeed.value).toUpperCase() : 'FEED —'))
+const feedWarn = computed(() => displayedFeed.value !== 'mt5' && displayedFeed.value !== 'mt5-live')
 const feedTitle = computed(() => {
-  const f = state.live?.feed
+  const f = displayedFeed.value
   if (f === 'replay') return 'ราคามาจากไฟล์ที่นำเข้า (replay) — ไม่ใช่ tick data จริง และไม่ใช่ราคาสดจากโบรกเกอร์'
   if (f === 'simulated') return 'ราคาจากตัวจำลอง — ห้ามใช้ตัดสินใจกับเงินจริง'
+  if (f === 'mt5-live') return 'กราฟและราคาอ่านจาก MT5 ที่ล็อกอินอยู่; หน้ากราฟนี้ไม่ส่งคำสั่งซื้อขาย'
+  if (f === 'mt5-disconnected') return 'เลือก broker MT5 ไว้ แต่ terminal/bridge ยังไม่เชื่อมต่อ'
   return 'ราคาจากเทอร์มินัล MT5'
 })
 </script>

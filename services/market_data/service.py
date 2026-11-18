@@ -33,6 +33,39 @@ class MarketDataService:
     def adapter(self) -> BrokerAdapter:
         return self.registry.get()
 
+    def chart_source(self, symbol: str) -> tuple[BrokerAdapter, str]:
+        """Prefer a connected MT5 feed for charts without changing trading state.
+
+        The selected execution broker remains untouched. If no authenticated MT5
+        adapter is connected, the chart falls back to the selected feed and labels
+        it with that feed's actual mode.
+        """
+        connected_mt5: list[BrokerAdapter] = []
+        for adapter in self.registry.all():
+            if getattr(adapter, "adapter_type", "") not in ("bridge", "mt5", "generic_mt5"):
+                continue
+            try:
+                if adapter.health().value != "connected":
+                    continue
+                connected_mt5.append(adapter)
+                if symbol not in adapter.symbol_names():
+                    continue
+                return adapter, "mt5-live"
+            except Exception:  # noqa: BLE001 - an unavailable source is not certified live
+                continue
+
+        if connected_mt5:
+            # A live terminal is present, but this chart's requested symbol may
+            # not match the broker's suffix. Return that source so the API shows
+            # an explicit unavailable-symbol error instead of silently simulating.
+            return connected_mt5[0], "mt5-live"
+
+        adapter = self.adapter
+        if getattr(adapter, "adapter_type", "") in ("bridge", "mt5", "generic_mt5"):
+            return adapter, "mt5-disconnected"
+        feed = getattr(self, "feed_mode", None) or "simulated"
+        return adapter, "simulated" if feed == "simulate" else str(feed)
+
     def symbols(self, broker_id: str | None = None) -> list[str]:
         return self.registry.get(broker_id).symbol_names()
 

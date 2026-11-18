@@ -33,12 +33,13 @@
 #property description "Demo identity-bound bridge; read-only by default."
 
 //--- inputs -------------------------------------------------------------
-input string InpServerUrl   = "http://127.0.0.1:8000";  // API base (no trailing slash)
+input string InpServerUrl   = "http://127.0.0.1:18080"; // local SSH tunnel -> VM100:8000
 input string InpToken       = "";                        // bridge token (from server config)
 input string InpAccountId   = "mt5-bridge-demo";         // must match bridge account
 input string InpSymbols     = "XAUUSD";                  // comma separated
 input int    InpPollMs      = 1000;                      // poll interval
-input int    InpRatesBars   = 60;                        // M1 bars to push (0 = none)
+input int    InpRatesBars   = 600;                       // bars per timeframe to push (0 = none)
+input int    InpRatesEverySeconds = 60;                  // history refresh; quotes still poll each second
 input int    InpMagic       = 70707;                     // magic number for our orders
 input int    InpSlippage    = 20;                        // deviation, in points
 input bool   InpVerbose     = true;
@@ -50,6 +51,7 @@ input string InpExpectedServer = "";                   // exact broker server
 string   g_session = "";
 string   g_symbols[];
 datetime g_last_poll = 0;
+datetime g_last_rates_push = 0;
 string   g_pending_ids[];      // executed, result not yet delivered
 string   g_pending_json[];     // the json body for each pending result
 string   g_executed_ids[];     // ids ever executed here — never run twice
@@ -509,35 +511,60 @@ string BuildSnapshot()
      }
    positions += "]";
 
-   //--- M1 rates (analysis/backtest on the server side)
+   //--- Actual terminal rates for the chart periods
+   datetime server_time = (datetime)TimeTradeServer();
+   bool push_rates = InpRatesBars > 0 &&
+                     (g_last_rates_push == 0 || InpRatesEverySeconds <= 0 ||
+                      server_time - g_last_rates_push >= InpRatesEverySeconds);
+   if(push_rates)
+      g_last_rates_push = server_time;
    string rates = "\"rates\":{";
-   if(InpRatesBars > 0)
+   if(push_rates)
      {
+      ENUM_TIMEFRAMES periods[5] = {PERIOD_M1, PERIOD_M5, PERIOD_M15, PERIOD_H1, PERIOD_H4};
+      string names[5] = {"M1", "M5", "M15", "H1", "H4"};
+      bool first_rate_symbol = true;
       for(int i = 0; i < ArraySize(g_symbols); i++)
         {
          string sym = g_symbols[i];
-         MqlRates bars[];
-         int copied = CopyRates(sym, PERIOD_M1, 0, InpRatesBars, bars);
-         if(copied <= 0)
-            continue;
-         if(i > 0)
-            rates += ",";
-         rates += "\"" + sym + "\":{\"M1\":[";
-         for(int j = 0; j < copied; j++)
+         string symbol_rates = "";
+         bool first_period = true;
+         for(int p = 0; p < ArraySize(periods); p++)
            {
-            if(j > 0)
-               rates += ",";
-            rates += StringFormat("{\"t\":%I64d,\"o\":%.5f,\"h\":%.5f,\"l\":%.5f,\"c\":%.5f,\"v\":%I64d}",
-                                  (long)bars[j].time, bars[j].open, bars[j].high, bars[j].low,
-                                  bars[j].close, bars[j].tick_volume);
+            MqlRates bars[];
+            int copied = CopyRates(sym, periods[p], 0, InpRatesBars, bars);
+            if(copied <= 0)
+               continue;
+            if(!first_period)
+               symbol_rates += ",";
+            first_period = false;
+            symbol_rates += "\"" + names[p] + "\":[";
+            for(int j = 0; j < copied; j++)
+              {
+               if(j > 0)
+                  symbol_rates += ",";
+               symbol_rates += StringFormat("{\"t\":%I64d,\"o\":%.5f,\"h\":%.5f,\"l\":%.5f,\"c\":%.5f,\"v\":%I64d}",
+                                            (long)bars[j].time, bars[j].open, bars[j].high,
+                                            bars[j].low, bars[j].close, bars[j].tick_volume);
+              }
+            symbol_rates += "]";
            }
-         rates += "]}";
+         if(StringLen(symbol_rates) == 0)
+            continue;
+         if(!first_rate_symbol)
+            rates += ",";
+         first_rate_symbol = false;
+         rates += "\"" + sym + "\":{" + symbol_rates + "}";
         }
      }
    rates += "}";
+   string rates_updated = StringFormat("\"rates_updated_at\":%I64d,", (long)g_last_rates_push);
+   string rates_unchanged = StringFormat("\"rates_unchanged\":%s,",
+                                         (!push_rates && InpRatesBars > 0) ? "true" : "false");
 
-   return StringFormat("{\"server_time\":%I64d,%s,%s,%s,%s,%s,%s}",
-                       (long)TimeTradeServer(), account, quotes, specs, positions, rates,
+   return StringFormat("{\"server_time\":%I64d,%s,%s,%s,%s,%s,%s%s%s}",
+                       (long)server_time, account, quotes, specs, positions, rates,
+                       rates_updated, rates_unchanged,
                        "\"terminal\":{\"build\":" + IntegerToString(TerminalInfoInteger(TERMINAL_BUILD)) + "}");
   }
 

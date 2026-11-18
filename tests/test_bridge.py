@@ -314,6 +314,56 @@ def test_snapshot_feeds_the_adapter(bridge):
     assert adapter.health().value == "connected"
 
 
+def test_chart_timeframe_aggregates_observed_m1_rates(bridge):
+    adapter = bridge["adapter"]
+    rates = [{"t": t, "o": i + 10.0, "h": i + 12.0, "l": i + 9.0,
+              "c": i + 11.0, "v": 3}
+             for i, t in enumerate((900, 960, 1020, 1080, 1140, 1200, 1260, 1320, 1380, 1440))]
+    frame = snapshot(rates=False)
+    frame["rates"] = {"XAUUSD": {"M1": rates}}
+    bridge["relay"].poll(SID, snapshot=frame)
+
+    bars = adapter.candles("XAUUSD", "M5", 10)
+    assert bars["t"].tolist() == [900, 1200]
+    assert bars["o"].tolist() == [10.0, 15.0]
+    assert bars["h"].tolist() == [16.0, 21.0]
+    assert bars["l"].tolist() == [9.0, 14.0]
+    assert bars["c"].tolist() == [15.0, 20.0]
+    assert bars["v"].tolist() == [15.0, 15.0]
+
+
+def test_quote_polls_preserve_the_last_periodic_rate_snapshot(bridge):
+    adapter = bridge["adapter"]
+    original = adapter.candles("XAUUSD", "M1", 10)
+    quote_only = snapshot(rates=False)
+    quote_only["rates_unchanged"] = True
+    bridge["relay"].poll(SID, snapshot=quote_only)
+
+    current = adapter.candles("XAUUSD", "M1", 10)
+    assert current.equals(original)
+
+
+def test_chart_source_prefers_connected_mt5_without_switching_active_broker(bridge, runtime):
+    active_before = runtime.adapter.id
+    adapter, feed = runtime.market.chart_source("XAUUSD")
+
+    assert adapter.id == ACCOUNT
+    assert feed == "mt5-live"
+    assert runtime.adapter.id == active_before
+
+
+def test_market_chart_endpoint_returns_the_connected_mt5_source(client, auth, bridge, runtime):
+    active_before = runtime.adapter.id
+    response = client.get("/api/market/candles?symbol=XAUUSD&timeframe=M5&limit=20", headers=auth)
+
+    assert response.status_code == 200, response.text
+    payload = response.json()
+    assert payload["feed"] == "mt5-live"
+    assert payload["broker_id"] == ACCOUNT
+    assert payload["candles"]
+    assert runtime.adapter.id == active_before
+
+
 def test_positions_are_replaced_not_merged(bridge):
     adapter = bridge["adapter"]
     client = bridge["relay"]

@@ -43,6 +43,14 @@ STATE_MAP = {
     "pending": OrderState.pending,
 }
 
+TIMEFRAME_SECONDS = {
+    "M1": 60,
+    "M5": 5 * 60,
+    "M15": 15 * 60,
+    "H1": 60 * 60,
+    "H4": 4 * 60 * 60,
+}
+
 
 class BridgeBroker(BrokerAdapter):
     adapter_type = "bridge"
@@ -152,13 +160,38 @@ class BridgeBroker(BrokerAdapter):
                     last=float(quote.get("last") or (bid + ask) / 2))
 
     def candles(self, symbol: str, timeframe: str, limit: int) -> pd.DataFrame:
-        """Rates the EA forwarded. Nothing is synthesised here: absent means an error."""
+        """Return EA rates, aggregating M1 bars when the EA sent no requested period.
+
+        This only combines observed terminal bars. It never fills gaps or invents
+        prices; when no suitable rates arrived, callers get an explicit error.
+        """
         rates = (self._snapshot().get("rates") or {})
-        bars = ((rates.get(symbol) or {}).get(timeframe)) or []
+        symbol_rates = rates.get(symbol) or {}
+        bars = symbol_rates.get(timeframe) or []
+        aggregate_seconds = TIMEFRAME_SECONDS.get(timeframe)
+        if not bars and timeframe != "M1" and aggregate_seconds:
+            m1_bars = symbol_rates.get("M1") or []
+            if m1_bars:
+                m1 = pd.DataFrame(m1_bars)
+                required = {"t", "o", "h", "l", "c"}
+                missing = required - set(m1.columns)
+                if missing:
+                    raise BrokerError(f"bridge M1 rates for {symbol} are missing {sorted(missing)}")
+                if "v" not in m1.columns:
+                    m1["v"] = 0.0
+                m1["t"] = pd.to_numeric(m1["t"], errors="coerce")
+                m1 = m1.dropna(subset=["t"]).sort_values("t")
+                m1["_period"] = (m1["t"].astype("int64") // aggregate_seconds) * aggregate_seconds
+                frame = m1.groupby("_period", sort=True).agg(
+                    t=("t", "first"), o=("o", "first"), h=("h", "max"),
+                    l=("l", "min"), c=("c", "last"), v=("v", "sum"),
+                ).reset_index()
+                frame["t"] = frame.pop("_period").astype("int64")
+                bars = frame.to_dict(orient="records")
         if not bars:
             raise BrokerError(
-                f"the bridge has no {timeframe} rates for {symbol}; run the EA with "
-                f"'push_rates' enabled or keep feed_mode=simulate until it reports them")
+                f"the bridge has no {timeframe} rates for {symbol}; enable rate forwarding "
+                "in the MT5 EA and confirm the symbol is available in Market Watch")
         frame = pd.DataFrame(bars)
         required = {"t", "o", "h", "l", "c"}
         missing = required - set(frame.columns)
