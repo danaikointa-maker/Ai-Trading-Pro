@@ -3,9 +3,9 @@
     <button v-for="tf in visibleTimeframes" :key="tf.id" type="button" class="btn px-2 py-1 text-[11px]"
             :class="state.timeframe === tf.id ? 'text-gold' : ''" :aria-pressed="state.timeframe === tf.id"
             @click="setTimeframe(tf.id)">{{ tf.id }}</button>
-    <span v-if="!pinnedTimeframes.includes(state.timeframe)" class="chip">กำลังดู {{ state.timeframe }}</span>
+    <span v-if="!pinnedTimeframes.includes(state.timeframe)" class="chip" :aria-label="`กำลังดู ${state.timeframe}`">{{ state.timeframe }}</span>
     <details class="relative">
-      <summary class="btn cursor-pointer list-none px-2 py-1 text-[11px]">Timeframe เพิ่มเติม / จัดปุ่ม ▾</summary>
+      <summary class="tool-btn cursor-pointer list-none" title="Timeframe เพิ่มเติม / จัดปุ่ม" aria-label="Timeframe เพิ่มเติม / จัดปุ่ม"><ToolIcon name="sliders" /></summary>
       <div class="absolute left-0 top-full z-50 mt-1 w-64 rounded-lg border border-ink-700 bg-ink-900 p-3 shadow-xl">
         <p class="mb-2 text-[11px] text-muted">เลือกดู หรือ ✓ เพื่อแสดงเป็นปุ่มประจำ</p>
         <div v-for="tf in CHART_TIMEFRAMES" :key="tf.id" class="flex items-center justify-between gap-3 py-1">
@@ -25,5 +25,6 @@
 
 <script setup>
 import { setTimeframe, state } from '../lib/store'
+import ToolIcon from './ToolIcon.vue'
 import { CHART_TIMEFRAMES, pinnedTimeframes, resetTimeframes, toggleTimeframe, visibleTimeframes } from '../lib/chartTimeframes'
 </script>

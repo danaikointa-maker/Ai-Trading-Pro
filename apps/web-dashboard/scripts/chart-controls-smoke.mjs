@@ -2,6 +2,7 @@ import assert from 'node:assert/strict'
 import { createServer } from 'vite'
 import { createSSRApp, nextTick } from 'vue'
 import { renderToString } from '@vue/server-renderer'
+import { createMemoryHistory, createRouter } from 'vue-router'
 import { latestLogicalRange, nextBarSpacing, validPriceRange } from '../src/lib/chartViewport.js'
 
 const storage = new Map()
@@ -42,6 +43,27 @@ try {
   const app = createSSRApp(Chart)
   app.component('RouterLink', { template: '<a><slot /></a>' })
   app.config.warnHandler = message => { throw new Error(message) }
-  assert.match(await renderToString(app), /ควบคุมกราฟ/)
-  console.log('PASS: timeframe visibility, persistence, active selection, viewport helpers and chart SSR')
+  const chartHtml = await renderToString(app)
+  assert.match(chartHtml, /ควบคุมกราฟ/)
+  // Icon controls must keep a readable name after their visible text is removed.
+  function checkIconNames(html) {
+    let checked = 0
+    for (const match of html.matchAll(/<(button|summary)\b([^>]*)>([\s\S]*?)<\/\1>/g)) {
+      if (!match[3].includes('<svg')) continue
+      assert.match(match[2], /aria-label="[^"]+"/, 'icon control must have an accessible name')
+      assert.match(match[2], /title="[^"]+"/, 'icon control must have a hover explanation')
+      checked++
+    }
+    assert.ok(checked > 0)
+  }
+  checkIconNames(chartHtml)
+  const { default: Header } = await server.ssrLoadModule('/src/components/TopBar.vue')
+  const headerApp = createSSRApp(Header)
+  const router = createRouter({ history: createMemoryHistory(), routes: [{ path: '/', component: { template: '<div />' } }] })
+  headerApp.use(router)
+  await router.push('/')
+  await router.isReady()
+  headerApp.config.warnHandler = message => { throw new Error(message) }
+  checkIconNames(await renderToString(headerApp))
+  console.log('PASS: timeframe preferences, chart/header rendering, named icon controls and viewport helpers')
 } finally { await server.close() }

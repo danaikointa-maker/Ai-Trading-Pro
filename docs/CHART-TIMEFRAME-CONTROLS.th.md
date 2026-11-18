@@ -23,3 +23,18 @@ EA compile 0 errors / 0 warnings. Native M3 จาก bridge เทียบแ�
 
 พอร์ต: 18000 สำหรับ UI พัฒนา; 18080 สำหรับ UI/API VM ผ่าน SSH ไป VM loopback 8000.
 ย้อนกลับ code/bundle ไป commit e193f6f ได้โดยไม่เปลี่ยนฐานข้อมูลบัญชี.
+
+## แถบเครื่องมือแบบย่อ
+
+ปุ่มปรับ timeframe ใช้ไอคอน sliders; ปุ่มซูม เลื่อนตามราคา เว้นท้าย กลับล่าสุด
+แสดงทั้งหมด เต็มจอ และสเกลราคาใช้ SVG พร้อม title/aria-label.
+สถานะเปิด–ปิดยังใช้ aria-pressed และสีเน้น ปุ่ม timeframe คงชื่อ M1/M3 ฯลฯ.
+ส่วนหัวใช้ไอคอนแทน Equity, P&L, clock, role และ logout; โหมดใช้ MAN/SEMI/AUTO.
+ตั้งความสูง/ช่วงเวลา/ช่วงราคาและรายละเอียดโมเดลอยู่ในเมนูขยาย.
+สถานะ SIMULATED, ข้อมูลค้าง และความต่างเวลา MT5 ยังมีข้อความสถานะสั้นให้เห็น.
+ค่าตัวเลขราคาและคำเตือนที่จำเป็นไม่ถูกซ่อนทั้งหมดไว้ใน tooltip.
+
+ตรวจ compact UI: build และ chart/header SSR smoke ผ่าน รวมป้ายชื่อและ tooltip
+ของปุ่มไอคอน; อ่าน accessibility ของ Chrome จริงแล้วพบชื่อปุ่มครบ.
+ยังไม่ตรวจภาพหน้าจอระดับพิกเซล เนื่องจาก capture timeout และ native click
+รายงาน coordinate input geometry is unavailable.

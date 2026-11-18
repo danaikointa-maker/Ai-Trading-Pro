@@ -1,6 +1,6 @@
 <template>
   <header class="sticky top-0 z-30 border-b border-ink-700/70 bg-ink-950/85 backdrop-blur">
-    <div class="mx-auto flex max-w-[1700px] flex-wrap items-center gap-x-4 gap-y-2 px-3 py-2.5 sm:px-4">
+    <div class="mx-auto flex max-w-[1700px] flex-wrap items-center gap-x-2 gap-y-1 px-2 py-1.5 sm:px-3">
       <div class="flex items-center gap-1 rounded-lg border border-ink-700 bg-ink-900 p-0.5">
         <button
           v-for="s in symbols"
@@ -18,23 +18,22 @@
         <span class="num text-[11px]" :class="change >= 0 ? 'text-up' : 'text-down'">
           {{ signed(change, digits) }} ({{ signed(changePct, 2) }}%)
         </span>
-        <span class="chip num">spread {{ fmt(ticker.spread_points, 0) }} pts</span>
+        <span class="chip num" :title="`Spread ${fmt(ticker.spread_points, 0)} points`" :aria-label="`Spread ${fmt(ticker.spread_points, 0)} points`"><ToolIcon name="width" />{{ fmt(ticker.spread_points, 0) }}</span>
       </div>
 
-      <div class="ml-auto flex flex-wrap items-center gap-2">
+      <div class="ml-auto flex flex-wrap items-center gap-1.5">
         <div class="hidden items-center gap-1 rounded-lg border border-ink-700 bg-ink-900 p-0.5 md:flex">
           <TimeframePicker />
         </div>
 
-        <div class="hidden text-right sm:block">
-          <div class="label">Equity</div>
+        <div class="hidden items-center gap-1 sm:flex" title="Equity · มูลค่าบัญชี" aria-label="Equity">
+          <ToolIcon name="wallet" />
           <div class="num text-[13px] font-semibold text-slate-100">{{ money(account?.equity) }}</div>
         </div>
-        <div class="hidden text-right sm:block">
-          <div class="label">Today</div>
+        <div class="hidden items-center gap-1 sm:flex" title="กำไร/ขาดทุนวันนี้" aria-label="กำไร/ขาดทุนวันนี้">
+          <ToolIcon name="pnl" />
           <div class="num text-[13px] font-semibold" :class="(risk?.daily_pnl || 0) >= 0 ? 'text-up' : 'text-down'">
             {{ money(risk?.daily_pnl) }}
-            <span class="text-[10px] text-muted">({{ fmt(risk?.daily_pnl_pct, 2) }}%)</span>
           </div>
         </div>
 
@@ -42,29 +41,28 @@
           <button
             v-for="m in modes"
             :key="m.id"
-            class="rounded-md px-2.5 py-1 text-[10.5px] font-semibold transition"
+            class="rounded-md px-2 py-1 text-[10.5px] font-semibold transition"
             :class="mode === m.id ? 'bg-gold-500/15 text-gold-400 ring-1 ring-gold-500/30' : 'text-muted hover:text-slate-200'"
-            :title="m.hint"
+            :title="m.hint" :aria-label="m.hint" :aria-pressed="mode === m.id"
             @click="changeMode(m.id)"
           >
-            {{ m.label }}<span v-if="m.id === 'full_auto' && !fullAutoAllowed" class="ml-1 opacity-60">🔒</span>
+            {{ m.label }}<ToolIcon v-if="m.id === 'full_auto' && !fullAutoAllowed" name="lock" class="ml-1 inline-block !h-3 !w-3 opacity-60" />
           </button>
         </div>
 
-        <div class="flex items-center gap-1.5 rounded-lg border border-ink-700 bg-ink-900 px-2 py-1.5">
-          <span class="h-1.5 w-1.5 rounded-full" :class="healthTone" />
-          <span class="text-[10.5px] capitalize text-slate-300">{{ health }}</span>
+        <div class="flex h-8 w-6 items-center justify-center" role="status" :title="`สถานะการเชื่อมต่อ: ${health}`" :aria-label="`สถานะการเชื่อมต่อ: ${health}`">
+          <span class="h-2 w-2 rounded-full" :class="healthTone" />
         </div>
 
-        <div class="hidden text-right lg:block">
-          <div class="label">Market clock</div>
+        <div class="hidden items-center gap-1 lg:flex" title="Market clock · เวลาของ runtime" aria-label="Market clock">
+          <ToolIcon name="clock" />
           <div class="num text-[12px] text-slate-300">{{ clock(state.live?.virtual_time) }}</div>
         </div>
 
-        <span v-if="role" class="chip" :class="roleTone" :title="roleHint">{{ role }}</span>
+        <span v-if="role" class="chip" :class="roleTone" :title="`${role}: ${roleHint}`" :aria-label="`${role}: ${roleHint}`"><ToolIcon name="shield" /></span>
 
-        <button class="btn px-2" title="Sign out" @click="signOut">
-          <span class="text-[11px]">{{ initials }}</span>
+        <button class="tool-btn" title="ออกจากระบบ" aria-label="ออกจากระบบ" @click="signOut">
+          <ToolIcon name="logout" />
         </button>
       </div>
     </div>
@@ -78,12 +76,13 @@ import { api } from '../lib/api'
 import { clock, fmt, money, signed } from '../lib/format'
 import { logout, setSymbol, state, toast } from '../lib/store'
 import TimeframePicker from './TimeframePicker.vue'
+import ToolIcon from './ToolIcon.vue'
 
 const router = useRouter()
 const modes = [
-  { id: 'manual', label: 'Manual + AI', hint: 'AI แนะนำ ผู้ใช้กด Buy/Sell เอง' },
-  { id: 'semi_auto', label: 'Semi-Auto', hint: 'AI แจ้งสัญญาณ ผู้ใช้อนุมัติ ระบบจัดการ SL/TP' },
-  { id: 'full_auto', label: 'Full Auto', hint: 'EA เปิดไม้ตามกฎหลังผ่าน Risk Engine (ต้องปลดล็อก)' },
+  { id: 'manual', label: 'MAN', hint: 'Manual + AI · AI แนะนำ ผู้ใช้กด Buy/Sell เอง' },
+  { id: 'semi_auto', label: 'SEMI', hint: 'Semi-Auto · AI แจ้งสัญญาณ ผู้ใช้อนุมัติ ระบบจัดการ SL/TP' },
+  { id: 'full_auto', label: 'AUTO', hint: 'Full Auto · EA เปิดไม้ตามกฎหลังผ่าน Risk Engine (ต้องปลดล็อก)' },
 ]
 
 const symbols = computed(() => state.config?.symbols || state.brokers?.symbols || ['XAUUSD'])
@@ -97,7 +96,6 @@ const healthTone = computed(() => (health.value === 'connected' ? 'bg-up' : heal
 const fullAutoAllowed = computed(
   () => Boolean(state.config?.security?.allow_full_auto && state.config?.security?.full_auto_enabled),
 )
-const initials = computed(() => (state.user?.email || 'N7').slice(0, 2).toUpperCase())
 // The account's role decides what the server will accept; the UI says so rather
 // than letting a viewer discover it through 403s.
 const role = computed(() => state.user?.role || '')

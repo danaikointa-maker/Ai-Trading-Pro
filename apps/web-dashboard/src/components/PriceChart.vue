@@ -1,54 +1,52 @@
 <template>
   <div ref="chartHost" class="relative flex flex-col bg-ink-900" :class="fullscreen ? 'h-screen p-2' : ''" tabindex="0" @keydown="chartKeydown">
-    <div class="flex flex-wrap items-center gap-2 border-b border-ink-700/60 px-3 py-2 text-[11px]">
-      <label for="chart-account">แหล่งข้อมูลกราฟ</label>
-      <select id="chart-account" v-model="selectedAccount" class="input w-auto py-1" @change="load">
-        <option value="">ตลาดกลาง · ดูกราฟได้โดยไม่ผูกบัญชี</option>
+    <div class="flex flex-wrap items-center gap-1.5 border-b border-ink-700/60 px-2 py-1 text-[11px]">
+      <label for="chart-account" class="text-muted" title="แหล่งข้อมูลกราฟ"><ToolIcon name="chart" /><span class="sr-only">แหล่งข้อมูลกราฟ</span></label>
+      <select id="chart-account" v-model="selectedAccount" class="input max-w-[160px] py-1 text-[11px]" @change="load">
+        <option value="">ตลาดกลาง</option>
         <option v-for="account in marketAccounts" :key="account.id" :value="account.id">
           {{ account.label }} · {{ account.account_type.toUpperCase() }} · {{ account.market_connected ? 'เชื่อมต่อแล้ว' : 'รอเชื่อม MT5' }}
         </option>
       </select>
-      <RouterLink to="/brokers" class="text-gold">ผูกบัญชีโบรกเกอร์</RouterLink>
-      <span v-if="contextError" class="text-amber-200">โหลดสถานะบัญชีไม่ได้ · ยังดูกราฟตลาดกลางได้</span>
-      <span v-else-if="!marketAccounts.length" class="text-muted">ยังไม่ผูกบัญชี · ดูกราฟอย่างเดียว</span>
-      <span class="text-muted">การเลือกกราฟไม่เปิดสิทธิ์ซื้อขาย</span>
-    </div>
-    <div v-if="quoteWarning" role="status" class="border-b border-amber-400/30 bg-amber-400/10 px-3 py-2 text-[11px] text-amber-200">{{ quoteWarning }}</div>
-    <div class="flex flex-wrap items-center gap-1.5 border-b border-ink-700/60 px-2 py-2" aria-label="ชั้นข้อมูลบนกราฟ">
-      <span class="mr-1 text-[10px] text-muted">แสดงเส้น:</span>
+      <RouterLink to="/brokers" class="tool-btn" title="ผูกบัญชี / จัดการโบรกเกอร์" aria-label="ผูกบัญชี / จัดการโบรกเกอร์"><ToolIcon name="link" /></RouterLink>
+      <span v-if="contextError" role="status" class="text-amber-200" title="โหลดสถานะบัญชีไม่ได้ · ยังดูกราฟตลาดกลางได้" aria-label="โหลดสถานะบัญชีไม่ได้"><ToolIcon name="alert" /></span>
+      <span class="text-muted" :title="!marketAccounts.length ? 'ยังไม่ผูกบัญชี · ดูกราฟอย่างเดียว' : 'การเลือกกราฟไม่เปิดสิทธิ์ซื้อขาย'" aria-label="กราฟอ่านอย่างเดียว"><ToolIcon name="lock" /></span>
+      <span class="mx-1 h-4 border-l border-ink-700" aria-hidden="true"></span>
       <button v-for="item in layerChoices" :key="item.key" type="button"
               class="rounded border px-2 py-1 text-[10px] transition-colors"
               :class="layerVisibility[item.key] ? 'border-gold/50 bg-gold/10 text-gold' : 'border-ink-700 text-muted'"
-              :aria-pressed="layerVisibility[item.key]" :title="'เปิด/ปิดเฉพาะการแสดงผล ' + item.label"
+              :aria-pressed="layerVisibility[item.key]" :title="'เปิด/ปิดเฉพาะการแสดงผล ' + item.label" :aria-label="'เปิด/ปิด ' + item.label"
               @click="layerVisibility[item.key] = !layerVisibility[item.key]">
-        {{ item.label }} {{ layerVisibility[item.key] ? '✓' : '○' }}
+        {{ item.short || item.label }}
       </button>
-      <span class="text-[9.5px] text-muted">ไม่กระทบระบบเทรด</span>
+      <span v-if="quoteWarning" role="status" class="flex items-center gap-1 text-amber-200" :title="quoteWarning" :aria-label="quoteWarning"><ToolIcon name="alert" />{{ quoteWarning.startsWith('เวลา MT5') ? 'MT5 ≠ UTC' : chartFeed === 'simulated' ? 'SIMULATED' : chartFeed === 'replay' ? 'REPLAY' : 'ราคาไม่สด' }}</span>
     </div>
-    <div class="flex flex-wrap items-center gap-1.5 border-b border-ink-700/60 px-2 py-2 text-[11px]" aria-label="ควบคุมกราฟ">
+    <div class="flex flex-wrap items-center gap-1 border-b border-ink-700/60 px-2 py-1 text-[11px]" aria-label="ควบคุมกราฟ">
       <TimeframePicker />
-      <button class="btn px-2 py-1" aria-label="ซูมออก" title="ซูมออก (-)" @click="zoom(-1)">−</button>
-      <button class="btn px-2 py-1" aria-label="ซูมเข้า" title="ซูมเข้า (+)" @click="zoom(1)">+</button>
-      <label class="flex items-center gap-1">กว้างแท่ง
-        <input aria-label="ความกว้างต่อแท่ง หน่วยพิกเซล" class="input w-16 py-1" type="number" min="2" max="48" :value="spacing.toFixed(1)" @change="setSpacing($event.target.value)" /> px
+      <span class="mx-1 h-4 border-l border-ink-700" aria-hidden="true"></span>
+      <button class="tool-btn" aria-label="ซูมออก" title="ซูมออก (-)" @click="zoom(-1)"><ToolIcon name="zoomOut" /></button>
+      <button class="tool-btn" aria-label="ซูมเข้า" title="ซูมเข้า (+)" @click="zoom(1)"><ToolIcon name="zoomIn" /></button>
+      <label class="flex items-center gap-1 text-muted" title="ความกว้างต่อแท่ง (px)"><ToolIcon name="width" />
+        <input aria-label="ความกว้างต่อแท่ง หน่วยพิกเซล" class="input w-14 py-1 text-[11px]" type="number" min="2" max="48" :value="spacing.toFixed(1)" @change="setSpacing($event.target.value)" />
       </label>
-      <button class="btn px-2 py-1" :aria-pressed="autoScroll" @click="toggleAutoScroll">Auto scroll {{ autoScroll ? '✓' : '○' }}</button>
-      <button class="btn px-2 py-1" :aria-pressed="chartShift" @click="toggleShift">เว้นท้าย {{ chartShift ? '✓' : '○' }}</button>
-      <button class="btn px-2 py-1" title="กลับแท่งล่าสุด (End)" @click="goLatest">ล่าสุด</button>
-      <button class="btn px-2 py-1" @click="fitAll">ดูทั้งหมด</button>
-      <button class="btn px-2 py-1" title="M1 · แท่งกว้าง 16px · สูง 580px · สเกลอัตโนมัติ" @click="mt5View">มุมมอง MT5 (M1)</button>
-      <button class="btn px-2 py-1" @click="toggleFullscreen">{{ fullscreen ? 'ออกเต็มจอ' : 'เต็มจอ' }}</button>
+      <button class="tool-btn" :aria-pressed="autoScroll" aria-label="เลื่อนตามราคาล่าสุดอัตโนมัติ" title="Auto scroll · เลื่อนตามราคาล่าสุด" @click="toggleAutoScroll"><ToolIcon name="follow" /></button>
+      <button class="tool-btn" :aria-pressed="chartShift" aria-label="เว้นพื้นที่ท้ายกราฟ" title="Chart shift · เว้นพื้นที่ท้ายกราฟ" @click="toggleShift"><ToolIcon name="shift" /></button>
+      <button class="tool-btn" title="กลับแท่งล่าสุด (End)" aria-label="กลับแท่งล่าสุด" @click="goLatest"><ToolIcon name="latest" /></button>
+      <button class="tool-btn" title="แสดงข้อมูลทั้งหมดที่โหลด" aria-label="ดูกราฟทั้งหมด" @click="fitAll"><ToolIcon name="fit" /></button>
+      <button class="tool-btn w-10 text-[10px] font-semibold" title="มุมมอง MT5 · M1 · กว้าง 16px · สูง 580px" aria-label="มุมมอง MT5 M1" @click="mt5View">MT5</button>
+      <button class="tool-btn" :title="fullscreen ? 'ออกเต็มจอ' : 'เต็มจอ'" :aria-label="fullscreen ? 'ออกเต็มจอ' : 'เต็มจอ'" @click="toggleFullscreen"><ToolIcon :name="fullscreen ? 'collapse' : 'fullscreen'" /></button>
+      <button class="tool-btn" title="คืนสเกลราคาอัตโนมัติ" aria-label="สเกลราคาอัตโนมัติ" @click="resetPriceScale"><ToolIcon name="scale" /></button>
     </div>
-    <div class="flex flex-wrap items-center gap-1.5 px-3 py-1 text-[10px] text-muted">
-      <button class="btn px-2 py-1" @click="resetPriceScale">Auto ราคา</button>
-      <label>สูง <input v-model.number="chartHeight" aria-label="ความสูงกราฟ หน่วยพิกเซล" type="number" min="300" max="1000" step="20" class="input w-20 py-1" @change="saveViewPrefs" /> px</label>
+    <div class="relative flex flex-wrap items-center gap-1.5 px-2 py-1 text-[10px] text-muted">
+      <ToolIcon name="database" />
       <span>{{ visibleSummary }}</span>
       <span v-if="visiblePrices">· ราคา {{ visiblePrices }}</span>
-      <span v-if="fixedPriceRange">· ตรึงสเกล</span>
-    </div>
-    <details class="px-3 py-1 text-[11px] text-muted">
-      <summary class="cursor-pointer">กำหนดช่วงเวลา / ช่วงราคาให้ตรง MT5</summary>
-      <div class="flex flex-wrap items-end gap-2 py-2">
+      <span v-if="fixedPriceRange" title="ตรึงช่วงราคา" aria-label="ตรึงช่วงราคา"><ToolIcon name="lock" /></span>
+    <details class="ml-auto text-[11px] text-muted">
+      <summary class="inline-flex cursor-pointer list-none items-center gap-1 rounded p-1 hover:bg-ink-800" title="ตั้งช่วงเวลา ช่วงราคา และความสูงกราฟ" aria-label="ตั้งช่วงเวลา ช่วงราคา และความสูงกราฟ"><ToolIcon name="sliders" /><span class="sr-only">ตั้งค่าช่วงกราฟ</span></summary>
+      <div class="absolute inset-x-0 top-full z-20 rounded-b-lg border border-ink-700 bg-ink-900 p-3 shadow-xl">
+      <div class="flex flex-wrap items-end gap-2">
+        <label>สูง (px)<input v-model.number="chartHeight" aria-label="ความสูงกราฟ หน่วยพิกเซล" type="number" min="300" max="1000" step="20" class="input block w-20 py-1" @change="saveViewPrefs" /></label>
         <label>เริ่ม (เวลาแท่ง)<input v-model="timeFrom" type="datetime-local" class="input block py-1" /></label>
         <label>ถึง (เวลาแท่ง)<input v-model="timeTo" type="datetime-local" class="input block py-1" /></label>
         <button class="btn px-2 py-1" @click="applyTimeRange">แสดงช่วงเวลา</button>
@@ -58,14 +56,16 @@
         <span>ใช้เวลาแท่งจาก source เดียวกับแกนล่าง · ช่วงที่เลือกต้องอยู่ในข้อมูลที่โหลด</span>
       </div>
       <p v-if="viewError" role="alert" class="pb-2 text-amber-200">{{ viewError }}</p>
+      </div>
     </details>
+    </div>
     <div class="relative min-h-0" :class="fullscreen ? 'flex-1' : ''" :style="fullscreen ? {} : { height: `${Math.min(1000, Math.max(300, Number(chartHeight) || 580))}px` }">
     <div ref="container" class="h-full w-full" @pointerdown="startChartDrag" @pointermove="moveChartDrag" @pointerup="endChartDrag" @pointercancel="endChartDrag" @pointerleave="endChartDrag"></div>
     <div class="pointer-events-none absolute left-3 top-2 flex flex-wrap items-center gap-1.5">
       <span class="chip chip-gold">{{ chartSymbol || state.symbol }} · {{ state.timeframe }}</span>
       <span class="chip" :class="feedWarn ? 'chip-warn' : ''" :title="feedTitle">{{ feedLabel }}</span>
       <span v-if="chartFeed !== 'mt5-live' && state.live?.analysis?.regime" class="chip">{{ state.live.analysis.regime.regime.replace('_',' ') }}</span>
-      <span v-if="chartFeed === 'mt5-live'" class="chip chip-warn" title="สัญญาณและสถานะบัญชียังมาจาก runtime อีกชุด; ซ่อนไว้จากกราฟ MT5 นี้">ซ่อน overlay จาก runtime</span>
+      <span v-if="chartFeed === 'mt5-live'" class="chip chip-warn" title="ซ่อน overlay จาก runtime เพราะยังใช้ข้อมูลอีกชุด" aria-label="ซ่อน overlay จากข้อมูลอีกชุด"><ToolIcon name="eyeOff" /></span>
     </div>
     <div v-if="loading" class="absolute inset-x-0 bottom-0 top-10 grid place-items-center bg-ink-900/40 text-[12px] text-muted">loading chart…</div>
     <!-- Never fail silently: a blank panel tells nobody anything. -->
@@ -98,6 +98,7 @@ import { positions, setTimeframe, state } from '../lib/store'
 import { latestLogicalRange, nextBarSpacing, validPriceRange } from '../lib/chartViewport'
 import { timeframeSeconds } from '../lib/chartTimeframes'
 import TimeframePicker from './TimeframePicker.vue'
+import ToolIcon from './ToolIcon.vue'
 
 const container = ref(null)
 const chartHost = ref(null)
@@ -315,11 +316,11 @@ const LAYERS_KEY = 'no7.chart.layers.v1'
 const layerChoices = [
   { key: 'ema', label: 'EMA' },
   { key: 'sr', label: 'S/R' },
-  { key: 'flip', label: 'SR Flip' },
-  { key: 'fib', label: 'Fib 50–61.8' },
-  { key: 'structure', label: 'BOS/CHoCH' },
-  { key: 'plan', label: 'Entry/SL/TP' },
-  { key: 'positions', label: 'ไม้เปิด' },
+  { key: 'flip', label: 'SR Flip', short: 'FLIP' },
+  { key: 'fib', label: 'Fib 50–61.8', short: 'FIB' },
+  { key: 'structure', label: 'BOS/CHoCH', short: 'BOS' },
+  { key: 'plan', label: 'Entry/SL/TP', short: 'SL/TP' },
+  { key: 'positions', label: 'ไม้เปิด', short: 'POS' },
 ]
 const layerVisibility = reactive({ ema: true, sr: true, flip: true, fib: true, structure: false, plan: true, positions: true })
 try {

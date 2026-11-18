@@ -1,14 +1,16 @@
 <template>
   <div class="space-y-3">
     <div class="flex flex-wrap items-center gap-2 rounded-xl border border-ink-700/70 bg-ink-850/70 px-3 py-2">
-      <span class="chip chip-gold">AI Trading Terminal</span>
+      <span class="text-gold" title="AI Trading Terminal" aria-label="AI Trading Terminal"><ToolIcon name="chart" /></span>
       <span class="chip">{{ analysis?.regime?.regime?.replace('_', ' ') || '—' }}</span>
       <span class="chip">ADX {{ fmt(analysis?.indicators?.adx14, 1) }}</span>
       <span class="chip">ATR {{ fmt(analysis?.indicators?.atr_points, 0) }} pts ({{ fmt(atrPct, 2) }}%)</span>
       <span class="chip">VWAP {{ fmt(analysis?.indicators?.vwap, digits) }}</span>
-      <span class="chip">EQ {{ money(account?.equity) }}</span>
-      <RouterLink v-if="state.user?.platform_role !== 'super_admin'" to="/trading-floor" class="chip text-violet-200 hover:text-white">AI Trading Floor →</RouterLink>
-      <ModelBadge class="ml-auto" />
+      <RouterLink v-if="state.user?.platform_role !== 'super_admin'" to="/trading-floor" class="tool-btn text-violet-200" title="AI Trading Floor" aria-label="AI Trading Floor"><ToolIcon name="floor" /></RouterLink>
+      <details class="relative ml-auto">
+        <summary class="tool-btn cursor-pointer list-none" :class="state.live?.model?.approved ? 'text-up' : 'text-amber-300'" :title="state.live?.model?.approved ? 'โมเดลผ่านอนุมัติ · ดูรายละเอียด' : 'โมเดลยังไม่ผ่านอนุมัติ / Baseline · ดูรายละเอียด'" :aria-label="state.live?.model?.approved ? 'โมเดลผ่านอนุมัติ ดูรายละเอียด' : 'โมเดลยังไม่ผ่านอนุมัติ หรือ Baseline ดูรายละเอียด'"><ToolIcon :name="state.live?.model?.approved ? 'shield' : 'alert'" /></summary>
+        <div class="absolute right-0 top-full z-40 mt-1 w-72 rounded-lg border border-ink-700 bg-ink-900 p-3"><ModelBadge /></div>
+      </details>
     </div>
 
     <div v-if="news?.active" class="rounded-xl border border-amber-400/30 bg-amber-400/10 px-4 py-2.5 text-[11.5px] text-amber-200">
@@ -34,13 +36,10 @@
         <section class="panel overflow-hidden">
           <div class="flex flex-wrap items-center justify-between gap-2 px-3 pt-2.5">
             <div class="flex items-center gap-2">
-              <span class="panel-title">Price structure</span>
-              <span class="chip">EMA20/50/200</span>
-              <span class="chip">zones</span>
-              <span class="chip">plan levels</span>
+              <span title="Price chart" aria-label="Price chart"><ToolIcon name="chart" /></span>
             </div>
             <div class="flex items-center gap-1.5">
-              <label class="text-[10px] text-muted">ข้อมูลที่โหลด
+              <label class="flex items-center gap-1 text-[10px] text-muted" title="จำนวนแท่งข้อมูลที่โหลด"><ToolIcon name="database" />
               <select v-model.number="state.range" aria-label="จำนวนแท่งข้อมูลที่โหลด ไม่ใช่ระดับซูม" class="input w-[92px] py-1 text-[11px]">
                 <option :value="120">120 bars</option>
                 <option :value="240">240 bars</option>
@@ -48,7 +47,6 @@
                 <option :value="800">800 bars</option>
               </select>
               </label>
-              <span class="chip">session H {{ fmt(analysis?.session_high, digits) }} / L {{ fmt(analysis?.session_low, digits) }}</span>
             </div>
           </div>
           <PriceChart />
@@ -125,6 +123,7 @@
 import { computed } from 'vue'
 import AlertFeed from '../components/AlertFeed.vue'
 import ModelBadge from '../components/ModelBadge.vue'
+import ToolIcon from '../components/ToolIcon.vue'
 import PositionsTable from '../components/PositionsTable.vue'
 import PriceChart from '../components/PriceChart.vue'
 import ProbBars from '../components/ProbBars.vue'
