@@ -47,6 +47,7 @@ const icon = (path) => `<svg viewBox="0 0 24 24" fill="none" stroke="currentColo
 
 const navItems = [
   { to: '/', label: 'Terminal', badge: 'live', icon: icon('<path d="M3 17l5-6 4 3 5-7 4 4"/><path d="M3 21h18"/>') },
+  { to: '/trading-floor', label: 'AI Trading Floor', icon: icon('<circle cx="12" cy="7" r="3"/><path d="M6 20v-2a6 6 0 0 1 12 0v2M2 19a5 5 0 0 1 3-5m17 5a5 5 0 0 0-3-5"/>') },
   { to: '/forecast', label: 'AI Forecast', icon: icon('<path d="M4 19V5"/><path d="M4 15c3 0 4-8 8-8s5 6 8 6"/><path d="M16 19h4"/>') },
   { to: '/zones', label: 'Zones S/R', icon: icon('<path d="M4 7h16M4 12h16M4 17h16"/>') },
   { to: '/trades', label: 'Trades', icon: icon('<path d="M4 6h16v12H4z"/><path d="M8 10h8M8 14h5"/>') },

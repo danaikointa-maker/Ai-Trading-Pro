@@ -5,14 +5,14 @@
         <div class="panel-title">Open Positions</div>
         <div class="panel-sub" role="status">{{ positionsAvailable ? `${positions.length} ไม้ · ข้อมูล positions ที่ยืนยันล่าสุด` : 'ยืนยันสถานะ positions ไม่ได้' }}</div>
       </div>
-      <button class="btn py-1" :disabled="!positionsAvailable || !positions.length || !permissions.canTrade" :title="permissions.reason" @click="closeAll">Close all</button>
+      <button v-if="!readOnly" class="btn py-1" :disabled="!positionsAvailable || !positions.length || !permissions.canTrade" :title="permissions.reason" @click="closeAll">Close all</button>
     </div>
     <div class="overflow-x-auto">
       <table class="table-base">
         <thead>
           <tr>
             <th>Ticket</th><th>Symbol</th><th>Side</th><th>Lot</th><th>Entry</th><th>SL</th><th>TP</th>
-            <th>Price</th><th>Points</th><th>P&L</th><th>BE</th><th></th>
+            <th>Price</th><th>Points</th><th>P&L</th><th>BE</th><th v-if="!readOnly"></th>
           </tr>
         </thead>
         <tbody>
@@ -28,15 +28,15 @@
             <td class="num" :class="p.points >= 0 ? 'text-up' : 'text-down'">{{ fmt(p.points, 0) }}</td>
             <td class="num" :class="p.unrealized >= 0 ? 'text-up' : 'text-down'">{{ money(p.unrealized) }}</td>
             <td><span class="chip" :class="p.breakeven_done ? 'chip-up' : ''">{{ p.breakeven_done ? 'BE' : '—' }}</span></td>
-            <td class="text-right">
+            <td v-if="!readOnly" class="text-right">
               <button class="btn px-2 py-1 text-[10.5px]" :disabled="!permissions.canTrade" :title="permissions.reason" @click="close(p.ticket)">Close</button>
             </td>
           </tr>
           <tr v-if="!positionsAvailable">
-            <td colspan="12" class="py-6 text-center text-[11.5px] text-warn">ไม่ทราบ exposure ปัจจุบัน — ข้อมูลขาดหาย หมดอายุ หรือยังยืนยันเจ้าของบัญชีไม่ได้ ไม่ได้หมายความว่าไม่มีไม้เปิดอยู่</td>
+            <td :colspan="readOnly ? 11 : 12" class="py-6 text-center text-[11.5px] text-warn">ไม่ทราบ exposure ปัจจุบัน — ข้อมูลขาดหาย หมดอายุ หรือยังยืนยันเจ้าของบัญชีไม่ได้ ไม่ได้หมายความว่าไม่มีไม้เปิดอยู่</td>
           </tr>
           <tr v-else-if="!positions.length">
-            <td colspan="12" class="py-6 text-center text-[11.5px] text-muted">ยังไม่มีไม้ที่เปิดอยู่</td>
+            <td :colspan="readOnly ? 11 : 12" class="py-6 text-center text-[11.5px] text-muted">ยังไม่มีไม้ที่เปิดอยู่</td>
           </tr>
         </tbody>
       </table>
@@ -49,6 +49,8 @@ import { api } from '../lib/api'
 import { fmt, money } from '../lib/format'
 import { closeAllFeedback, closeFeedback } from '../lib/close-results'
 import { permissions, positions, positionsAvailable, toast } from '../lib/store'
+
+defineProps({ readOnly: Boolean })
 
 async function close(ticket) {
   if (!positionsAvailable.value || !permissions.value.canTrade) return

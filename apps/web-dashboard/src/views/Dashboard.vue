@@ -7,6 +7,7 @@
       <span class="chip">ATR {{ fmt(analysis?.indicators?.atr_points, 0) }} pts ({{ fmt(atrPct, 2) }}%)</span>
       <span class="chip">VWAP {{ fmt(analysis?.indicators?.vwap, digits) }}</span>
       <span class="chip">EQ {{ money(account?.equity) }}</span>
+      <RouterLink v-if="state.user?.platform_role !== 'super_admin'" to="/trading-floor" class="chip text-violet-200 hover:text-white">AI Trading Floor →</RouterLink>
       <ModelBadge class="ml-auto" />
     </div>
 
