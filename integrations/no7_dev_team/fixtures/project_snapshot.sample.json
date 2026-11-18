@@ -1,0 +1,21 @@
+{
+  "schema_version": "no7-ai-dev-team.project-snapshot.v1",
+  "source": "fixture",
+  "observed_at": "2026-11-18T00:00:00Z",
+  "scope_tenant_id": "00000000-0000-4000-8000-000000000001",
+  "upstream_commit": "cb1ccaf6dd9fd999d82629d6e0f25748134c03d6",
+  "execution_enabled": false,
+  "projects": [
+    {
+      "id": "00000000-0000-4000-8000-000000000002",
+      "tenant_id": "00000000-0000-4000-8000-000000000001",
+      "name": "Sample only — not a live project",
+      "description": "Synthetic contract fixture. No worker, task, repository, or trading status is implied.",
+      "repository_url": null,
+      "status": "registered",
+      "created_at": "2026-11-18T00:00:00Z",
+      "updated_at": "2026-11-18T00:00:00Z",
+      "role": "super_admin"
+    }
+  ]
+}

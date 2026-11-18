@@ -4,6 +4,7 @@ import { getToken } from './lib/api'
 const routes = [
   { path: '/login', name: 'login', component: () => import('./views/Login.vue'), meta: { public: true, title: 'Sign in' } },
   { path: '/', name: 'dashboard', component: () => import('./views/Dashboard.vue'), meta: { title: 'Trading Terminal' } },
+  { path: '/development-team', name: 'development-team', component: () => import('./views/DevelopmentTeam.vue'), meta: { title: 'AI Development Team' } },
   { path: '/trading-floor', name: 'trading-floor', component: () => import('./views/TradingFloor.vue'), meta: { title: 'AI Trading Floor' } },
   { path: '/forecast', name: 'forecast', component: () => import('./views/Forecast.vue'), meta: { title: 'AI Forecast' } },
   { path: '/zones', name: 'zones', component: () => import('./views/Zones.vue'), meta: { title: 'Support & Resistance' } },
