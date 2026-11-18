@@ -188,6 +188,8 @@ brokers:
     server: Connext-Demo
     account_type: demo
     live_allowed: false
+    symbol_mapping:
+      XAUUSD: XAUUSD.s
     regulated_note: >
       Bridge demo only. The EA runs inside the analyst's own terminal; the server
       never holds MT5 credentials and cannot see the account without the EA polling.

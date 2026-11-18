@@ -66,6 +66,21 @@ class MarketDataService:
         feed = getattr(self, "feed_mode", None) or "simulated"
         return adapter, "simulated" if feed == "simulate" else str(feed)
 
+    def resolve_chart_symbol(self, adapter: BrokerAdapter, symbol: str) -> str:
+        """Map the app's canonical chart symbol to the connected broker's name."""
+        try:
+            names = adapter.symbol_names()
+        except Exception:  # noqa: BLE001 - leave the adapter to report its normal error
+            names = []
+        if symbol in names:
+            return symbol
+        profile = next((row for row in self.settings.brokers.get("brokers", [])
+                        if row.get("id") == adapter.id), {})
+        mapped = str((profile.get("symbol_mapping") or {}).get(symbol) or "").strip()
+        if mapped:
+            return mapped
+        return symbol
+
     def symbols(self, broker_id: str | None = None) -> list[str]:
         return self.registry.get(broker_id).symbol_names()
 

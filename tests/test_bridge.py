@@ -364,6 +364,13 @@ def test_market_chart_endpoint_returns_the_connected_mt5_source(client, auth, br
     assert runtime.adapter.id == active_before
 
 
+def test_chart_symbol_maps_canonical_gold_name_to_broker_suffix(bridge, runtime, monkeypatch):
+    adapter = bridge["adapter"]
+    monkeypatch.setattr(adapter, "symbol_names", lambda: ["XAUUSD.s"])
+
+    assert runtime.market.resolve_chart_symbol(adapter, "XAUUSD") == "XAUUSD.s"
+
+
 def test_positions_are_replaced_not_merged(bridge):
     adapter = bridge["adapter"]
     client = bridge["relay"]

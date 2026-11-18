@@ -28,18 +28,19 @@ def symbols(runtime: TradingRuntime = Depends(get_runtime), user=Depends(current
 def candles(symbol: str = "XAUUSD", timeframe: str = "M5", limit: int = Query(400, ge=20, le=2000),
             runtime: TradingRuntime = Depends(get_runtime), user=Depends(current_user)):
     adapter, feed = runtime.market.chart_source(symbol)
+    source_symbol = runtime.market.resolve_chart_symbol(adapter, symbol)
     try:
-        df = runtime.market.candles(symbol, timeframe, limit, broker_id=adapter.id)
+        df = runtime.market.candles(source_symbol, timeframe, limit, broker_id=adapter.id)
     except KeyError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
     except BrokerError as exc:
         raise HTTPException(status_code=503, detail=str(exc)) from exc
     try:
-        spec = adapter.symbol_spec(symbol)
-        tick = runtime.market.ticker(symbol, broker_id=adapter.id)
+        spec = adapter.symbol_spec(source_symbol)
+        tick = runtime.market.ticker(source_symbol, broker_id=adapter.id)
     except BrokerError as exc:
         raise HTTPException(status_code=503, detail=str(exc)) from exc
-    return {"symbol": symbol, "timeframe": timeframe, "broker_id": adapter.id,
+    return {"symbol": symbol, "source_symbol": source_symbol, "timeframe": timeframe, "broker_id": adapter.id,
             "feed": feed, "spec": spec.model_dump(),
             "candles": [c.model_dump() for c in candles_from_df(df)],
             "ticker": tick.model_dump()}
@@ -49,11 +50,13 @@ def candles(symbol: str = "XAUUSD", timeframe: str = "M5", limit: int = Query(40
 def ticker(symbol: str = "XAUUSD", runtime: TradingRuntime = Depends(get_runtime),
            user=Depends(current_user)):
     adapter, feed = runtime.market.chart_source(symbol)
-    quote = runtime.market.latest_quote(symbol, broker_id=adapter.id)
+    source_symbol = runtime.market.resolve_chart_symbol(adapter, symbol)
+    quote = runtime.market.latest_quote(source_symbol, broker_id=adapter.id)
     if quote is None:
         raise HTTPException(status_code=503, detail="no quote available")
     quote["broker_id"] = adapter.id
     quote["feed"] = feed
+    quote["symbol"] = source_symbol
     return quote
 
 

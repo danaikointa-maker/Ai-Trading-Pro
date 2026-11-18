@@ -13,7 +13,7 @@
     </div>
     <div ref="container" class="h-[380px] w-full sm:h-[440px]"></div>
     <div class="pointer-events-none absolute left-3 top-12 flex flex-wrap items-center gap-1.5">
-      <span class="chip chip-gold">{{ state.symbol }} · {{ state.timeframe }}</span>
+      <span class="chip chip-gold">{{ chartSymbol || state.symbol }} · {{ state.timeframe }}</span>
       <span class="chip" :class="feedWarn ? 'chip-warn' : ''" :title="feedTitle">{{ feedLabel }}</span>
       <span v-if="chartFeed !== 'mt5-live' && state.live?.analysis?.regime" class="chip">{{ state.live.analysis.regime.regime.replace('_',' ') }}</span>
       <span v-if="chartFeed === 'mt5-live'" class="chip chip-warn" title="สัญญาณและสถานะบัญชียังมาจาก runtime อีกชุด; ซ่อนไว้จากกราฟ MT5 นี้">ซ่อน overlay จาก runtime</span>
@@ -52,6 +52,7 @@ const error = ref('')
 const bars = ref(0)
 const lastBar = ref(null)
 const chartFeed = ref('')
+const chartSymbol = ref('')
 let chart = null
 let candleSeries = null
 let ema20 = null
@@ -175,11 +176,13 @@ async function load() {
   loading.value = true
   error.value = ''
   chartFeed.value = ''
+  chartSymbol.value = ''
   try {
     const data = await api.get(
       `/api/market/candles?symbol=${encodeURIComponent(state.symbol)}&timeframe=${state.timeframe}&limit=${state.range}`,
     )
     chartFeed.value = data.feed || ''
+    chartSymbol.value = data.source_symbol || data.symbol || state.symbol
     const raw = Array.isArray(data.candles) ? data.candles : []
     // lightweight-charts demands strictly ascending, unique timestamps.
     const seen = new Set()
