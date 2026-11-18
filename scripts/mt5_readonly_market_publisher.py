@@ -229,11 +229,12 @@ def run(args: argparse.Namespace) -> int:
 
         last_rates_at = 0.0
         poll_seconds = max(0.25, args.poll_ms / 1000.0)
+        rates_interval = max(5.0, args.rates_interval)
         while True:
             account, status, identity = account_identity(
                 terminal, args.expected_login, args.expected_server)
             now = time.monotonic()
-            include_rates = last_rates_at == 0.0 or now - last_rates_at >= args.rates_interval
+            include_rates = last_rates_at == 0.0 or now - last_rates_at >= rates_interval
             snapshot = build_snapshot(terminal, account, status, symbols,
                                       include_rates=include_rates, rates_bars=args.rates_bars)
             try:
@@ -269,7 +270,7 @@ def run(args: argparse.Namespace) -> int:
                 print(f"Read-only publisher ignored {len(commands)} command(s)")
             if include_rates:
                 last_rates_at = now
-            time.sleep(poll_seconds)
+            time.sleep(max(0.05, poll_seconds - (time.monotonic() - now)))
     except KeyboardInterrupt:
         return 0
     finally:
@@ -288,7 +289,8 @@ def main() -> int:
                         help="comma-separated exact symbols already visible in Market Watch")
     parser.add_argument("--token-file", default="")
     parser.add_argument("--poll-ms", type=int, default=1000)
-    parser.add_argument("--rates-interval", type=float, default=60.0)
+    parser.add_argument("--rates-interval", type=float, default=10.0,
+                        help="history refresh seconds (minimum 5; quotes poll independently)")
     parser.add_argument("--rates-bars", type=int, default=600)
     args = parser.parse_args()
     args.symbols = args.symbols.split(",")

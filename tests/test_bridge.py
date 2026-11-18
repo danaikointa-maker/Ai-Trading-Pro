@@ -395,6 +395,16 @@ def test_chart_symbol_maps_canonical_gold_name_to_broker_suffix(bridge, runtime,
     assert runtime.market.resolve_chart_symbol(adapter, "XAUUSD") == "XAUUSD.s"
 
 
+def test_chart_reads_raw_bars_without_recomputing_strategy_indicators(client, auth, bridge, runtime, monkeypatch):
+    def unexpected_enrichment(*args, **kwargs):
+        raise AssertionError("Chart OHLCV should not recompute strategy indicators")
+    monkeypatch.setattr(runtime.market, "candles", unexpected_enrichment)
+    expected = bridge["adapter"].candles("XAUUSD", "M1", 20)
+    payload = client.get('/api/market/candles?symbol=XAUUSD&timeframe=M1&limit=20', headers=auth)
+    assert payload.status_code == 200
+    assert payload.json()["candles"] == expected.to_dict(orient="records")
+
+
 def test_positions_are_replaced_not_merged(bridge):
     adapter = bridge["adapter"]
     client = bridge["relay"]

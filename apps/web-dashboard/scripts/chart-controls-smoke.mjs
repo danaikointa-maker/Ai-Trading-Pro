@@ -4,6 +4,7 @@ import { createSSRApp, h, nextTick } from 'vue'
 import { renderToString } from '@vue/server-renderer'
 import { createMemoryHistory, createRouter } from 'vue-router'
 import { latestLogicalRange, nextBarSpacing, validPriceRange } from '../src/lib/chartViewport.js'
+import { singleFlight } from '../src/lib/singleFlight.js'
 
 const storage = new Map()
 globalThis.localStorage = { getItem: key => storage.get(key) || null, setItem: (key, value) => storage.set(key, value) }
@@ -11,6 +12,23 @@ globalThis.window = new EventTarget()
 window.localStorage = globalThis.localStorage
 const server = await createServer({ server: { middlewareMode: true, hmr: false }, appType: 'custom' })
 try {
+  let release, requests = 0
+  const refresh = singleFlight(() => { requests++; return new Promise(resolve => { release = resolve }) })
+  const first = refresh()
+  await refresh()
+  await refresh()
+  assert.equal(requests, 1, 'slow requests must not pile up when multiple timer ticks arrive')
+  release()
+  await first
+  const next = refresh()
+  assert.equal(requests, 2, 'refresh must resume after completion')
+  release()
+  await next
+  let failures = 0
+  const failingRefresh = singleFlight(async () => { failures++; throw new Error('fixture timeout') })
+  await assert.rejects(failingRefresh(), /timeout/)
+  await assert.rejects(failingRefresh(), /timeout/)
+  assert.equal(failures, 2, 'failure must release the in-flight guard')
   const prefs = await server.ssrLoadModule('/src/lib/chartTimeframes.js')
   const store = await server.ssrLoadModule('/src/lib/store.js')
   const { default: Picker } = await server.ssrLoadModule('/src/components/TimeframePicker.vue')

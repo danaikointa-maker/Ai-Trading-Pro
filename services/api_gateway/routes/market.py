@@ -48,8 +48,9 @@ def candles(symbol: str = "XAUUSD", timeframe: str = "M5", limit: int = Query(40
     adapter, feed = chart_source(runtime, user, symbol, account_id)
     source_symbol = runtime.market.resolve_chart_symbol(adapter, symbol)
     try:
-        df = runtime.market.candles(source_symbol, timeframe, limit, broker_id=adapter.id,
-                                    force=feed == "mt5-live")
+        # The chart response contains OHLCV only. Strategy enrichment is costly
+        # and adds no fields to this response; read the adapter's actual bars.
+        df = adapter.candles(source_symbol, timeframe, limit)
     except KeyError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
     except BrokerError as exc:

@@ -100,6 +100,7 @@ import { latestLogicalRange, nextBarSpacing, validPriceRange } from '../lib/char
 import { timeframeSeconds } from '../lib/chartTimeframes'
 import TimeframePicker from './TimeframePicker.vue'
 import ToolIcon from './ToolIcon.vue'
+import { singleFlight } from '../lib/singleFlight'
 
 const container = ref(null)
 const chartHost = ref(null)
@@ -437,6 +438,8 @@ async function load(preserveView = false) {
   const previousRange = chart.timeScale().getVisibleRange()
   const previousKey = loadedViewKey
   const version = ++loadVersion
+  const controller = new AbortController()
+  const requestTimeout = setTimeout(() => controller.abort(), 8000)
   loading.value = true
   error.value = ''
   if (preserveView !== true) {
@@ -446,6 +449,7 @@ async function load(preserveView = false) {
   try {
     const data = await api.get(
       `/api/market/candles?symbol=${encodeURIComponent(state.symbol)}&timeframe=${state.timeframe}&limit=${state.range}${accountQuery()}`,
+      { signal: controller.signal },
     )
     if (version !== loadVersion) return
     chartFeed.value = data.feed || ''
@@ -500,6 +504,7 @@ async function load(preserveView = false) {
     error.value = String((err && err.message) || err)
     console.error('[PriceChart] load failed', err)
   } finally {
+    clearTimeout(requestTimeout)
     if (version === loadVersion) loading.value = false
   }
 }
@@ -612,9 +617,13 @@ watch(() => state.live?.ticker?.last, (tick) => {
 })
 watch(positions, drawOverlays)
 
-async function refreshChartQuote() {
+const refreshChartQuote = singleFlight(async () => {
+  if (loading.value || !chart) return
+  const controller = new AbortController()
+  const timeout = setTimeout(() => controller.abort(), 4000)
+  try {
   const version = loadVersion
-  const data = await api.get(`/api/market/ticker?symbol=${encodeURIComponent(state.symbol)}${accountQuery()}`, { silent: true }).catch(() => null)
+  const data = await api.get(`/api/market/ticker?symbol=${encodeURIComponent(state.symbol)}${accountQuery()}`, { silent: true, signal: controller.signal }).catch(() => null)
   if (version !== loadVersion || loading.value) return
   if (data?.feed) showFreshness(data)
   // Preserve MT5's own time for display. A freshly received future-dated quote
@@ -631,7 +640,8 @@ async function refreshChartQuote() {
     chartFeed.value = 'mt5-disconnected'
     quoteWarning.value = 'MT5 ขาดการเชื่อมต่อ · คงกราฟล่าสุดไว้และหยุดอัปเดตราคา'
   }
-}
+  } finally { clearTimeout(timeout) }
+})
 
 onMounted(async () => {
   document.addEventListener('fullscreenchange', fullscreenChanged)
@@ -644,11 +654,11 @@ onMounted(async () => {
   }
   await load()
   await refreshMarketContext()
-  contextTimer = setInterval(refreshMarketContext, 10000)
-  quoteTimer = setInterval(refreshChartQuote, 2000)
+  contextTimer = setInterval(() => { if (!document.hidden) refreshMarketContext() }, 10000)
+  quoteTimer = setInterval(() => { if (!document.hidden) refreshChartQuote() }, 1000)
   historyTimer = setInterval(() => {
-    if (chartFeed.value === 'mt5-live' && !loading.value) load(true)
-  }, 15000)
+    if (!document.hidden && chartFeed.value === 'mt5-live' && !loading.value) load(true)
+  }, 5000)
 })
 onBeforeUnmount(() => {
   saveViewPrefs()

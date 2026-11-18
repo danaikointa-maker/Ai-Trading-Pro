@@ -14,7 +14,7 @@ function announce(kind) {
   window.dispatchEvent(new CustomEvent(kind))
 }
 
-export async function request(path, { method = 'GET', body, silent = false } = {}) {
+export async function request(path, { method = 'GET', body, silent = false, signal } = {}) {
   const headers = { 'Content-Type': 'application/json' }
   const token = getToken()
   if (token) headers.Authorization = `Bearer ${token}`
@@ -23,6 +23,7 @@ export async function request(path, { method = 'GET', body, silent = false } = {
     res = await fetch(path, {
       method,
       headers,
+      signal,
       body: body === undefined ? undefined : JSON.stringify(body),
     })
   } catch (err) {
