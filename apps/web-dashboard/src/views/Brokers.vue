@@ -133,7 +133,7 @@
           <div class="kv"><dt>Leverage</dt><dd>1:{{ b.account?.leverage }}</dd></div>
         </dl>
         <p class="mt-2 line-clamp-3 text-[9.5px] leading-relaxed text-muted">{{ b.regulated_note }}</p>
-        <button v-if="perms.canTrade" class="btn mt-2 w-full py-1.5" :disabled="b.id === active" @click="activate(b.id)">
+        <button v-if="perms.canTrade" class="btn mt-2 w-full py-1.5" :disabled="Boolean(brokerDisabledReason(b))" :title="brokerDisabledReason(b)" :aria-pressed="b.id === active" @click="activate(b.id)">
           {{ b.id === active ? 'Active' : 'Use this broker' }}
         </button>
         <div v-else class="mt-2 rounded border border-ink-700 px-2 py-1.5 text-center text-[10px] text-muted">
@@ -347,6 +347,8 @@ async function unassignManagedAccount(account) {
 }
 
 async function activate(id) {
+  const broker = brokers.value.find(row => row.id === id)
+  if (!broker || brokerDisabledReason(broker)) return
   try {
     await api.post(`/api/brokers/${encodeURIComponent(id)}/activate`)
     toast(`เปลี่ยนโบรกเกอร์เป็น ${id}`, 'success')
@@ -354,6 +356,14 @@ async function activate(id) {
   } catch (err) {
     toast(err.message, 'error')
   }
+}
+
+function brokerDisabledReason(broker) {
+  if (!perms.value.canTrade) return perms.value.reason
+  if (broker.id === active.value) return 'ใช้งาน broker นี้อยู่แล้ว'
+  if (broker.account_type === 'live' && !broker.live_allowed) return 'Live ยังไม่เปิดใช้งาน'
+  if (!['connected', 'degraded'].includes(broker.health)) return 'ต้องเชื่อมต่อ broker ให้พร้อมก่อน'
+  return ''
 }
 
 onMounted(load)

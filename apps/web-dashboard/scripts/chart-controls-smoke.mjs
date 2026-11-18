@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict'
 import { createServer } from 'vite'
-import { createSSRApp, nextTick } from 'vue'
+import { createSSRApp, h, nextTick } from 'vue'
 import { renderToString } from '@vue/server-renderer'
 import { createMemoryHistory, createRouter } from 'vue-router'
 import { latestLogicalRange, nextBarSpacing, validPriceRange } from '../src/lib/chartViewport.js'
@@ -31,6 +31,10 @@ try {
   assert.equal(prefs.pinnedTimeframes.value.length, 1, 'retain an accessible timeframe button')
   prefs.resetTimeframes()
   assert.ok(prefs.pinnedTimeframes.value.includes('M3'))
+  const twoPickers = createSSRApp({ render: () => h('div', [h(Picker), h(Picker)]) })
+  const selectedHtml = await renderToString(twoPickers)
+  const activeM3Buttons = [...selectedHtml.matchAll(/<button\b[^>]*aria-pressed="true"[^>]*aria-current="true"[^>]*>M3<\/button>/g)]
+  assert.equal(activeM3Buttons.length, 4, 'both toolbars and both menus must mark the chosen M3')
   assert.equal(nextBarSpacing(16, 1), 24)
   assert.equal(nextBarSpacing(2, -1), 2)
   const range = latestLogicalRange(240, 60, 12)

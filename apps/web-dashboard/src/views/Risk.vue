@@ -7,7 +7,7 @@
       </div>
       <div class="ml-auto flex gap-1.5">
         <span class="chip" :class="risk?.kill_switch_active ? 'chip-down' : 'chip-up'">{{ risk?.kill_switch_active ? 'kill switch active' : 'armed' }}</span>
-        <button class="btn btn-gold py-1.5" :disabled="saving" @click="save">{{ saving ? 'saving…' : 'Save risk settings' }}</button>
+        <button class="btn btn-gold py-1.5" :disabled="saving || !permissions.canTrade" :title="permissions.reason" @click="save">{{ saving ? 'saving…' : 'Save risk settings' }}</button>
       </div>
     </header>
 
@@ -111,7 +111,7 @@ import RiskPanel from '../components/RiskPanel.vue'
 import Stat from '../components/Stat.vue'
 import { api } from '../lib/api'
 import { fmt, money } from '../lib/format'
-import { riskState as risk, state, toast } from '../lib/store'
+import { permissions, riskState as risk, state, toast } from '../lib/store'
 
 const saving = ref(false)
 const view = ref(null)
@@ -170,6 +170,7 @@ async function load() {
 }
 
 async function save() {
+  if (!permissions.value.canTrade || saving.value) return
   saving.value = true
   try {
     const payload = { limits: { ...form } }

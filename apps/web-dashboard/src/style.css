@@ -32,6 +32,9 @@
   .btn-gold { @apply border-gold-500/40 bg-gold-500/15 text-gold-400 hover:bg-gold-500/25; }
   .tool-btn { @apply inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-md border border-ink-600 bg-ink-800 text-slate-300 transition hover:bg-ink-700 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-gold-500 disabled:opacity-40; }
   .tool-btn[aria-pressed="true"] { @apply border-gold-500/50 bg-gold-500/15 text-gold-400; }
+  .btn[aria-pressed="true"] { @apply border-gold-500/70 bg-gold-500/20 text-gold-400; }
+  .timeframe-btn[aria-pressed="true"] { @apply border-gold-400 bg-gold-400 font-bold text-ink-950 shadow-sm ring-1 ring-gold-400/70 hover:bg-gold-500; }
+  .btn:not(:disabled):active, .tool-btn:not(:disabled):active { @apply scale-95 ring-1 ring-gold-400; }
   .btn-buy { @apply border-up/40 bg-up/10 text-up hover:bg-up/20; }
   .btn-sell { @apply border-down/40 bg-down/10 text-down hover:bg-down/20; }
   .btn-danger { @apply border-down/50 bg-down/15 text-down hover:bg-down/25; }

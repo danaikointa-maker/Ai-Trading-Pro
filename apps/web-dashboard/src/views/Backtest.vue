@@ -39,7 +39,7 @@
           <label class="flex items-center gap-2 text-[11px] text-slate-300">
             <input v-model="form.validate_walk_forward" type="checkbox" class="accent-gold-400" /> walk-forward fold report
           </label>
-          <button class="btn btn-gold w-full py-2" :disabled="running" @click="run">
+          <button class="btn btn-gold w-full py-2" :disabled="running || !permissions.canTrade" :title="permissions.reason" @click="run">
             {{ running ? `${job?.message || 'running'} ${job?.pct || 0}%` : 'Run backtest' }}
           </button>
           <p class="text-[9.5px] leading-relaxed text-muted">
@@ -105,7 +105,7 @@
               <span class="chip">{{ fmt(report.dataset.rows, 0) }} bars</span>
               <span class="chip">{{ report.dataset.source }}</span>
               <span class="chip">{{ datetime(report.dataset.created_at) }}</span>
-              <button class="btn ml-auto py-1 text-[10px]" :disabled="running" @click="rerunFromSnapshot">
+              <button class="btn ml-auto py-1 text-[10px]" :disabled="running || !permissions.canTrade" :title="permissions.reason" @click="rerunFromSnapshot">
                 รันซ้ำจาก snapshot นี้
               </button>
             </div>
@@ -200,7 +200,7 @@ import EquityChart from '../components/EquityChart.vue'
 import Stat from '../components/Stat.vue'
 import { api } from '../lib/api'
 import { datetime, fmt, fmtFactor, money } from '../lib/format'
-import { state, toast } from '../lib/store'
+import { permissions, state, toast } from '../lib/store'
 
 const form = reactive({
   symbol: state.symbol || 'XAUUSD', bars: 6000, spread_points: null, commission_per_lot: null,
@@ -243,6 +243,7 @@ async function run() {
 }
 
 async function startBacktest(payload) {
+  if (!permissions.value.canTrade || running.value) return
   running.value = true
   try {
     const started = await api.post('/api/backtests', payload)

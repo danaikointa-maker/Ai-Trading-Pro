@@ -1,4 +1,4 @@
-import { computed, reactive } from 'vue'
+import { computed, reactive, ref } from 'vue'
 import { api, getToken, setToken } from './api'
 
 export const state = reactive({
@@ -42,7 +42,31 @@ export const positionsAvailable = computed(() => {
 })
 export const positions = computed(() => positionsAvailable.value ? state.live.positions : [])
 export const account = computed(() => state.live?.account || null)
-export const mode = computed(() => state.live?.mode || 'manual')
+export const mode = computed(() => state.live?.mode || state.trading?.mode || 'manual')
+export const modeChanging = ref(false)
+export function modeUnavailable(id) {
+  if (!permissions.value.canTrade) return permissions.value.reason
+  if (!['manual', 'semi_auto', 'full_auto'].includes(id)) return 'ไม่รองรับโหมดนี้'
+  if (id === 'full_auto' && !(state.config?.security?.allow_full_auto && state.config?.security?.full_auto_enabled)) {
+    return 'Full Auto ยังล็อกอยู่ ต้องเปิดใช้จากการตั้งค่าที่ได้รับอนุญาตก่อน'
+  }
+  return ''
+}
+export async function changeTradingMode(id) {
+  const reason = modeUnavailable(id)
+  if (reason) throw new Error(reason)
+  if (modeChanging.value) throw new Error('กำลังเปลี่ยนโหมด')
+  modeChanging.value = true
+  try {
+    const result = await api.post('/api/trading/mode', { mode: id })
+    if (result.ok !== true || !['manual', 'semi_auto', 'full_auto'].includes(result.mode)) {
+      throw new Error('เซิร์ฟเวอร์ยังไม่ยืนยันการเปลี่ยนโหมด')
+    }
+    state.trading = { ...(state.trading || {}), mode: result.mode }
+    if (state.live) state.live = { ...state.live, mode: result.mode }
+    return result
+  } finally { modeChanging.value = false }
+}
 
 // Mirror of the server's role rules (services/api_gateway/roles.py). The UI uses it
 // to disable actions honestly; the server still decides, so a stale client cannot

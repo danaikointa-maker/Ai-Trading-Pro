@@ -14,8 +14,9 @@
       <span class="mx-1 h-4 border-l border-ink-700" aria-hidden="true"></span>
       <button v-for="item in layerChoices" :key="item.key" type="button"
               class="rounded border px-2 py-1 text-[10px] transition-colors"
-              :class="layerVisibility[item.key] ? 'border-gold/50 bg-gold/10 text-gold' : 'border-ink-700 text-muted'"
-              :aria-pressed="layerVisibility[item.key]" :title="'เปิด/ปิดเฉพาะการแสดงผล ' + item.label" :aria-label="'เปิด/ปิด ' + item.label"
+              :class="layerUnavailable(item.key) ? 'cursor-not-allowed border-ink-700 text-muted opacity-40' : layerVisibility[item.key] ? 'border-gold/50 bg-gold/10 text-gold' : 'border-ink-700 text-muted'"
+              :disabled="layerUnavailable(item.key)" :aria-pressed="!layerUnavailable(item.key) && layerVisibility[item.key]"
+              :title="layerUnavailable(item.key) ? 'ยังใช้ overlay จาก runtime อีกชุดกับกราฟ MT5 ไม่ได้' : 'เปิด/ปิดเฉพาะการแสดงผล ' + item.label" :aria-label="'เปิด/ปิด ' + item.label"
               @click="layerVisibility[item.key] = !layerVisibility[item.key]">
         {{ item.short || item.label }}
       </button>
@@ -24,17 +25,17 @@
     <div class="flex flex-wrap items-center gap-1 border-b border-ink-700/60 px-2 py-1 text-[11px]" aria-label="ควบคุมกราฟ">
       <TimeframePicker />
       <span class="mx-1 h-4 border-l border-ink-700" aria-hidden="true"></span>
-      <button class="tool-btn" aria-label="ซูมออก" title="ซูมออก (-)" @click="zoom(-1)"><ToolIcon name="zoomOut" /></button>
-      <button class="tool-btn" aria-label="ซูมเข้า" title="ซูมเข้า (+)" @click="zoom(1)"><ToolIcon name="zoomIn" /></button>
+      <button class="tool-btn" :disabled="!bars || loading" aria-label="ซูมออก" title="ซูมออก (-)" @click="zoom(-1)"><ToolIcon name="zoomOut" /></button>
+      <button class="tool-btn" :disabled="!bars || loading" aria-label="ซูมเข้า" title="ซูมเข้า (+)" @click="zoom(1)"><ToolIcon name="zoomIn" /></button>
       <label class="flex items-center gap-1 text-muted" title="ความกว้างต่อแท่ง (px)"><ToolIcon name="width" />
         <input aria-label="ความกว้างต่อแท่ง หน่วยพิกเซล" class="input w-14 py-1 text-[11px]" type="number" min="2" max="48" :value="spacing.toFixed(1)" @change="setSpacing($event.target.value)" />
       </label>
       <button class="tool-btn" :aria-pressed="autoScroll" aria-label="เลื่อนตามราคาล่าสุดอัตโนมัติ" title="Auto scroll · เลื่อนตามราคาล่าสุด" @click="toggleAutoScroll"><ToolIcon name="follow" /></button>
       <button class="tool-btn" :aria-pressed="chartShift" aria-label="เว้นพื้นที่ท้ายกราฟ" title="Chart shift · เว้นพื้นที่ท้ายกราฟ" @click="toggleShift"><ToolIcon name="shift" /></button>
-      <button class="tool-btn" title="กลับแท่งล่าสุด (End)" aria-label="กลับแท่งล่าสุด" @click="goLatest"><ToolIcon name="latest" /></button>
-      <button class="tool-btn" title="แสดงข้อมูลทั้งหมดที่โหลด" aria-label="ดูกราฟทั้งหมด" @click="fitAll"><ToolIcon name="fit" /></button>
+      <button class="tool-btn" :disabled="!bars || loading" title="กลับแท่งล่าสุด (End)" aria-label="กลับแท่งล่าสุด" @click="goLatest"><ToolIcon name="latest" /></button>
+      <button class="tool-btn" :disabled="!bars || loading" title="แสดงข้อมูลทั้งหมดที่โหลด" aria-label="ดูกราฟทั้งหมด" @click="fitAll"><ToolIcon name="fit" /></button>
       <button class="tool-btn w-10 text-[10px] font-semibold" title="มุมมอง MT5 · M1 · กว้าง 16px · สูง 580px" aria-label="มุมมอง MT5 M1" @click="mt5View">MT5</button>
-      <button class="tool-btn" :title="fullscreen ? 'ออกเต็มจอ' : 'เต็มจอ'" :aria-label="fullscreen ? 'ออกเต็มจอ' : 'เต็มจอ'" @click="toggleFullscreen"><ToolIcon :name="fullscreen ? 'collapse' : 'fullscreen'" /></button>
+      <button class="tool-btn" :aria-pressed="fullscreen" :title="fullscreen ? 'ออกเต็มจอ' : 'เต็มจอ'" :aria-label="fullscreen ? 'ออกเต็มจอ' : 'เต็มจอ'" @click="toggleFullscreen"><ToolIcon :name="fullscreen ? 'collapse' : 'fullscreen'" /></button>
       <button class="tool-btn" title="คืนสเกลราคาอัตโนมัติ" aria-label="สเกลราคาอัตโนมัติ" @click="resetPriceScale"><ToolIcon name="scale" /></button>
     </div>
     <div class="relative flex flex-wrap items-center gap-1.5 px-2 py-1 text-[10px] text-muted">
@@ -49,10 +50,10 @@
         <label>สูง (px)<input v-model.number="chartHeight" aria-label="ความสูงกราฟ หน่วยพิกเซล" type="number" min="300" max="1000" step="20" class="input block w-20 py-1" @change="saveViewPrefs" /></label>
         <label>เริ่ม (เวลาแท่ง)<input v-model="timeFrom" type="datetime-local" class="input block py-1" /></label>
         <label>ถึง (เวลาแท่ง)<input v-model="timeTo" type="datetime-local" class="input block py-1" /></label>
-        <button class="btn px-2 py-1" @click="applyTimeRange">แสดงช่วงเวลา</button>
+        <button class="btn px-2 py-1" :disabled="!bars || loading" @click="applyTimeRange">แสดงช่วงเวลา</button>
         <label>ราคาต่ำสุด<input v-model="priceMin" type="number" step="any" class="input block w-24 py-1" /></label>
         <label>ราคาสูงสุด<input v-model="priceMax" type="number" step="any" class="input block w-24 py-1" /></label>
-        <button class="btn px-2 py-1" @click="applyFixedPrice">ตรึงช่วงราคา</button>
+        <button class="btn px-2 py-1" :disabled="!bars || loading" :aria-pressed="Boolean(fixedPriceRange)" @click="applyFixedPrice">ตรึงช่วงราคา</button>
         <span>ใช้เวลาแท่งจาก source เดียวกับแกนล่าง · ช่วงที่เลือกต้องอยู่ในข้อมูลที่โหลด</span>
       </div>
       <p v-if="viewError" role="alert" class="pb-2 text-amber-200">{{ viewError }}</p>
@@ -266,6 +267,7 @@ function applyTimeRange() {
 }
 function mt5View() {
   setTimeframe('M1')
+  chartHeight.value = 580
   layerVisibility.ema = false
   chartShift.value = true
   resetPriceScale()
@@ -304,7 +306,7 @@ function chartKeydown(event) {
   } else if (['ArrowLeft', 'ArrowRight'].includes(event.key)) {
     autoScroll.value = false
     const scale = chart.timeScale()
-    scale.scrollToPosition(scale.scrollPosition() + (event.key === 'ArrowLeft' ? 10 : -10), false)
+    scale.scrollToPosition(scale.scrollPosition() + (event.key === 'ArrowLeft' ? -10 : 10), false)
   } else return
   event.preventDefault()
   syncViewport()
@@ -313,6 +315,7 @@ function chartKeydown(event) {
 // UI preferences only: never write these switches into state.live or send an
 // API request. Engine, risk controls and persisted trade decisions are unchanged.
 const LAYERS_KEY = 'no7.chart.layers.v1'
+function layerUnavailable(key) { return chartFeed.value.startsWith('mt5-') && key !== 'ema' }
 const layerChoices = [
   { key: 'ema', label: 'EMA' },
   { key: 'sr', label: 'S/R' },

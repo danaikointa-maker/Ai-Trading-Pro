@@ -41,9 +41,10 @@
           <button
             v-for="m in modes"
             :key="m.id"
-            class="rounded-md px-2 py-1 text-[10.5px] font-semibold transition"
+            class="rounded-md px-2 py-1 text-[10.5px] font-semibold transition disabled:cursor-not-allowed disabled:opacity-40"
             :class="mode === m.id ? 'bg-gold-500/15 text-gold-400 ring-1 ring-gold-500/30' : 'text-muted hover:text-slate-200'"
-            :title="m.hint" :aria-label="m.hint" :aria-pressed="mode === m.id"
+            :disabled="modeChanging || Boolean(modeUnavailable(m.id))"
+            :title="modeUnavailable(m.id) || m.hint" :aria-label="m.hint" :aria-pressed="mode === m.id"
             @click="changeMode(m.id)"
           >
             {{ m.label }}<ToolIcon v-if="m.id === 'full_auto' && !fullAutoAllowed" name="lock" class="ml-1 inline-block !h-3 !w-3 opacity-60" />
@@ -72,9 +73,8 @@
 <script setup>
 import { computed } from 'vue'
 import { useRouter } from 'vue-router'
-import { api } from '../lib/api'
 import { clock, fmt, money, signed } from '../lib/format'
-import { logout, setSymbol, state, toast } from '../lib/store'
+import { changeTradingMode, logout, mode, modeChanging, modeUnavailable, setSymbol, state, toast } from '../lib/store'
 import TimeframePicker from './TimeframePicker.vue'
 import ToolIcon from './ToolIcon.vue'
 
@@ -89,7 +89,6 @@ const symbols = computed(() => state.config?.symbols || state.brokers?.symbols |
 const ticker = computed(() => state.live?.ticker)
 const account = computed(() => state.live?.account)
 const risk = computed(() => state.live?.risk_state)
-const mode = computed(() => state.live?.mode || 'manual')
 const digits = computed(() => state.live?.analysis?.spec?.digits ?? 2)
 const health = computed(() => account.value?.health || 'connecting')
 const healthTone = computed(() => (health.value === 'connected' ? 'bg-up' : health.value === 'degraded' ? 'bg-amber-400' : 'bg-down'))
@@ -120,19 +119,12 @@ const changePct = computed(() => {
 
 async function switchSymbol(symbol) {
   setSymbol(symbol)
-  try {
-    await api.post('/api/system/config', {}) // no-op keeps the session warm; symbol is client-side
-  } catch {
-    /* ignore */
-  }
 }
 
 async function changeMode(id) {
   try {
-    await api.post('/api/trading/mode', { mode: id })
+    await changeTradingMode(id)
     toast(`Trading mode → ${id.replace('_', ' ')}`, 'success')
-    const data = await api.get('/api/trading/state', { silent: true })
-    if (data) state.trading = data
   } catch (err) {
     toast(err.message, 'error')
   }

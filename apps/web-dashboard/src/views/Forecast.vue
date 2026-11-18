@@ -7,7 +7,7 @@
       </div>
       <div class="ml-auto flex flex-wrap items-center gap-2">
         <ModelBadge />
-        <button class="btn py-1.5" :disabled="training" @click="train">
+        <button class="btn py-1.5" :disabled="training || !permissions.canTrade" :title="permissions.reason" @click="train">
           {{ training ? `training ${trainingPct}%` : 'Train / re-validate' }}
         </button>
       </div>
@@ -172,7 +172,7 @@
               ระบบไม่ถือว่า Signal Score 90 = โอกาสชนะ 90% คะแนนสัญญาณเป็น heuristic ส่วนความน่าจะเป็นผ่านการสอบเทียบแยกต่างหาก
               (isotonic regression บนช่วง calibration ที่ไม่ถูกใช้ฝึก)
             </p>
-            <button class="btn mt-3 w-full py-1.5" @click="train">Train ใหม่ + เทียบ baseline</button>
+            <button class="btn mt-3 w-full py-1.5" :disabled="training || !permissions.canTrade" :title="permissions.reason" @click="train">Train ใหม่ + เทียบ baseline</button>
             <p v-if="trainingMsg" class="mt-2 text-[10px] text-muted">{{ trainingMsg }}</p>
           </div>
         </section>
@@ -188,7 +188,7 @@ import ModelBadge from '../components/ModelBadge.vue'
 import ProbBars from '../components/ProbBars.vue'
 import { api } from '../lib/api'
 import { fmt, pct, signed } from '../lib/format'
-import { state, toast } from '../lib/store'
+import { permissions, state, toast } from '../lib/store'
 
 const bundle = computed(() => state.live?.forecast || null)
 const digits = computed(() => bundle.value?.horizons?.[0] ? (state.live?.analysis?.spec?.digits ?? 2) : 2)
@@ -261,6 +261,7 @@ const active = computed(() => {
 const scenario = (name) => (bundle.value?.scenarios || []).find((s) => s.name === name) || null
 
 async function train() {
+  if (!permissions.value.canTrade || training.value) return
   try {
     await api.post('/api/forecast/train', { symbol: state.symbol, force: true })
     toast('เริ่มฝึกโมเดลใหม่ (background)', 'info')

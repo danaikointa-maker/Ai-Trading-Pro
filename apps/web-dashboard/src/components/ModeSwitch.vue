@@ -3,7 +3,8 @@
     <button
       v-for="m in modes"
       :key="m.id"
-      class="rounded-lg border px-2 py-2 text-left transition"
+      class="rounded-lg border px-2 py-2 text-left transition disabled:cursor-not-allowed disabled:opacity-40"
+      :aria-pressed="mode === m.id" :disabled="modeChanging || Boolean(modeUnavailable(m.id))" :title="modeUnavailable(m.id) || m.hint"
       :class="mode === m.id ? 'border-gold-500/40 bg-gold-500/10' : 'border-ink-700 bg-ink-900 hover:border-ink-600'"
       @click="change(m.id)"
     >
@@ -18,8 +19,7 @@
 
 <script setup>
 import { computed } from 'vue'
-import { api } from '../lib/api'
-import { mode, state, toast } from '../lib/store'
+import { changeTradingMode, mode, modeChanging, modeUnavailable, state, toast } from '../lib/store'
 
 const modes = [
   { id: 'manual', label: 'Manual + AI', hint: 'AI แนะนำ ผู้ใช้กด Buy/Sell เอง' },
@@ -30,7 +30,7 @@ const allowed = computed(() => Boolean(state.config?.security?.allow_full_auto &
 
 async function change(id) {
   try {
-    await api.post('/api/trading/mode', { mode: id })
+    await changeTradingMode(id)
     toast(`เปลี่ยนโหมดเป็น ${id.replace('_', ' ')}`, 'success')
   } catch (err) {
     toast(err.message, 'error')

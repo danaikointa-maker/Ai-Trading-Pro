@@ -72,6 +72,7 @@ import { computed, ref } from 'vue'
 import { api } from '../lib/api'
 import { clock, fmt, money } from '../lib/format'
 import { permissions, riskState as risk, state, toast } from '../lib/store'
+import { closeAllFeedback } from '../lib/close-results'
 
 // Read-only accounts see the buttons disabled — the server refuses them anyway.
 const perms = computed(() => permissions.value)
@@ -141,8 +142,11 @@ async function releaseStreak() {
 async function kill(flatten) {
   if (!confirm('ยืนยันหยุดระบบฉุกเฉินและปิดทุกไม้?')) return
   try {
-    await api.post('/api/risk/kill-switch', { reason: 'manual emergency stop', flatten })
-    toast('Kill switch ทำงาน — ปิดทุกไม้แล้ว', 'warn')
+    const result = await api.post('/api/risk/kill-switch', { reason: 'manual emergency stop', flatten })
+    if (flatten) {
+      const feedback = closeAllFeedback(result.flattened || {})
+      toast(`Kill switch เปิดแล้ว · ${feedback.message}`, feedback.type)
+    } else toast('Kill switch เปิดแล้ว', 'warning')
   } catch (err) {
     toast(err.message, 'error')
   }

@@ -8,7 +8,8 @@
     "build": "vite build",
     "preview": "vite preview --host 0.0.0.0",
     "smoke:trades-review": "node scripts/trade-review-smoke.mjs",
-    "smoke:chart-controls": "node scripts/chart-controls-smoke.mjs"
+    "smoke:chart-controls": "node scripts/chart-controls-smoke.mjs",
+    "smoke:ui-actions": "node scripts/ui-actions-smoke.mjs"
   },
   "dependencies": {
     "echarts": "^5.5.1",

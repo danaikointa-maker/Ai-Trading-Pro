@@ -231,7 +231,8 @@ def test_ticker_endpoint_retains_quote_when_market_is_closed(client, auth, runti
     monkeypatch.setattr(runtime.market.adapter, "ticker", lambda _symbol: (_ for _ in ()).throw(RuntimeError("closed")))
     response = client.get("/api/market/ticker?symbol=XAUUSD", headers=auth)
     assert response.status_code == 200
-    assert response.json() == {"tick": tick.model_dump(), "stale": True, "source": "persisted"}
+    assert response.json() == {"tick": tick.model_dump(), "stale": True, "source": "persisted",
+                               "broker_id": runtime.adapter.id, "feed": "simulated", "symbol": "XAUUSD"}
 
 
 def test_health_is_public(client):
