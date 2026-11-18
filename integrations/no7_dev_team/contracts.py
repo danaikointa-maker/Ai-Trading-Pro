@@ -94,6 +94,21 @@ def parse_project_list(payload: Any, *, tenant_id: UUID) -> list[DevTeamProject]
     return projects
 
 
+def select_scoped_project(
+    projects: list[DevTeamProject], *, tenant_id: UUID, project_id: UUID
+) -> DevTeamProject:
+    """Return exactly one approved project; never fall back to the first row."""
+    if not isinstance(tenant_id, UUID) or not isinstance(project_id, UUID):
+        raise ValueError("tenant_id and project_id are required UUIDs")
+    matches = [
+        project for project in projects
+        if project.tenant_id == tenant_id and project.id == project_id
+    ]
+    if len(matches) != 1:
+        raise ValueError("approved project is missing or ambiguous in the requested tenant scope")
+    return matches[0]
+
+
 def load_sample_fixture() -> DevTeamProjectSnapshot:
     """Load the checked-in sample from this package; callers cannot choose a file path."""
     payload = json.loads(SAMPLE_FIXTURE.read_text(encoding="utf-8"))

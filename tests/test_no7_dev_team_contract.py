@@ -8,6 +8,7 @@ from integrations.no7_dev_team.contracts import (
     DevTeamProjectSnapshot,
     load_sample_fixture,
     parse_project_list,
+    select_scoped_project,
 )
 
 
@@ -28,6 +29,35 @@ def test_project_list_must_stay_inside_requested_tenant():
 
     with pytest.raises(ValueError, match="escaped the requested tenant scope"):
         parse_project_list([project], tenant_id=fixture.scope_tenant_id)
+
+
+def test_project_selection_requires_the_exact_tenant_and_project_ids():
+    fixture = load_sample_fixture()
+    project = select_scoped_project(
+        fixture.projects,
+        tenant_id=fixture.scope_tenant_id,
+        project_id=fixture.projects[0].id,
+    )
+
+    assert project.id == fixture.projects[0].id
+    with pytest.raises(ValueError, match="missing or ambiguous"):
+        select_scoped_project(
+            fixture.projects,
+            tenant_id=fixture.scope_tenant_id,
+            project_id=UUID("00000000-0000-4000-8000-000000000009"),
+        )
+    with pytest.raises(ValueError, match="required UUIDs"):
+        select_scoped_project(fixture.projects, tenant_id=None, project_id=None)
+
+
+def test_project_selection_rejects_duplicate_matching_rows():
+    fixture = load_sample_fixture()
+    with pytest.raises(ValueError, match="missing or ambiguous"):
+        select_scoped_project(
+            [fixture.projects[0], fixture.projects[0]],
+            tenant_id=fixture.scope_tenant_id,
+            project_id=fixture.projects[0].id,
+        )
 
 
 def test_project_contract_rejects_unknown_fields_and_write_capabilities():

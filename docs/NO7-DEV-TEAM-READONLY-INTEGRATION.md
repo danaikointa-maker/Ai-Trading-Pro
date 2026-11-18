@@ -24,6 +24,10 @@ tenant ID, name, description, optional HTTPS repository URL, lifecycle status,
 created/updated timestamps, and the caller's project role. It rejects unknown
 fields and any record outside the selected tenant scope. Pagination is capped
 at the upstream maximum of 200 records per page.
+Before presenting a project, the adapter also requires the configured tenant
+UUID and project UUID and requires exactly one matching row; an omitted ID,
+missing row, duplicate, or cross-tenant row is rejected rather than selecting
+the first result.
 
 The upstream API currently does not expose worker/task execution state. The
 contract therefore does not invent agents, task progress, approvals, or office
