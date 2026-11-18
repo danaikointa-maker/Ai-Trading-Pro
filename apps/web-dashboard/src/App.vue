@@ -19,10 +19,14 @@
     <PwaBanners />
 
     <div v-if="showApp" class="flex min-h-screen">
-      <SideNav class="hidden lg:flex" />
+      <SideNav v-if="sidebarExpanded" id="app-sidebar" class="hidden lg:flex" />
+      <div v-if="mobileSidebarOpen" class="fixed inset-0 z-50 flex lg:hidden" @keydown.esc.stop.prevent="closeMobileNav">
+        <button type="button" class="absolute inset-0 bg-black/60" tabindex="-1" aria-label="ปิดเมนูซ้าย" @click="closeMobileNav"></button>
+        <SideNav id="mobile-sidebar" mobile @close="closeMobileNav" />
+      </div>
       <div class="flex min-w-0 flex-1 flex-col">
         <TopBar />
-        <main class="mx-auto w-full max-w-[1700px] flex-1 px-3 py-3 pb-16 sm:px-4">
+        <main class="mx-auto w-full flex-1 px-3 py-3 pb-16 sm:px-4">
           <router-view v-slot="{ Component }">
             <transition name="fade" mode="out-in">
               <component :is="Component" />
@@ -62,7 +66,7 @@
 </template>
 
 <script setup>
-import { computed, onMounted, onUnmounted, ref, watch } from 'vue'
+import { computed, nextTick, onMounted, onUnmounted, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import SideNav from './components/SideNav.vue'
 import TopBar from './components/TopBar.vue'
@@ -70,6 +74,7 @@ import Toasts from './components/Toasts.vue'
 import PwaBanners from './components/PwaBanners.vue'
 import { bootstrap, startLive, state, stopLive } from './lib/store'
 import { getToken } from './lib/api'
+import { closeMobileSidebar, mobileSidebarOpen, sidebarExpanded, syncSidebarBreakpoint } from './lib/sidebar'
 
 const route = useRoute()
 const router = useRouter()
@@ -111,7 +116,14 @@ function goHome() {
 }
 
 let booted = false
+let stopSidebarSync = null
+function closeMobileNav() {
+  closeMobileSidebar()
+  nextTick(() => document.getElementById('sidebar-toggle')?.focus())
+}
+watch(() => route.fullPath, closeMobileSidebar)
 onMounted(async () => {
+  stopSidebarSync = syncSidebarBreakpoint()
   window.addEventListener('online', syncOnline)
   window.addEventListener('offline', syncOnline)
   syncOnline()
@@ -122,6 +134,7 @@ onMounted(async () => {
   startLive()
 })
 onUnmounted(() => {
+  stopSidebarSync?.()
   window.removeEventListener('online', syncOnline)
   window.removeEventListener('offline', syncOnline)
   stopLive()

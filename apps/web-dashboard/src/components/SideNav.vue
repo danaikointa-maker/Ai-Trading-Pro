@@ -1,15 +1,18 @@
 <template>
-  <aside class="sticky top-0 h-screen w-[212px] shrink-0 flex-col border-r border-ink-700/70 bg-ink-900/80 px-3 py-4 backdrop-blur">
+  <aside class="h-screen w-[212px] shrink-0 flex-col overflow-y-auto border-r border-ink-700/70 bg-ink-900/95 px-3 py-4 backdrop-blur"
+         :class="mobile ? 'relative flex' : 'sticky top-0'" :role="mobile ? 'dialog' : undefined" :aria-modal="mobile ? 'true' : undefined"
+         aria-label="เมนูหลัก" @keydown.tab="trapMobileFocus">
     <div class="mb-5 flex items-center gap-2.5 px-1">
       <div class="grid h-9 w-9 place-items-center rounded-lg bg-gold-500/15 text-[15px] font-black text-gold-400 ring-1 ring-gold-500/30">N7</div>
-      <div class="leading-tight">
+      <div v-if="!mobile" class="leading-tight">
         <div class="text-[12.5px] font-semibold tracking-wide text-slate-100">NO7 AI TRADING</div>
         <div class="text-[10px] uppercase tracking-[0.18em] text-muted">Pro · V1</div>
       </div>
+      <button v-if="mobile" ref="closeButton" type="button" class="tool-btn ml-auto" title="ปิดเมนูซ้าย" aria-label="ปิดเมนูซ้าย" @click="$emit('close')"><ToolIcon name="close" /></button>
     </div>
 
     <nav class="flex flex-1 flex-col gap-1">
-      <RouterLink v-for="item in nav" :key="item.to" :to="item.to" class="nav-link" active-class="active">
+      <RouterLink v-for="item in nav" :key="item.to" :to="item.to" class="nav-link" active-class="active" @click="mobile && $emit('close')">
         <component :is="'span'" v-html="item.icon" class="grid h-4 w-4 place-items-center opacity-80" />
         <span class="flex-1">{{ item.label }}</span>
         <span v-if="item.badge" class="chip px-1.5 py-0 text-[9.5px]">{{ item.badge }}</span>
@@ -40,8 +43,21 @@
 </template>
 
 <script setup>
-import { computed } from 'vue'
+import { computed, onMounted, ref } from 'vue'
 import { state } from '../lib/store'
+import ToolIcon from './ToolIcon.vue'
+
+const props = defineProps({ mobile: { type: Boolean, default: false } })
+defineEmits(['close'])
+const closeButton = ref(null)
+onMounted(() => { if (props.mobile) closeButton.value?.focus() })
+function trapMobileFocus(event) {
+  if (!props.mobile) return
+  const controls = [...event.currentTarget.querySelectorAll('button:not(:disabled), a[href]')]
+  const first = controls[0], last = controls.at(-1)
+  if (event.shiftKey && event.target === first) { event.preventDefault(); last?.focus() }
+  else if (!event.shiftKey && event.target === last) { event.preventDefault(); first?.focus() }
+}
 
 const icon = (path) => `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" class="h-4 w-4">${path}</svg>`
 

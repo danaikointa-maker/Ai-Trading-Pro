@@ -1,6 +1,10 @@
 <template>
   <header class="sticky top-0 z-30 border-b border-ink-700/70 bg-ink-950/85 backdrop-blur">
-    <div class="mx-auto flex max-w-[1700px] flex-wrap items-center gap-x-2 gap-y-1 px-2 py-1.5 sm:px-3">
+    <div class="flex w-full flex-wrap items-center gap-x-2 gap-y-1 px-2 py-1.5 sm:px-3">
+      <button id="sidebar-toggle" type="button" class="tool-btn" :aria-expanded="sidebarOpen" :aria-controls="sidebarTarget"
+              :title="sidebarOpen ? 'ซ่อนเมนูซ้าย' : 'แสดงเมนูซ้าย'" :aria-label="sidebarOpen ? 'ซ่อนเมนูซ้าย' : 'แสดงเมนูซ้าย'" @click="toggleSidebar">
+        <ToolIcon :name="sidebarOpen ? 'sidebarClose' : 'sidebarOpen'" />
+      </button>
       <div class="flex items-center gap-1 rounded-lg border border-ink-700 bg-ink-900 p-0.5">
         <button
           v-for="s in symbols"
@@ -77,6 +81,7 @@ import { clock, fmt, money, signed } from '../lib/format'
 import { changeTradingMode, logout, mode, modeChanging, modeUnavailable, setSymbol, state, toast } from '../lib/store'
 import TimeframePicker from './TimeframePicker.vue'
 import ToolIcon from './ToolIcon.vue'
+import { sidebarOpen, sidebarTarget, toggleSidebar } from '../lib/sidebar'
 
 const router = useRouter()
 const modes = [

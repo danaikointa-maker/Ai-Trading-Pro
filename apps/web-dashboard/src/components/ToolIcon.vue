@@ -8,6 +8,9 @@
 <script setup>
 defineProps({ name: { type: String, required: true } })
 const paths = {
+  sidebarClose: 'M3 3h18v18H3ZM9 3v18m8-13-4 4 4 4',
+  sidebarOpen: 'M3 3h18v18H3ZM9 3v18m4-13 4 4-4 4',
+  close: 'm5 5 14 14M5 19 19 5',
   sliders: 'M4 7h7m4 0h5M4 17h3m4 0h9M11 4v6M7 14v6',
   chart: 'M3 3v18h18M6 14l4-5 4 3 6-8',
   layers: 'm12 3 9 5-9 5-9-5 9-5ZM3 12l9 5 9-5M3 16l9 5 9-5',

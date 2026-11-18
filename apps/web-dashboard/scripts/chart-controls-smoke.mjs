@@ -79,6 +79,30 @@ try {
     assert.ok(checked > 0)
   }
   checkIconNames(chartHtml)
+  // A fresh module must restore a previously hidden desktop menu.
+  storage.set('no7.sidebar.expanded.v1', 'false')
+  const sidebar = await server.ssrLoadModule('/src/lib/sidebar.js')
+  assert.equal(sidebar.sidebarExpanded.value, false)
+  assert.equal(sidebar.sidebarOpen.value, false)
+  sidebar.toggleSidebar()
+  assert.equal(sidebar.sidebarExpanded.value, true)
+  assert.equal(storage.get('no7.sidebar.expanded.v1'), 'true')
+  sidebar.toggleSidebar()
+  assert.equal(storage.get('no7.sidebar.expanded.v1'), 'false')
+  sidebar.desktopSidebar.value = false
+  sidebar.toggleSidebar()
+  assert.equal(sidebar.mobileSidebarOpen.value, true)
+  assert.equal(storage.get('no7.sidebar.mobile-open.v1'), 'true')
+  assert.equal(sidebar.sidebarTarget.value, 'mobile-sidebar')
+  sidebar.closeMobileSidebar()
+  assert.equal(sidebar.sidebarExpanded.value, false, 'closing a mobile drawer cannot expand desktop layout')
+  sidebar.desktopSidebar.value = true
+  const savePreference = localStorage.setItem
+  localStorage.setItem = () => { throw new Error('fixture storage unavailable') }
+  sidebar.toggleSidebar()
+  assert.equal(sidebar.sidebarOpen.value, true, 'a storage failure must not disable the menu control')
+  localStorage.setItem = savePreference
+  sidebar.toggleSidebar()
   const { default: Header } = await server.ssrLoadModule('/src/components/TopBar.vue')
   const headerApp = createSSRApp(Header)
   const router = createRouter({ history: createMemoryHistory(), routes: [{ path: '/', component: { template: '<div />' } }] })
@@ -86,6 +110,17 @@ try {
   await router.push('/')
   await router.isReady()
   headerApp.config.warnHandler = message => { throw new Error(message) }
-  checkIconNames(await renderToString(headerApp))
-  console.log('PASS: timeframe preferences, chart/header rendering, named icon controls and viewport helpers')
+  const headerHtml = await renderToString(headerApp)
+  checkIconNames(headerHtml)
+  assert.match(headerHtml, /aria-expanded="false" aria-controls="app-sidebar"/)
+  assert.match(headerHtml, /แสดงเมนูซ้าย/)
+  const { default: SideNav } = await server.ssrLoadModule('/src/components/SideNav.vue')
+  const mobileNav = createSSRApp(SideNav, { mobile: true })
+  mobileNav.component('RouterLink', { template: '<a><slot /></a>' })
+  mobileNav.config.warnHandler = message => { throw new Error(message) }
+  const navHtml = await renderToString(mobileNav)
+  assert.match(navHtml, /role="dialog" aria-modal="true"/)
+  assert.match(navHtml, /ปิดเมนูซ้าย/)
+  assert.match(navHtml, /Terminal/)
+  console.log('PASS: sidebar restoration/toggle/mobile persistence, timeframe preferences, accessible controls and chart helpers')
 } finally { await server.close() }
