@@ -105,7 +105,7 @@ def test_duplicate_identity_is_atomic_and_live_stays_disabled(management):
 
 
 def test_admin_can_manage_without_reading_credentials_and_vault_failure_preserves_record(management, settings, monkeypatch):
-    client, db, _users, _headers, account = management
+    client, _db, _users, _headers, account = management
     token, _ = create_token(settings, "manage-admin@example.com", "admin")
     headers = {"Authorization": f"Bearer {token}"}
     url = f'/api/broker-accounts/{account["id"]}'
