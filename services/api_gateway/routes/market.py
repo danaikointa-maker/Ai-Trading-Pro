@@ -5,17 +5,50 @@ import time
 from dataclasses import asdict
 
 from fastapi import APIRouter, Depends, HTTPException, Query
+from pydantic import BaseModel, Field
 
 from integrations.brokers.base import BrokerError
 from packages.shared_schemas.settings import get_settings
 from services.api_gateway.deps import current_user, get_runtime
 from services.api_gateway.market_access import chart_source, market_accounts
 from services.api_gateway.state import TradingRuntime
+from services.api_gateway.terminal_views import claim_terminal, private_positions
 from services.market_data.chart_overlays import closed_chart_overlays
 from services.market_data.simulator import candles_from_df
 from services.risk_engine.planner import points_calculator
 
 router = APIRouter(prefix="/api/market", tags=["market"])
+
+
+class TerminalClaim(BaseModel):
+    code: str = Field(min_length=20, max_length=64)
+
+
+@router.post("/terminal-links")
+def link_terminal(body: TerminalClaim, runtime: TradingRuntime = Depends(get_runtime), user=Depends(current_user)):
+    return claim_terminal(runtime, user, body.code)
+
+
+@router.delete("/terminal-links/{link_id}")
+def unlink_terminal(link_id: str, runtime: TradingRuntime = Depends(get_runtime), user=Depends(current_user)):
+    removed = runtime.db.execute("DELETE FROM terminal_view_links WHERE id=? AND tenant_id=? AND owner_email=?",
+                                 (link_id, user["tenant_id"], user["email"]))
+    if not removed:
+        raise HTTPException(404, "terminal link not found")
+    runtime.db.audit(user["email"], "terminal_view.unlinked", {"id": link_id})
+    return {"ok": True, "orders_sent": False}
+
+
+@router.get("/positions")
+def chart_positions(symbol: str = "XAUUSD", account_id: str | None = None,
+                    runtime: TradingRuntime = Depends(get_runtime), user=Depends(current_user)):
+    if not account_id:
+        return {"available": False, "positions": [], "read_only": True,
+                "reason": "กราฟตลาดกลางไม่แสดงไม้ส่วนตัว · ผูก terminal ในหน้า Brokers แล้วเลือกบัญชีบนกราฟ"}
+    adapter, _ = chart_source(runtime, user, symbol, account_id)
+    source_symbol = runtime.market.resolve_chart_symbol(adapter, symbol)
+    result = private_positions(runtime, user, account_id, adapter.id, source_symbol)
+    return {**result, "broker_id": adapter.id, "source_symbol": source_symbol}
 
 
 def quote_freshness(tick_time: float, now: float | None = None) -> dict:

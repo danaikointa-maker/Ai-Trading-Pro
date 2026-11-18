@@ -288,6 +288,46 @@ def test_poll_requires_a_live_session(client):
     assert "register" in res.json()["detail"]
 
 
+def test_private_terminal_positions_require_one_use_owner_link(client, auth, bridge, runtime):
+    private = snapshot(positions=[{"ticket": "50001", "symbol": "XAUUSD",
+                                  "direction": "up", "entry": 1999, "sl": 1995,
+                                  "tp": 2008, "volume": 0.1}])
+    private["account"].update(trade_mode="demo", connected=True)
+    private.update(positions_scope="private", positions_status={"available": True, "captured_at": time.time()})
+    assert client.post("/api/bridge/poll", headers=AUTH,
+                       json={"session_id": SID, "snapshot": private}).status_code == 200
+    body = {"account_id": ACCOUNT, "session_id": SID}
+    assert client.post("/api/bridge/link-code", json=body).status_code == 401
+    issued = client.post("/api/bridge/link-code", headers=AUTH, json=body)
+    assert issued.status_code == 200
+    claim = client.post("/api/market/terminal-links", headers=auth, json={"code": issued.json()["code"]})
+    assert claim.status_code == 200
+    link_id = claim.json()["id"]
+    assert client.post("/api/market/terminal-links", headers=auth,
+                       json={"code": issued.json()["code"]}).status_code == 400
+    assert client.get("/api/market/positions", headers=auth).json()["positions"] == []
+    url = f"/api/market/positions?symbol=XAUUSD&account_id={link_id}"
+    actual = client.get(url, headers=auth)
+    assert actual.status_code == 200
+    assert actual.json()["available"] is True
+    assert actual.json()["positions"][0]["sl"] == 1995
+    assert actual.json()["positions"][0]["tp"] == 2008
+    created = client.post("/api/users", headers=auth,
+                          json={"email": "private-viewer@no7.ai", "password": "viewerpass123", "role": "trader"})
+    assert created.status_code == 200
+    viewer = client.post("/api/auth/login", json={"email": "private-viewer@no7.ai",
+                                                 "password": "viewerpass123"}).json()["token"]
+    other_auth = {"Authorization": f"Bearer {viewer}"}
+    assert client.get(url, headers=other_auth).status_code == 404
+    assert client.delete(f"/api/market/terminal-links/{link_id}", headers=other_auth).status_code == 404
+    active = runtime.adapter.id
+    assert client.post(f"/api/brokers/{ACCOUNT}/activate", headers=auth).status_code == 409
+    assert runtime.adapter.id == active
+    assert bridge["relay"].commands(ACCOUNT) == []
+    assert client.delete(f"/api/market/terminal-links/{link_id}", headers=auth).status_code == 200
+    assert client.get(url, headers=auth).status_code == 404
+
+
 def test_poll_without_the_token_is_refused(client, bridge):
     """A session id is not a credential: it must not be enough to poll or to ack."""
     no_token = client.post("/api/bridge/poll", json={"session_id": SID})

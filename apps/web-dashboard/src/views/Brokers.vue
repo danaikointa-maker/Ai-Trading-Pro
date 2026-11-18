@@ -13,6 +13,20 @@
     </section>
 
     <template v-else>
+    <section v-if="!isPlatformSuperAdmin" class="panel p-3">
+      <h2 class="panel-title">ผูก MT5 ที่เปิดอยู่ · อ่านไม้และ SL/TP จริง</h2>
+      <p class="mt-1 text-[11px] text-muted">ใช้รหัสผูกครั้งเดียวจาก PC ที่เปิด MT5 อายุ 10 นาที · ไม่ใช่รหัสผ่านโบรกเกอร์ และไม่เปิดสิทธิ์ส่งคำสั่ง</p>
+      <form v-if="perms.canTrade" class="mt-2 flex flex-wrap gap-2" @submit.prevent="claimTerminalCode">
+        <input v-model="terminalCode" type="password" autocomplete="off" aria-label="รหัสผูก terminal ครั้งเดียว" placeholder="รหัสผูก terminal" class="input min-w-0 flex-1" maxlength="64" required />
+        <button class="btn" :disabled="linkingTerminal || !terminalCode.trim()">{{ linkingTerminal ? 'กำลังผูก…' : 'ผูกเพื่อดูไม้จริง' }}</button>
+      </form>
+      <div v-for="view in terminalViews" :key="view.id" class="mt-2 flex flex-wrap items-center gap-2 text-[11px]">
+        <span>{{ view.server }} · {{ view.login }} · {{ view.account_type.toUpperCase() }}</span>
+        <span class="chip" :class="view.market_connected ? 'chip-up' : 'chip-warn'">{{ view.market_connected ? 'เชื่อมแล้ว · อ่านอย่างเดียว' : 'รอ terminal' }}</span>
+        <RouterLink to="/" class="btn px-2 py-1">ดูกราฟ</RouterLink>
+        <button v-if="perms.canTrade" class="btn px-2 py-1" @click="unlinkTerminal(view.id)">ยกเลิกผูก</button>
+      </div>
+    </section>
     <section class="panel">
       <div class="panel-head">
         <div class="panel-title">Managed broker accounts</div>
@@ -229,6 +243,30 @@ const teams = ref([])
 const assignmentDrafts = ref({})
 const creatingAccount = ref(false)
 const validatingAccountId = ref('')
+const terminalCode = ref('')
+const terminalViews = ref([])
+const linkingTerminal = ref(false)
+async function loadTerminalViews() {
+  const data = await api.get('/api/market/context')
+  terminalViews.value = (data.accounts || []).filter(account => account.kind === 'terminal_read_only')
+}
+async function claimTerminalCode() {
+  if (!perms.value.canTrade || linkingTerminal.value) return
+  linkingTerminal.value = true
+  try {
+    await api.post('/api/market/terminal-links', { code: terminalCode.value })
+    terminalCode.value = ''
+    await loadTerminalViews()
+    toast('ผูก terminal แบบอ่านอย่างเดียวแล้ว · กลับหน้ากราฟเพื่อดู POS และ SL/TP', 'success')
+  } catch (error) { toast(error.message, 'error') }
+  finally { linkingTerminal.value = false }
+}
+async function unlinkTerminal(id) {
+  try {
+    await api.del(`/api/market/terminal-links/${encodeURIComponent(id)}`)
+    await loadTerminalViews()
+  } catch (error) { toast(error.message, 'error') }
+}
 const defaultTerminalPath = 'C:\\Program Files\\MetaTrader 5\\terminal64.exe'
 const accountForm = ref({ provider: 'mt5', label: '', server: '', account_type: 'demo', login: '', password: '',
   terminal_path: defaultTerminalPath, validation_symbol: 'XAUUSD' })
@@ -263,6 +301,7 @@ async function load() {
       specs.value = []
     }
     await loadManagedAccounts()
+    await loadTerminalViews()
   } catch (err) {
     toast(err.message, 'error')
   } finally {
@@ -359,6 +398,7 @@ async function activate(id) {
 }
 
 function brokerDisabledReason(broker) {
+  if (broker.adapter === 'bridge' && broker.read_only) return 'Bridge อ่านอย่างเดียว · เลือกบัญชีบนกราฟแทน'
   if (!perms.value.canTrade) return perms.value.reason
   if (broker.id === active.value) return 'ใช้งาน broker นี้อยู่แล้ว'
   if (broker.account_type === 'live' && !broker.live_allowed) return 'Live ยังไม่เปิดใช้งาน'

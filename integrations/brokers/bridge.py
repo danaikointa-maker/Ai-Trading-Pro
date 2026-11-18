@@ -308,7 +308,10 @@ class BridgeBroker(BrokerAdapter):
 
     def positions(self) -> list[Position]:
         """The EA's snapshot *is* the position list — replaced, never merged."""
-        rows = self._snapshot().get("positions")
+        snapshot = self._snapshot()
+        if snapshot.get("positions_scope") == "private":
+            raise BrokerError("private terminal positions require an owner-scoped chart link")
+        rows = snapshot.get("positions")
         if not isinstance(rows, list):
             raise BrokerError("bridge snapshot has no valid positions list")
         out: list[Position] = []
@@ -347,6 +350,7 @@ class BridgeBroker(BrokerAdapter):
             "health": self.health().value, "live_allowed": self.live_allowed,
             "regulated_note": self.regulated_note, "symbols": self.symbol_names(),
             "bridge_account": self.account_id,
+            "read_only": self.relay.read_only,
             "bridge_session": (session.session_id if (session := self.relay.get(self.account_id))
                                else None),
             "last_command": self.last_command,

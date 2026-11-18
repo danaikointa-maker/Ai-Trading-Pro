@@ -119,7 +119,7 @@ try {
   controls.fullscreenChanged()
   assert.equal(controls.fullscreen.value, false)
   controls.chartFeed.value = 'mt5-live'
-  assert.equal(controls.layerUnavailable('plan'), true)
+  assert.equal(controls.layerUnavailable('plan'), false)
   assert.equal(controls.layerUnavailable('ema'), false)
   const toolLines = []
   controls.candleSeries.createPriceLine = options => { toolLines.push(options); return options }
@@ -133,9 +133,22 @@ try {
     assert.equal(controls.layerUnavailable(key), false, `same-source ${key} must be usable`)
     controls.layerVisibility[key] = true
   }
-  assert.equal(controls.layerUnavailable('positions'), true)
+  assert.equal(controls.layerUnavailable('positions'), false)
   controls.drawOverlays()
   assert.deepEqual(toolLines.map(line => line.price).sort((a,b) => a-b), [10, 11, 12, 14, 15])
+  controls.chartPositions.value = { available: true, positions: [{ ticket: 'fixture-private', entry: 20, sl: 18, tp: 24 }], reason: '' }
+  controls.layerVisibility.positions = true
+  controls.layerVisibility.plan = true
+  toolLines.length = 0
+  controls.drawOverlays()
+  assert.ok(toolLines.some(line => line.price === 20))
+  assert.ok(toolLines.some(line => line.price === 18))
+  assert.ok(toolLines.some(line => line.price === 24))
+  controls.toggleLayer('positions')
+  toolLines.length = 0
+  controls.drawOverlays()
+  assert.ok(!toolLines.some(line => line.price === 20), 'POS hides entry lines independently')
+  assert.ok(toolLines.some(line => line.price === 18), 'SL/TP still shows real stops with POS hidden')
   controls.chartOverlays.value.sr_flips = []
   controls.layerVisibility.flip = false
   controls.toggleLayer('flip')

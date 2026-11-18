@@ -19,6 +19,7 @@ from pydantic import BaseModel, Field
 
 from services.api_gateway.deps import current_user, get_runtime, require_admin
 from services.api_gateway.state import TradingRuntime
+from services.api_gateway.terminal_views import issue_link_code
 from services.bridge.relay import BridgeError, BridgeTokenError
 
 router = APIRouter(prefix="/api/bridge", tags=["bridge"])
@@ -35,6 +36,22 @@ class PollBody(BaseModel):
     session_id: str = Field(min_length=1)
     snapshot: dict[str, Any] | None = None
     results: list[dict[str, Any]] = Field(default_factory=list)
+
+
+class LinkCodeBody(BaseModel):
+    account_id: str
+    session_id: str
+
+
+@router.post("/link-code")
+def terminal_link_code(body: LinkCodeBody, authorization: str | None = Header(default=None),
+                       runtime: TradingRuntime = Depends(get_runtime)):
+    try:
+        return issue_link_code(runtime, body.account_id, body.session_id, _token(authorization))
+    except BridgeTokenError as exc:
+        raise HTTPException(401, str(exc)) from exc
+    except BridgeError as exc:
+        raise HTTPException(409, str(exc)) from exc
 
 
 def _token(authorization: str | None) -> str:

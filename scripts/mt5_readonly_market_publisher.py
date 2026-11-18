@@ -160,7 +160,7 @@ def symbol_snapshot(terminal: Any, symbol: str) -> tuple[dict[str, Any], dict[st
 
 
 def build_snapshot(terminal: Any, account: Any, status: Any, symbols: list[str],
-                   *, include_rates: bool, rates_bars: int) -> dict[str, Any]:
+                   *, include_rates: bool, rates_bars: int, include_positions: bool = False) -> dict[str, Any]:
     quotes: dict[str, Any] = {}
     specs: dict[str, Any] = {}
     rates: dict[str, Any] = {}
@@ -184,6 +184,23 @@ def build_snapshot(terminal: Any, account: Any, status: Any, symbols: list[str],
             if period_rates:
                 rates[symbol] = period_rates
 
+    positions = []
+    positions_status = {"available": False, "captured_at": 0}
+    if include_positions:
+        raw_positions = terminal.positions_get()
+        # Stop if the user switches terminal accounts during this read.
+        account_identity(terminal, int(account.login), str(account.server))
+        if raw_positions is not None:
+            for position in raw_positions:
+                if str(position.symbol) not in symbols:
+                    continue
+                if int(position.type) not in (terminal.POSITION_TYPE_BUY, terminal.POSITION_TYPE_SELL):
+                    raise PublisherError("unsupported position type; publisher stopped")
+                positions.append({"ticket": str(position.ticket), "symbol": str(position.symbol),
+                                  "direction": "up" if position.type == terminal.POSITION_TYPE_BUY else "down",
+                                  "entry": float(position.price_open), "sl": float(position.sl),
+                                  "tp": float(position.tp), "volume": float(position.volume)})
+            positions_status = {"available": True, "captured_at": time.time()}
     trade_mode = int(account.trade_mode)
     return {
         "server_time": int(time.time()),
@@ -194,7 +211,9 @@ def build_snapshot(terminal: Any, account: Any, status: Any, symbols: list[str],
         },
         "quotes": quotes,
         "symbols": specs,
-        "positions": [],
+        "positions": positions,
+        "positions_scope": "private" if include_positions else "unavailable",
+        "positions_status": positions_status,
         "rates": rates,
         "rates_updated_at": int(time.time()) if include_rates else 0,
         "rates_unchanged": not include_rates,
@@ -203,6 +222,12 @@ def build_snapshot(terminal: Any, account: Any, status: Any, symbols: list[str],
 
 
 def run(args: argparse.Namespace) -> int:
+    code_path = None
+    if args.link_code_file:
+        private_dir = (Path(os.environ.get("LOCALAPPDATA", "")) / "No7AITrading").resolve()
+        code_path = Path(args.link_code_file).resolve()
+        if code_path.parent != private_dir or not private_dir.is_dir() or not args.include_positions:
+            raise PublisherError("link code must use the protected No7AITrading directory with --include-positions")
     if args.expected_login <= 0 or not args.expected_server.strip():
         raise PublisherError("an exact expected Demo login and server are required")
     if not args.symbols or any(not symbol.strip() for symbol in args.symbols):
@@ -228,6 +253,7 @@ def run(args: argparse.Namespace) -> int:
         print(f"MT5 read-only bridge connected to {identity['server']} for {len(symbols)} symbol(s)")
 
         last_rates_at = 0.0
+        link_code_saved = False
         poll_seconds = max(0.25, args.poll_ms / 1000.0)
         rates_interval = max(5.0, args.rates_interval)
         while True:
@@ -236,7 +262,8 @@ def run(args: argparse.Namespace) -> int:
             now = time.monotonic()
             include_rates = last_rates_at == 0.0 or now - last_rates_at >= rates_interval
             snapshot = build_snapshot(terminal, account, status, symbols,
-                                      include_rates=include_rates, rates_bars=args.rates_bars)
+                                      include_rates=include_rates, rates_bars=args.rates_bars,
+                                      include_positions=args.include_positions)
             try:
                 response = client.post("poll", {
                     "session_id": client.session_id,
@@ -270,6 +297,11 @@ def run(args: argparse.Namespace) -> int:
                 print(f"Read-only publisher ignored {len(commands)} command(s)")
             if include_rates:
                 last_rates_at = now
+            if code_path is not None and not link_code_saved:
+                link = client.post("link-code", {"account_id": args.account_id, "session_id": client.session_id})
+                code_path.write_text(str(link["code"]) + "\n", encoding="utf-8")
+                link_code_saved = True
+                print("One-use read-only terminal link code saved to the protected local file (10 minute expiry)")
             time.sleep(max(0.05, poll_seconds - (time.monotonic() - now)))
     except KeyboardInterrupt:
         return 0
@@ -288,6 +320,8 @@ def main() -> int:
     parser.add_argument("--symbols", default="XAUUSD.s",
                         help="comma-separated exact symbols already visible in Market Watch")
     parser.add_argument("--token-file", default="")
+    parser.add_argument("--include-positions", action="store_true", help="read positions without sending any trade requests")
+    parser.add_argument("--link-code-file", default="", help="protected local file for the one-use read-only account link code")
     parser.add_argument("--poll-ms", type=int, default=1000)
     parser.add_argument("--rates-interval", type=float, default=10.0,
                         help="history refresh seconds (minimum 5; quotes poll independently)")

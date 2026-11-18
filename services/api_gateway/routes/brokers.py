@@ -24,6 +24,10 @@ def list_brokers(runtime: TradingRuntime = Depends(get_runtime), user=Depends(cu
 @router.post("/{broker_id}/activate")
 def activate(broker_id: str, runtime: TradingRuntime = Depends(get_runtime), user=Depends(current_user)):
     try:
+        candidate = runtime.registry.get(broker_id)
+        if getattr(candidate, "adapter_type", "") == "bridge" and (
+                candidate.relay.read_only or candidate.relay.snapshot(candidate.account_id).get("positions_scope") == "private"):
+            raise HTTPException(409, "bridge นี้อ่านอย่างเดียว · เลือกบัญชีบนกราฟแทนการเปลี่ยน execution broker")
         adapter = runtime.registry.set_active(broker_id)
     except KeyError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc

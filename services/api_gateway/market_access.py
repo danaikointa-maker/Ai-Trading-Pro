@@ -3,6 +3,7 @@ from fastapi import HTTPException
 
 from services.api_gateway.accounts import list_broker_accounts
 from services.api_gateway.credential_vault import CredentialVault, VaultError
+from services.api_gateway.terminal_views import list_terminal_views
 
 
 def market_accounts(runtime, user):
@@ -36,7 +37,7 @@ def market_accounts(runtime, user):
                 account["market_broker_id"] = adapter.id
                 account["market_connected"] = True
                 break
-    return accounts
+    return accounts + list_terminal_views(runtime, user)
 
 
 def chart_source(runtime, user, symbol, account_id=None):

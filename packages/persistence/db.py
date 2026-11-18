@@ -186,6 +186,19 @@ CREATE TABLE IF NOT EXISTS bridge_commands (
     payload TEXT, created_at REAL, expires_at REAL, state TEXT,
     delivered_at REAL, acked_at REAL, result TEXT
 );
+
+-- Read-only terminal ownership proof, separate from broker credentials/execution.
+CREATE TABLE IF NOT EXISTS terminal_link_codes (
+    code_hash TEXT PRIMARY KEY, bridge_account TEXT NOT NULL, identity_hash TEXT NOT NULL,
+    label TEXT NOT NULL, server TEXT NOT NULL, account_type TEXT NOT NULL, masked_login TEXT NOT NULL,
+    expires_at REAL NOT NULL, consumed_at REAL
+);
+CREATE TABLE IF NOT EXISTS terminal_view_links (
+    id TEXT PRIMARY KEY, tenant_id TEXT NOT NULL, owner_email TEXT NOT NULL,
+    bridge_account TEXT NOT NULL, identity_hash TEXT NOT NULL, label TEXT NOT NULL,
+    server TEXT NOT NULL, account_type TEXT NOT NULL, masked_login TEXT NOT NULL, created_at REAL NOT NULL,
+    UNIQUE(tenant_id, owner_email, bridge_account, identity_hash)
+);
 CREATE INDEX IF NOT EXISTS idx_bridge_commands
     ON bridge_commands(account_id, state, seq);
 -- Alerts that could not be delivered in-process. Stored as title/message rather

@@ -44,6 +44,7 @@
       <span v-if="visiblePrices">· ราคา {{ visiblePrices }}</span>
       <span v-if="fixedPriceRange" title="ตรึงช่วงราคา" aria-label="ตรึงช่วงราคา"><ToolIcon name="lock" /></span>
       <span v-if="layerNote" role="status" class="text-amber-200">{{ layerNote }}</span>
+      <RouterLink v-if="chartFeed.startsWith('mt5-') && !chartPositions.available && ['plan','positions'].includes(selectedLayerKey)" to="/brokers" class="text-gold">ผูก terminal →</RouterLink>
       <span v-if="overlayError" role="status" class="text-amber-200">{{ overlayError }}</span>
     <details class="ml-auto text-[11px] text-muted">
       <summary class="inline-flex cursor-pointer list-none items-center gap-1 rounded p-1 hover:bg-ink-800" title="ตั้งช่วงเวลา ช่วงราคา และความสูงกราฟ" aria-label="ตั้งช่วงเวลา ช่วงราคา และความสูงกราฟ"><ToolIcon name="sliders" /><span class="sr-only">ตั้งค่าช่วงกราฟ</span></summary>
@@ -116,7 +117,14 @@ const chartBrokerId = ref('')
 const chartOverlays = ref(null)
 const overlayError = ref('')
 const selectedLayerKey = ref('')
+const chartPositions = ref({ available: false, positions: [], reason: 'ผูก terminal ในหน้า Brokers เพื่อดูไม้จริง' })
 const layerNote = computed(() => {
+  if (chartFeed.value.startsWith('mt5-') && ['plan', 'positions'].includes(selectedLayerKey.value)) {
+    const data = chartPositions.value
+    if (!data.available || !data.positions.length) return data.reason || 'ไม่มีไม้เปิดของสัญลักษณ์นี้'
+    if (selectedLayerKey.value === 'plan' && !data.positions.some(position => position.sl > 0 || position.tp > 0)) return 'ไม้จริงยังไม่ได้ตั้ง SL/TP ใน MT5'
+    return ''
+  }
   if (!chartFeed.value.startsWith('mt5-') || !chartOverlays.value?.available || !selectedLayerKey.value) return ''
   const data = chartOverlays.value
   const messages = {
@@ -335,8 +343,7 @@ function chartKeydown(event) {
 const LAYERS_KEY = 'no7.chart.layers.v1'
 function layerDisabledReason(key) {
   if (!chartFeed.value.startsWith('mt5-') || key === 'ema') return ''
-  if (key === 'plan') return 'SL/TP ต้องมีแผนซื้อขายจริงที่ผูกกับบัญชีและข้อมูลเดียวกับกราฟก่อน'
-  if (key === 'positions') return 'POS ต้องผูกบัญชีและรับสถานะ position จริงก่อน · ไม่ใช้ไม้จากบัญชีจำลองแทน'
+  if (key === 'plan' || key === 'positions') return ''
   if (!chartOverlays.value?.available) return overlayError.value || 'กำลังเตรียมเครื่องมือจากแท่ง MT5'
   return ''
 }
@@ -475,6 +482,7 @@ async function load(preserveView = false) {
     chartFeed.value = ''
     chartSymbol.value = ''
     chartOverlays.value = null
+    chartPositions.value = { available: false, positions: [], reason: 'กำลังตรวจบัญชีที่ผูกกับกราฟ' }
     overlayError.value = ''
   }
   try {
@@ -539,7 +547,7 @@ async function load(preserveView = false) {
     clearTimeout(requestTimeout)
     if (version === loadVersion) {
       loading.value = false
-      if (chartFeed.value === 'mt5-live') refreshChartOverlays()
+      if (chartFeed.value === 'mt5-live') { refreshChartOverlays(); refreshChartPositions() }
     }
   }
 }
@@ -615,6 +623,15 @@ function drawOverlays() {
       addLine(p.tp, 'rgba(52,211,153,0.6)', 'pos TP', 1, 1)
     })
   }
+  if (native && chartPositions.value.available) {
+    for (const position of chartPositions.value.positions) {
+      if (layerVisibility.positions) addLine(position.entry, 'rgba(96,165,250,0.8)', `#${position.ticket}`, 1, 1)
+      if (layerVisibility.plan) {
+        addLine(position.sl, 'rgba(248,113,113,0.8)', `SL #${position.ticket}`, 2)
+        addLine(position.tp, 'rgba(52,211,153,0.8)', `TP #${position.ticket}`, 2)
+      }
+    }
+  }
 }
 
 function updateLast(tick = state.live?.ticker) {
@@ -650,6 +667,26 @@ watch(() => state.live?.ticker?.last, (tick) => {
   if (['simulated', 'simulate', 'replay'].includes(chartFeed.value)) updateLast(state.live?.ticker)
 })
 watch(positions, drawOverlays)
+
+const refreshChartPositions = singleFlight(async () => {
+  if (!chart || !chartFeed.value.startsWith('mt5-')) return
+  const version = loadVersion
+  if (!selectedAccount.value) {
+    chartPositions.value = { available: false, positions: [], reason: 'กราฟตลาดกลางไม่แสดงไม้ส่วนตัว · ผูก terminal ในหน้า Brokers ก่อน' }
+    drawOverlays()
+    return
+  }
+  const controller = new AbortController()
+  const timeout = setTimeout(() => controller.abort(), 4000)
+  try {
+    const data = await api.get(`/api/market/positions?symbol=${encodeURIComponent(state.symbol)}${accountQuery()}`, { signal: controller.signal })
+    if (version !== loadVersion) return
+    if (data.available && (data.broker_id !== chartBrokerId.value || data.source_symbol !== chartSymbol.value)) throw new Error('บัญชีหรือสัญลักษณ์ไม่ตรงกับกราฟ')
+    chartPositions.value = data
+  } catch (error) {
+    if (version === loadVersion) chartPositions.value = { available: false, positions: [], reason: error.message || 'ยืนยันสถานะไม้ไม่ได้' }
+  } finally { clearTimeout(timeout); drawOverlays() }
+})
 
 const refreshChartOverlays = singleFlight(async () => {
   if (!chart || chartFeed.value !== 'mt5-live') return
@@ -692,11 +729,14 @@ const refreshChartQuote = singleFlight(async () => {
     chartFeed.value = 'mt5-live'
     if (reconnected) await load()
     updateLast(data.tick)
+    refreshChartPositions()
     return
   }
   if (chartFeed.value === 'mt5-live') {
     chartFeed.value = 'mt5-disconnected'
     quoteWarning.value = 'MT5 ขาดการเชื่อมต่อ · คงกราฟล่าสุดไว้และหยุดอัปเดตราคา'
+    chartPositions.value = { available: false, positions: [], reason: 'MT5 ขาดการเชื่อมต่อ · ยังยืนยันสถานะไม้ไม่ได้' }
+    drawOverlays()
   }
   } finally { clearTimeout(timeout) }
 })

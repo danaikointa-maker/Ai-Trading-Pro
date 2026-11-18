@@ -34,6 +34,7 @@ def test_account_session_must_match_type_and_full_identity(monkeypatch, mode, lo
     vault.fingerprint.side_effect = lambda tenant, provider, server, login: f"{tenant}/{login}"
     monkeypatch.setattr(market_access, "CredentialVault", lambda: vault)
     runtime = Mock()
+    runtime.db.query.return_value = []
     runtime.db.query_one.return_value = {"login_fingerprint": "tenant-a/1234"}
     adapter = SimpleNamespace(adapter_type="bridge", account_id="bridge", id="adapter",
                               health=lambda: SimpleNamespace(value="connected"))
