@@ -38,7 +38,7 @@
           <span class="text-[13px] font-semibold">No7 AI Trading Pro</span>
         </div>
         <h2 class="mt-2 text-[17px] font-semibold text-slate-100">เข้าสู่ระบบ</h2>
-        <p class="mt-1 text-[11.5px] text-muted">ใช้บัญชี Demo ที่ระบบสร้างให้ (เก็บรหัสใน .env เท่านั้น)</p>
+        <p class="mt-1 text-[11.5px] text-muted">ใช้บัญชีที่ผู้ดูแลระบบจัดเตรียมให้</p>
 
         <label class="mt-5 block">
           <span class="label">Email</span>
@@ -54,13 +54,6 @@
         </button>
         <p v-if="error" class="mt-3 rounded-lg border border-down/30 bg-down/10 px-3 py-2 text-[11px] text-down">{{ error }}</p>
 
-        <div class="mt-5 rounded-lg border border-ink-700 bg-ink-900/60 p-3">
-          <div class="label mb-1">Demo credentials</div>
-          <div class="num text-[11px] text-slate-300">demo@no7.ai · no7demo1234</div>
-          <button type="button" class="mt-2 text-[10.5px] text-gold-400/90 hover:text-gold-400" @click="fillDemo">
-            เติมข้อมูลให้อัตโนมัติ
-          </button>
-        </div>
       </form>
     </div>
   </div>
@@ -74,8 +67,8 @@ import { getToken } from '../lib/api'
 
 const router = useRouter()
 const route = useRoute()
-const email = ref('demo@no7.ai')
-const password = ref('no7demo1234')
+const email = ref('')
+const password = ref('')
 const loading = ref(false)
 const error = ref('')
 
@@ -87,11 +80,6 @@ const features = [
   'Risk Engine: lot จากระยะ SL, daily kill switch',
   'Broker adapter: Connext / MT5 generic',
 ]
-
-function fillDemo() {
-  email.value = 'demo@no7.ai'
-  password.value = 'no7demo1234'
-}
 
 function landingTarget() {
   const raw = route.query.next
@@ -118,7 +106,6 @@ async function submit() {
 }
 
 onMounted(() => {
-  if (route.query.demo === '1') fillDemo()
   // A reload on /login with a live token must not keep the form on screen.
   if (getToken()) router.replace(landingTarget()).catch(() => window.location.assign('/'))
 })
