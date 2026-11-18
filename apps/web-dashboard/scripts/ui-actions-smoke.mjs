@@ -121,6 +121,25 @@ try {
   controls.chartFeed.value = 'mt5-live'
   assert.equal(controls.layerUnavailable('plan'), true)
   assert.equal(controls.layerUnavailable('ema'), false)
+  const toolLines = []
+  controls.candleSeries.createPriceLine = options => { toolLines.push(options); return options }
+  controls.candleSeries.removePriceLine = () => {}
+  controls.chartOverlays.value = { available: true,
+    supports: [{ mid: 10, quality: 'high' }], resistances: [],
+    fibonacci_band: { level_50: 12, level_618: 11 },
+    sr_flips: [{ level: 14, direction: 'resistance_to_support' }],
+    structure: [{ level: 15, kind: 'BOS', confirmed: true }] }
+  for (const key of ['sr', 'flip', 'fib', 'structure']) {
+    assert.equal(controls.layerUnavailable(key), false, `same-source ${key} must be usable`)
+    controls.layerVisibility[key] = true
+  }
+  assert.equal(controls.layerUnavailable('positions'), true)
+  controls.drawOverlays()
+  assert.deepEqual(toolLines.map(line => line.price).sort((a,b) => a-b), [10, 11, 12, 14, 15])
+  controls.chartOverlays.value.sr_flips = []
+  controls.layerVisibility.flip = false
+  controls.toggleLayer('flip')
+  assert.match(controls.layerNote.value, /ยังไม่พบ FLIP/)
   controls.chartHeight.value = 900
   controls.mt5View()
   assert.equal(controls.chartHeight.value, 580, 'MT5 preset must apply the height advertised by its tooltip')

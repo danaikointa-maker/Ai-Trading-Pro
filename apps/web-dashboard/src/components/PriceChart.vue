@@ -16,8 +16,8 @@
               class="rounded border px-2 py-1 text-[10px] transition-colors"
               :class="layerUnavailable(item.key) ? 'cursor-not-allowed border-ink-700 text-muted opacity-40' : layerVisibility[item.key] ? 'border-gold/50 bg-gold/10 text-gold' : 'border-ink-700 text-muted'"
               :disabled="layerUnavailable(item.key)" :aria-pressed="!layerUnavailable(item.key) && layerVisibility[item.key]"
-              :title="layerUnavailable(item.key) ? 'ยังใช้ overlay จาก runtime อีกชุดกับกราฟ MT5 ไม่ได้' : 'เปิด/ปิดเฉพาะการแสดงผล ' + item.label" :aria-label="'เปิด/ปิด ' + item.label"
-              @click="layerVisibility[item.key] = !layerVisibility[item.key]">
+              :title="layerDisabledReason(item.key) || 'เปิด/ปิดเฉพาะการแสดงผล ' + item.label" :aria-label="'เปิด/ปิด ' + item.label"
+              @click="toggleLayer(item.key)">
         {{ item.short || item.label }}
       </button>
       <span v-if="quoteWarning" role="status" class="flex items-center gap-1 text-amber-200" :title="quoteWarning" :aria-label="quoteWarning"><ToolIcon name="alert" />{{ quoteWarning.startsWith('เวลา MT5') ? 'MT5 ≠ UTC' : chartFeed === 'simulated' ? 'SIMULATED' : chartFeed === 'replay' ? 'REPLAY' : 'ราคาไม่สด' }}</span>
@@ -43,6 +43,8 @@
       <span>{{ visibleSummary }}</span>
       <span v-if="visiblePrices">· ราคา {{ visiblePrices }}</span>
       <span v-if="fixedPriceRange" title="ตรึงช่วงราคา" aria-label="ตรึงช่วงราคา"><ToolIcon name="lock" /></span>
+      <span v-if="layerNote" role="status" class="text-amber-200">{{ layerNote }}</span>
+      <span v-if="overlayError" role="status" class="text-amber-200">{{ overlayError }}</span>
     <details class="ml-auto text-[11px] text-muted">
       <summary class="inline-flex cursor-pointer list-none items-center gap-1 rounded p-1 hover:bg-ink-800" title="ตั้งช่วงเวลา ช่วงราคา และความสูงกราฟ" aria-label="ตั้งช่วงเวลา ช่วงราคา และความสูงกราฟ"><ToolIcon name="sliders" /><span class="sr-only">ตั้งค่าช่วงกราฟ</span></summary>
       <div class="absolute inset-x-0 top-full z-20 rounded-b-lg border border-ink-700 bg-ink-900 p-3 shadow-xl">
@@ -66,7 +68,7 @@
       <span class="chip chip-gold">{{ chartSymbol || state.symbol }} · {{ state.timeframe }}</span>
       <span class="chip" :class="feedWarn ? 'chip-warn' : ''" :title="feedTitle">{{ feedLabel }}</span>
       <span v-if="chartFeed !== 'mt5-live' && state.live?.analysis?.regime" class="chip">{{ state.live.analysis.regime.regime.replace('_',' ') }}</span>
-      <span v-if="chartFeed === 'mt5-live'" class="chip chip-warn" title="ซ่อน overlay จาก runtime เพราะยังใช้ข้อมูลอีกชุด" aria-label="ซ่อน overlay จากข้อมูลอีกชุด"><ToolIcon name="eyeOff" /></span>
+      <span v-if="chartFeed === 'mt5-live' && chartOverlays?.available" class="chip" title="เครื่องมือวิเคราะห์จากแท่งปิดของ MT5 สัญลักษณ์และ timeframe เดียวกับกราฟ" aria-label="เครื่องมือจากข้อมูล MT5 เดียวกับกราฟ"><ToolIcon name="chart" /></span>
     </div>
     <div v-if="loading" class="absolute inset-x-0 bottom-0 top-10 grid place-items-center bg-ink-900/40 text-[12px] text-muted">loading chart…</div>
     <!-- Never fail silently: a blank panel tells nobody anything. -->
@@ -110,6 +112,21 @@ const bars = ref(0)
 const lastBar = ref(null)
 const chartFeed = ref('')
 const chartSymbol = ref('')
+const chartBrokerId = ref('')
+const chartOverlays = ref(null)
+const overlayError = ref('')
+const selectedLayerKey = ref('')
+const layerNote = computed(() => {
+  if (!chartFeed.value.startsWith('mt5-') || !chartOverlays.value?.available || !selectedLayerKey.value) return ''
+  const data = chartOverlays.value
+  const messages = {
+    sr: !(data.supports?.length || data.resistances?.length) ? 'ยังไม่พบ S/R ที่ยืนยันในช่วงแท่งนี้' : '',
+    flip: !data.sr_flips?.length ? 'ยังไม่พบ FLIP ที่ยืนยันในช่วงแท่งนี้' : '',
+    fib: !data.fibonacci_band ? 'ยังไม่มีคู่ swing ที่ยืนยันสำหรับ FIB' : '',
+    structure: !data.structure?.length ? 'ยังไม่พบ BOS/CHoCH ที่ยืนยันในช่วงแท่งนี้' : '',
+  }
+  return layerVisibility[selectedLayerKey.value] ? messages[selectedLayerKey.value] || '' : ''
+})
 const quoteWarning = ref('')
 function showFreshness(data) {
   const freshness = data?.freshness
@@ -316,7 +333,19 @@ function chartKeydown(event) {
 // UI preferences only: never write these switches into state.live or send an
 // API request. Engine, risk controls and persisted trade decisions are unchanged.
 const LAYERS_KEY = 'no7.chart.layers.v1'
-function layerUnavailable(key) { return chartFeed.value.startsWith('mt5-') && key !== 'ema' }
+function layerDisabledReason(key) {
+  if (!chartFeed.value.startsWith('mt5-') || key === 'ema') return ''
+  if (key === 'plan') return 'SL/TP ต้องมีแผนซื้อขายจริงที่ผูกกับบัญชีและข้อมูลเดียวกับกราฟก่อน'
+  if (key === 'positions') return 'POS ต้องผูกบัญชีและรับสถานะ position จริงก่อน · ไม่ใช้ไม้จากบัญชีจำลองแทน'
+  if (!chartOverlays.value?.available) return overlayError.value || 'กำลังเตรียมเครื่องมือจากแท่ง MT5'
+  return ''
+}
+function layerUnavailable(key) { return Boolean(layerDisabledReason(key)) }
+function toggleLayer(key) {
+  if (layerUnavailable(key)) return
+  layerVisibility[key] = !layerVisibility[key]
+  selectedLayerKey.value = key
+}
 const layerChoices = [
   { key: 'ema', label: 'EMA' },
   { key: 'sr', label: 'S/R' },
@@ -445,6 +474,8 @@ async function load(preserveView = false) {
   if (preserveView !== true) {
     chartFeed.value = ''
     chartSymbol.value = ''
+    chartOverlays.value = null
+    overlayError.value = ''
   }
   try {
     const data = await api.get(
@@ -455,6 +486,7 @@ async function load(preserveView = false) {
     chartFeed.value = data.feed || ''
     showFreshness(data)
     chartSymbol.value = data.source_symbol || data.symbol || state.symbol
+    chartBrokerId.value = data.broker_id || ''
     const nextKey = `${data.feed}:${chartSymbol.value}:${state.timeframe}:${selectedAccount.value}`
     priceDigits = Number.isInteger(data.spec?.digits) ? data.spec.digits : 2
     candleSeries.applyOptions({ priceFormat: { type: 'price', precision: priceDigits,
@@ -505,7 +537,10 @@ async function load(preserveView = false) {
     console.error('[PriceChart] load failed', err)
   } finally {
     clearTimeout(requestTimeout)
-    if (version === loadVersion) loading.value = false
+    if (version === loadVersion) {
+      loading.value = false
+      if (chartFeed.value === 'mt5-live') refreshChartOverlays()
+    }
   }
 }
 
@@ -536,11 +571,10 @@ function addLine(price, color, title, style = 2, width = 1) {
 function drawOverlays() {
   if (!candleSeries) return
   clearLines()
-  // Runtime signals and positions may belong to a different feed/account. Keep
-  // the actual MT5 chart clean until the whole analysis runtime uses that source.
-  if (chartFeed.value.startsWith('mt5-')) return
-  const signal = state.live?.signal
-  const analysis = state.live?.analysis
+  if (!chartFeed.value) return
+  const native = chartFeed.value.startsWith('mt5-')
+  const signal = native ? null : state.live?.signal
+  const analysis = native ? chartOverlays.value : state.live?.analysis
   const plan = signal?.plan
   if (layerVisibility.plan && plan && ['BUY', 'SELL', 'WAIT'].includes(signal.action)) {
     addLine(plan.entry, 'rgba(245,181,65,0.9)', 'entry', 0, 2)
@@ -574,7 +608,7 @@ function drawOverlays() {
       addLine(event.level, 'rgba(167,139,250,0.65)', event.kind, 3),
     )
   }
-  if (layerVisibility.positions) {
+  if (!native && layerVisibility.positions) {
     positions.value.forEach((p) => {
       addLine(p.entry, 'rgba(96,165,250,0.8)', `#${p.ticket}`, 1, 1)
       addLine(p.sl, 'rgba(248,113,113,0.6)', 'pos SL', 1, 1)
@@ -616,6 +650,30 @@ watch(() => state.live?.ticker?.last, (tick) => {
   if (['simulated', 'simulate', 'replay'].includes(chartFeed.value)) updateLast(state.live?.ticker)
 })
 watch(positions, drawOverlays)
+
+const refreshChartOverlays = singleFlight(async () => {
+  if (!chart || chartFeed.value !== 'mt5-live') return
+  const version = loadVersion
+  const controller = new AbortController()
+  const timeout = setTimeout(() => controller.abort(), 5000)
+  try {
+    const result = await api.get(`/api/market/overlays?symbol=${encodeURIComponent(state.symbol)}&timeframe=${encodeURIComponent(state.timeframe)}&limit=${state.range}${accountQuery()}`,
+      { signal: controller.signal })
+    if (version !== loadVersion) return
+    if (result.broker_id !== chartBrokerId.value || result.source_symbol !== chartSymbol.value || result.timeframe !== state.timeframe) {
+      throw new Error('ข้อมูลเครื่องมือไม่ตรงกับแหล่งกราฟ')
+    }
+    chartOverlays.value = result.analysis
+    overlayError.value = result.analysis?.available ? '' : result.analysis?.reason || 'ข้อมูลยังไม่พอคำนวณเครื่องมือ'
+    drawOverlays()
+  } catch (error) {
+    if (version === loadVersion) {
+      chartOverlays.value = null
+      overlayError.value = `เครื่องมือ MT5: ${error.message || 'โหลดข้อมูลไม่ได้'}`
+      drawOverlays()
+    }
+  } finally { clearTimeout(timeout) }
+})
 
 const refreshChartQuote = singleFlight(async () => {
   if (loading.value || !chart) return

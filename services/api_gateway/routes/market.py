@@ -1,14 +1,17 @@
 from __future__ import annotations
 
+import json
 import time
+from dataclasses import asdict
 
 from fastapi import APIRouter, Depends, HTTPException, Query
 
+from integrations.brokers.base import BrokerError
 from packages.shared_schemas.settings import get_settings
 from services.api_gateway.deps import current_user, get_runtime
-from services.api_gateway.state import TradingRuntime
 from services.api_gateway.market_access import chart_source, market_accounts
-from integrations.brokers.base import BrokerError
+from services.api_gateway.state import TradingRuntime
+from services.market_data.chart_overlays import closed_chart_overlays
 from services.market_data.simulator import candles_from_df
 from services.risk_engine.planner import points_calculator
 
@@ -84,6 +87,30 @@ def ticker(symbol: str = "XAUUSD", account_id: str | None = None, runtime: Tradi
         quote["transport_stale"] = quote["stale"]
         quote["stale"] = quote["stale"] or freshness["stale"]
     return quote
+
+
+@router.get("/overlays")
+def chart_overlays(symbol: str = "XAUUSD", timeframe: str = "M5", limit: int = Query(400, ge=30, le=2000),
+                   account_id: str | None = None, runtime: TradingRuntime = Depends(get_runtime),
+                   user=Depends(current_user)):
+    adapter, feed = chart_source(runtime, user, symbol, account_id)
+    source_symbol = runtime.market.resolve_chart_symbol(adapter, symbol)
+    try:
+        # Use the selected source and timeframe exclusively; exclude its forming
+        # final row rather than using the runtime's unrelated simulation clock.
+        frame = adapter.candles(source_symbol, timeframe, limit).sort_values("t").drop_duplicates("t")
+        closed = frame.iloc[:-1]
+        spec = adapter.symbol_spec(source_symbol)
+        result = closed_chart_overlays(closed.to_json(orient="records", double_precision=15),
+                                       json.dumps({"digits": spec.digits, "point": spec.point}),
+                                       json.dumps(asdict(runtime.analysis.zone_cfg)), timeframe)
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except BrokerError as exc:
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
+    return {"symbol": symbol, "source_symbol": source_symbol, "broker_id": adapter.id,
+            "timeframe": timeframe, "feed": feed, "read_only": True, "analysis": result,
+            "positions_available": False, "plan_available": False}
 
 
 @router.get("/spec")

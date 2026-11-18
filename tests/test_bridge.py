@@ -395,6 +395,54 @@ def test_chart_symbol_maps_canonical_gold_name_to_broker_suffix(bridge, runtime,
     assert runtime.market.resolve_chart_symbol(adapter, "XAUUSD") == "XAUUSD.s"
 
 
+def test_mt5_chart_tools_use_selected_timeframe_closed_bars_and_cache(client, auth, bridge, runtime, monkeypatch):
+    from services.market_data.chart_overlays import closed_chart_overlays
+
+    raw = runtime.registry.get("connext-demo").candles("XAUUSD", "M3", 120).copy()
+    requested = []
+
+    def rates(symbol, timeframe, limit):
+        requested.append((symbol, timeframe, limit))
+        return raw.copy()
+
+    monkeypatch.setattr(bridge["adapter"], "candles", rates)
+    monkeypatch.setattr(runtime, "ensure_analysis", lambda *_: pytest.fail("must not use the simulation analysis"))
+    closed_chart_overlays.cache_clear()
+    before = runtime.adapter.id
+    url = "/api/market/overlays?symbol=XAUUSD&timeframe=M3&limit=120"
+    first = client.get(url, headers=auth)
+    assert first.status_code == 200, first.text
+    payload = first.json()
+    assert requested == [("XAUUSD", "M3", 120)]
+    assert payload["feed"] == "mt5-live" and payload["broker_id"] == ACCOUNT
+    assert payload["read_only"] is True
+    assert payload["analysis"]["available"] is True
+    assert payload["analysis"]["timeframe"] == "M3"
+    assert payload["analysis"]["as_of"] == int(raw.t.iloc[-2])
+    assert payload["analysis"]["bars"] == 119
+    assert payload["plan_available"] is False and payload["positions_available"] is False
+    raw.loc[raw.index[-1], ["o", "h", "l", "c"]] = [900000.0] * 4
+    second = client.get(url, headers=auth)
+    assert second.status_code == 200
+    assert second.json()["analysis"] == payload["analysis"], "forming bar must not repaint confirmed tools"
+    assert closed_chart_overlays.cache_info().hits == 1
+    assert runtime.adapter.id == before, "chart tools must not switch the execution broker"
+
+
+def test_chart_tools_report_insufficient_data_without_invented_lines(client, auth, bridge):
+    result = client.get("/api/market/overlays?symbol=XAUUSD&timeframe=M1", headers=auth)
+    assert result.status_code == 200
+    analysis = result.json()["analysis"]
+    assert analysis["available"] is False
+    assert analysis["supports"] == [] and analysis["fibonacci_band"] is None
+
+
+def test_chart_tools_cannot_select_an_inaccessible_account(client, auth, bridge, monkeypatch):
+    monkeypatch.setattr(bridge["adapter"], "candles", lambda *_: pytest.fail("unauthorized market read"))
+    result = client.get("/api/market/overlays?account_id=not-my-account", headers=auth)
+    assert result.status_code == 404
+
+
 def test_chart_reads_raw_bars_without_recomputing_strategy_indicators(client, auth, bridge, runtime, monkeypatch):
     def unexpected_enrichment(*args, **kwargs):
         raise AssertionError("Chart OHLCV should not recompute strategy indicators")

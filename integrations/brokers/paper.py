@@ -184,7 +184,7 @@ class PaperBroker(BrokerAdapter):
 
     def candles(self, symbol: str, timeframe: str, limit: int) -> pd.DataFrame:
         market = self._market_symbol(symbol)
-        multiplier = {"M1": 1, "M5": 5, "M15": 15, "M30": 30, "H1": 60, "H4": 240, "D1": 1440}[timeframe]
+        multiplier = {"M1": 1, "M3": 3, "M5": 5, "M15": 15, "M30": 30, "H1": 60, "H4": 240, "D1": 1440}[timeframe]
         need = int(limit * multiplier * 1.05) + 20
         m1 = self.feed.warm_history(market, max(need, 600))
         df = resample(m1, timeframe)
