@@ -23,15 +23,7 @@
 
       <div class="ml-auto flex flex-wrap items-center gap-2">
         <div class="hidden items-center gap-1 rounded-lg border border-ink-700 bg-ink-900 p-0.5 md:flex">
-          <button
-            v-for="tf in timeframes"
-            :key="tf"
-            class="rounded-md px-2 py-1 text-[10.5px] font-medium transition"
-            :class="state.timeframe === tf ? 'bg-ink-700 text-slate-100' : 'text-muted hover:text-slate-200'"
-            @click="setTimeframe(tf)"
-          >
-            {{ tf }}
-          </button>
+          <TimeframePicker />
         </div>
 
         <div class="hidden text-right sm:block">
@@ -84,10 +76,10 @@ import { computed } from 'vue'
 import { useRouter } from 'vue-router'
 import { api } from '../lib/api'
 import { clock, fmt, money, signed } from '../lib/format'
-import { logout, setSymbol, setTimeframe, state, toast } from '../lib/store'
+import { logout, setSymbol, state, toast } from '../lib/store'
+import TimeframePicker from './TimeframePicker.vue'
 
 const router = useRouter()
-const timeframes = ['M1', 'M5', 'M15', 'H1', 'H4']
 const modes = [
   { id: 'manual', label: 'Manual + AI', hint: 'AI แนะนำ ผู้ใช้กด Buy/Sell เอง' },
   { id: 'semi_auto', label: 'Semi-Auto', hint: 'AI แจ้งสัญญาณ ผู้ใช้อนุมัติ ระบบจัดการ SL/TP' },

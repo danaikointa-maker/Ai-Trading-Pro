@@ -521,8 +521,8 @@ string BuildSnapshot()
    string rates = "\"rates\":{";
    if(push_rates)
      {
-      ENUM_TIMEFRAMES periods[5] = {PERIOD_M1, PERIOD_M5, PERIOD_M15, PERIOD_H1, PERIOD_H4};
-      string names[5] = {"M1", "M5", "M15", "H1", "H4"};
+      ENUM_TIMEFRAMES periods[8] = {PERIOD_M1, PERIOD_M3, PERIOD_M5, PERIOD_M15, PERIOD_M30, PERIOD_H1, PERIOD_H4, PERIOD_D1};
+      string names[8] = {"M1", "M3", "M5", "M15", "M30", "H1", "H4", "D1"};
       bool first_rate_symbol = true;
       for(int i = 0; i < ArraySize(g_symbols); i++)
         {

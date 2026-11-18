@@ -1,5 +1,5 @@
 <template>
-  <div class="relative">
+  <div ref="chartHost" class="relative flex flex-col bg-ink-900" :class="fullscreen ? 'h-screen p-2' : ''" tabindex="0" @keydown="chartKeydown">
     <div class="flex flex-wrap items-center gap-2 border-b border-ink-700/60 px-3 py-2 text-[11px]">
       <label for="chart-account">แหล่งข้อมูลกราฟ</label>
       <select id="chart-account" v-model="selectedAccount" class="input w-auto py-1" @change="load">
@@ -25,8 +25,43 @@
       </button>
       <span class="text-[9.5px] text-muted">ไม่กระทบระบบเทรด</span>
     </div>
-    <div ref="container" class="h-[380px] w-full sm:h-[440px]"></div>
-    <div class="pointer-events-none absolute left-3 top-12 flex flex-wrap items-center gap-1.5">
+    <div class="flex flex-wrap items-center gap-1.5 border-b border-ink-700/60 px-2 py-2 text-[11px]" aria-label="ควบคุมกราฟ">
+      <TimeframePicker />
+      <button class="btn px-2 py-1" aria-label="ซูมออก" title="ซูมออก (-)" @click="zoom(-1)">−</button>
+      <button class="btn px-2 py-1" aria-label="ซูมเข้า" title="ซูมเข้า (+)" @click="zoom(1)">+</button>
+      <label class="flex items-center gap-1">กว้างแท่ง
+        <input aria-label="ความกว้างต่อแท่ง หน่วยพิกเซล" class="input w-16 py-1" type="number" min="2" max="48" :value="spacing.toFixed(1)" @change="setSpacing($event.target.value)" /> px
+      </label>
+      <button class="btn px-2 py-1" :aria-pressed="autoScroll" @click="toggleAutoScroll">Auto scroll {{ autoScroll ? '✓' : '○' }}</button>
+      <button class="btn px-2 py-1" :aria-pressed="chartShift" @click="toggleShift">เว้นท้าย {{ chartShift ? '✓' : '○' }}</button>
+      <button class="btn px-2 py-1" title="กลับแท่งล่าสุด (End)" @click="goLatest">ล่าสุด</button>
+      <button class="btn px-2 py-1" @click="fitAll">ดูทั้งหมด</button>
+      <button class="btn px-2 py-1" title="M1 · แท่งกว้าง 16px · สูง 580px · สเกลอัตโนมัติ" @click="mt5View">มุมมอง MT5 (M1)</button>
+      <button class="btn px-2 py-1" @click="toggleFullscreen">{{ fullscreen ? 'ออกเต็มจอ' : 'เต็มจอ' }}</button>
+    </div>
+    <div class="flex flex-wrap items-center gap-1.5 px-3 py-1 text-[10px] text-muted">
+      <button class="btn px-2 py-1" @click="resetPriceScale">Auto ราคา</button>
+      <label>สูง <input v-model.number="chartHeight" aria-label="ความสูงกราฟ หน่วยพิกเซล" type="number" min="300" max="1000" step="20" class="input w-20 py-1" @change="saveViewPrefs" /> px</label>
+      <span>{{ visibleSummary }}</span>
+      <span v-if="visiblePrices">· ราคา {{ visiblePrices }}</span>
+      <span v-if="fixedPriceRange">· ตรึงสเกล</span>
+    </div>
+    <details class="px-3 py-1 text-[11px] text-muted">
+      <summary class="cursor-pointer">กำหนดช่วงเวลา / ช่วงราคาให้ตรง MT5</summary>
+      <div class="flex flex-wrap items-end gap-2 py-2">
+        <label>เริ่ม (เวลาแท่ง)<input v-model="timeFrom" type="datetime-local" class="input block py-1" /></label>
+        <label>ถึง (เวลาแท่ง)<input v-model="timeTo" type="datetime-local" class="input block py-1" /></label>
+        <button class="btn px-2 py-1" @click="applyTimeRange">แสดงช่วงเวลา</button>
+        <label>ราคาต่ำสุด<input v-model="priceMin" type="number" step="any" class="input block w-24 py-1" /></label>
+        <label>ราคาสูงสุด<input v-model="priceMax" type="number" step="any" class="input block w-24 py-1" /></label>
+        <button class="btn px-2 py-1" @click="applyFixedPrice">ตรึงช่วงราคา</button>
+        <span>ใช้เวลาแท่งจาก source เดียวกับแกนล่าง · ช่วงที่เลือกต้องอยู่ในข้อมูลที่โหลด</span>
+      </div>
+      <p v-if="viewError" role="alert" class="pb-2 text-amber-200">{{ viewError }}</p>
+    </details>
+    <div class="relative min-h-0" :class="fullscreen ? 'flex-1' : ''" :style="fullscreen ? {} : { height: `${Math.min(1000, Math.max(300, Number(chartHeight) || 580))}px` }">
+    <div ref="container" class="h-full w-full" @pointerdown="startChartDrag" @pointermove="moveChartDrag" @pointerup="endChartDrag" @pointercancel="endChartDrag" @pointerleave="endChartDrag"></div>
+    <div class="pointer-events-none absolute left-3 top-2 flex flex-wrap items-center gap-1.5">
       <span class="chip chip-gold">{{ chartSymbol || state.symbol }} · {{ state.timeframe }}</span>
       <span class="chip" :class="feedWarn ? 'chip-warn' : ''" :title="feedTitle">{{ feedLabel }}</span>
       <span v-if="chartFeed !== 'mt5-live' && state.live?.analysis?.regime" class="chip">{{ state.live.analysis.regime.regime.replace('_',' ') }}</span>
@@ -51,6 +86,7 @@
     <div class="pointer-events-none absolute bottom-1.5 right-2 text-[9.5px] text-muted">
       {{ bars }} bars · last {{ lastBarText }}
     </div>
+    </div>
   </div>
 </template>
 
@@ -58,9 +94,13 @@
 import { computed, onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue'
 import { createChart } from 'lightweight-charts'
 import { api } from '../lib/api'
-import { positions, state } from '../lib/store'
+import { positions, setTimeframe, state } from '../lib/store'
+import { latestLogicalRange, nextBarSpacing, validPriceRange } from '../lib/chartViewport'
+import { timeframeSeconds } from '../lib/chartTimeframes'
+import TimeframePicker from './TimeframePicker.vue'
 
 const container = ref(null)
+const chartHost = ref(null)
 const loading = ref(false)
 const error = ref('')
 const bars = ref(0)
@@ -107,6 +147,167 @@ let lastCandle = null
 let resizeObs = null
 let quoteTimer = null
 let historyTimer = null
+
+const VIEW_PREFS_KEY = 'no7.chart.viewport.v1'
+let savedPrefs = {}
+try { savedPrefs = JSON.parse(localStorage.getItem(VIEW_PREFS_KEY) || '{}') || {} } catch { /* defaults */ }
+const spacing = ref(Math.min(48, Math.max(2, Number(savedPrefs.spacing) || 16)))
+const chartHeight = ref(Math.min(1000, Math.max(300, Number(savedPrefs.height) || 580)))
+const autoScroll = ref(savedPrefs.autoScroll !== false)
+const chartShift = ref(savedPrefs.chartShift !== false)
+const fullscreen = ref(false)
+const fixedPriceRange = ref(null)
+const priceMin = ref('')
+const priceMax = ref('')
+const timeFrom = ref('')
+const timeTo = ref('')
+const viewError = ref('')
+const visibleSummary = ref('')
+const visiblePrices = ref('')
+let loadedViewKey = ''
+let viewportSaveTimer = null
+let viewportFrame = null
+let dragOrigin = null
+
+function saveViewPrefs() {
+  try {
+    localStorage.setItem(VIEW_PREFS_KEY, JSON.stringify({ spacing: spacing.value,
+      height: chartHeight.value, autoScroll: autoScroll.value, chartShift: chartShift.value }))
+    const range = chart?.timeScale().getVisibleRange()
+    if (range && loadedViewKey) localStorage.setItem(`${VIEW_PREFS_KEY}:${loadedViewKey}`, JSON.stringify(range))
+  } catch { /* preferences are optional */ }
+}
+
+function syncViewport() {
+  if (viewportFrame) cancelAnimationFrame(viewportFrame)
+  viewportFrame = requestAnimationFrame(() => {
+    if (!chart || !candleSeries) return
+    spacing.value = chart.timeScale().options().barSpacing
+    const logical = chart.timeScale().getVisibleLogicalRange()
+    if (logical) {
+      const count = Math.max(0, Math.min(bars.value - 1, Math.floor(logical.to)) - Math.max(0, Math.ceil(logical.from)) + 1)
+      visibleSummary.value = `เห็น ${count} แท่ง · โหลด ${bars.value} แท่ง`
+    }
+    const upper = candleSeries.coordinateToPrice(0)
+    const lower = candleSeries.coordinateToPrice(Math.max(0, container.value.clientHeight - 30))
+    if (upper !== null && lower !== null) visiblePrices.value = `${Math.min(upper, lower).toFixed(priceDigits)} – ${Math.max(upper, lower).toFixed(priceDigits)}`
+    clearTimeout(viewportSaveTimer)
+    viewportSaveTimer = setTimeout(saveViewPrefs, 250)
+  })
+}
+
+let priceDigits = 2
+function latestRange() {
+  const width = chart.timeScale().width() / spacing.value
+  return latestLogicalRange(bars.value, width, chartShift.value ? width * 0.2 : 2)
+}
+function goLatest() {
+  if (!chart || !bars.value) return
+  autoScroll.value = true
+  chart.timeScale().setVisibleLogicalRange(latestRange())
+  saveViewPrefs()
+}
+function setSpacing(value) {
+  const next = Number(value)
+  if (!chart || !Number.isFinite(next)) return
+  spacing.value = Math.min(48, Math.max(2, next))
+  chart.timeScale().applyOptions({ barSpacing: spacing.value })
+  if (autoScroll.value) goLatest()
+  syncViewport()
+}
+function zoom(direction) { setSpacing(nextBarSpacing(spacing.value, direction)) }
+function toggleAutoScroll() {
+  autoScroll.value = !autoScroll.value
+  if (autoScroll.value) goLatest()
+  saveViewPrefs()
+}
+function toggleShift() {
+  chartShift.value = !chartShift.value
+  if (autoScroll.value) goLatest()
+  saveViewPrefs()
+}
+function fitAll() {
+  if (!chart || !bars.value) return
+  autoScroll.value = false
+  chart.timeScale().fitContent()
+  syncViewport()
+}
+function resetPriceScale() {
+  fixedPriceRange.value = null
+  viewError.value = ''
+  chart?.priceScale('right').applyOptions({ autoScale: true, scaleMargins: { top: 0.05, bottom: 0.1 } })
+  chart?.applyOptions({ handleScale: { axisPressedMouseMove: { price: true, time: true } } })
+  syncViewport()
+}
+function applyFixedPrice() {
+  const range = validPriceRange(priceMin.value, priceMax.value)
+  if (!range) { viewError.value = 'ราคาสูงสุดต้องมากกว่าราคาต่ำสุด'; return }
+  fixedPriceRange.value = range
+  viewError.value = ''
+  chart?.priceScale('right').applyOptions({ autoScale: true, scaleMargins: { top: 0, bottom: 0 } })
+  chart?.applyOptions({ handleScale: { axisPressedMouseMove: { price: false, time: true } } })
+  syncViewport()
+}
+function applyTimeRange() {
+  const from = Date.parse(`${timeFrom.value}Z`) / 1000
+  const to = Date.parse(`${timeTo.value}Z`) / 1000
+  const data = candleSeries?.data() || []
+  if (!Number.isFinite(from) || !Number.isFinite(to) || to <= from) {
+    viewError.value = 'เลือกเวลาเริ่มและสิ้นสุด โดยเวลาสิ้นสุดต้องอยู่หลังเวลาเริ่ม'; return
+  }
+  if (!data.length || from < data[0].time || to > data.at(-1).time) {
+    viewError.value = 'ช่วงเวลานอกข้อมูลที่โหลด · เพิ่มจำนวนข้อมูลที่โหลดหรือเลือกช่วงที่อยู่บนกราฟ'; return
+  }
+  autoScroll.value = false
+  chart.timeScale().setVisibleRange({ from, to })
+  viewError.value = ''
+  saveViewPrefs()
+}
+function mt5View() {
+  setTimeframe('M1')
+  layerVisibility.ema = false
+  chartShift.value = true
+  resetPriceScale()
+  setSpacing(16)
+  goLatest()
+}
+async function toggleFullscreen() {
+  try {
+    if (document.fullscreenElement === chartHost.value) await document.exitFullscreen()
+    else await chartHost.value.requestFullscreen()
+  } catch { viewError.value = 'เบราว์เซอร์ไม่อนุญาตเต็มจอ'; }
+}
+function fullscreenChanged() {
+  fullscreen.value = document.fullscreenElement === chartHost.value
+  requestAnimationFrame(() => { if (autoScroll.value) goLatest(); syncViewport() })
+}
+function startChartDrag(event) { dragOrigin = { x: event.clientX, y: event.clientY } }
+function moveChartDrag(event) {
+  if (!dragOrigin || !event.buttons) return
+  if (Math.abs(event.clientX - dragOrigin.x) > 4) {
+    autoScroll.value = false
+    saveViewPrefs()
+  }
+  syncViewport()
+}
+function endChartDrag() { dragOrigin = null; syncViewport() }
+function chartKeydown(event) {
+  if (event.target.closest('input, select, textarea, summary, button, a')) return
+  if (event.key === '+' || event.key === '=') zoom(1)
+  else if (event.key === '-') zoom(-1)
+  else if (event.key === 'End') goLatest()
+  else if (event.key === 'Home' && bars.value) {
+    autoScroll.value = false
+    const width = chart.timeScale().width() / spacing.value
+    chart.timeScale().setVisibleLogicalRange({ from: 0, to: width })
+  } else if (['ArrowLeft', 'ArrowRight'].includes(event.key)) {
+    autoScroll.value = false
+    const scale = chart.timeScale()
+    scale.scrollToPosition(scale.scrollPosition() + (event.key === 'ArrowLeft' ? 10 : -10), false)
+  } else return
+  event.preventDefault()
+  syncViewport()
+}
 
 // UI preferences only: never write these switches into state.live or send an
 // API request. Engine, risk controls and persisted trade decisions are unchanged.
@@ -170,14 +371,16 @@ function buildChart() {
       fontSize: 11,
     },
     grid: { vertLines: { color: 'rgba(38,51,63,0.45)' }, horzLines: { color: 'rgba(38,51,63,0.45)' } },
-    rightPriceScale: { borderColor: '#1a2331', scaleMargins: { top: 0.12, bottom: 0.12 } },
-    timeScale: { borderColor: '#1a2331', timeVisible: true, secondsVisible: false, rightOffset: 6 },
+    rightPriceScale: { borderColor: '#1a2331', minimumWidth: 76, mode: 0, scaleMargins: { top: 0.05, bottom: 0.1 } },
+    timeScale: { borderColor: '#1a2331', timeVisible: true, secondsVisible: false,
+      barSpacing: spacing.value, minBarSpacing: 2, rightOffset: 6, rightBarStaysOnScroll: true },
     crosshair: {
       mode: 0,
       vertLine: { color: 'rgba(245,181,65,0.5)', labelBackgroundColor: '#b97c12' },
       horzLine: { color: 'rgba(245,181,65,0.5)', labelBackgroundColor: '#b97c12' },
     },
-    handleScale: { axisPressedMouseMove: true },
+    handleScale: { mouseWheel: true, pinch: true, axisPressedMouseMove: { price: true, time: true }, axisDoubleClickReset: { price: true, time: true } },
+    handleScroll: { mouseWheel: false, pressedMouseMove: true, horzTouchDrag: true, vertTouchDrag: false },
   })
   candleSeries = chart.addCandlestickSeries({
     upColor: '#34d399',
@@ -187,18 +390,24 @@ function buildChart() {
     borderVisible: false,
     priceLineVisible: true,
     priceLineColor: 'rgba(245,181,65,0.6)',
+    priceFormat: { type: 'price', precision: 2, minMove: 0.01 },
+    autoscaleInfoProvider: original => fixedPriceRange.value ? { priceRange: fixedPriceRange.value } : original(),
   })
   const line = (color, width = 1) =>
-    chart.addLineSeries({ color, lineWidth: width, priceLineVisible: false, lastValueVisible: false, crosshairMarkerVisible: false })
+    chart.addLineSeries({ color, lineWidth: width, priceLineVisible: false, lastValueVisible: false,
+      crosshairMarkerVisible: false, autoscaleInfoProvider: () => null })
   ema20 = line('rgba(245,181,65,0.85)', 1)
   ema50 = line('rgba(96,165,250,0.8)', 1)
   ema200 = line('rgba(167,139,250,0.8)', 1)
   syncSeriesVisibility()
+  chart.timeScale().subscribeVisibleLogicalRangeChange(syncViewport)
   resizeObs = new ResizeObserver(() => {
     if (!chart || !container.value) return
     const { clientWidth, clientHeight } = container.value
     if (clientWidth > 0 && clientHeight > 0) {
-      chart.applyOptions({ width: clientWidth, height: clientHeight })
+      chart.resize(clientWidth, clientHeight)
+      if (autoScroll.value && bars.value) goLatest()
+      syncViewport()
     }
   })
   resizeObs.observe(container.value)
@@ -221,6 +430,8 @@ async function retry() {
 let loadVersion = 0
 async function load(preserveView = false) {
   if (!candleSeries) return
+  const previousRange = chart.timeScale().getVisibleRange()
+  const previousKey = loadedViewKey
   const version = ++loadVersion
   loading.value = true
   error.value = ''
@@ -236,6 +447,10 @@ async function load(preserveView = false) {
     chartFeed.value = data.feed || ''
     showFreshness(data)
     chartSymbol.value = data.source_symbol || data.symbol || state.symbol
+    const nextKey = `${data.feed}:${chartSymbol.value}:${state.timeframe}:${selectedAccount.value}`
+    priceDigits = Number.isInteger(data.spec?.digits) ? data.spec.digits : 2
+    candleSeries.applyOptions({ priceFormat: { type: 'price', precision: priceDigits,
+      minMove: Number(data.spec?.point) || 10 ** -priceDigits } })
     const raw = Array.isArray(data.candles) ? data.candles : []
     // lightweight-charts demands strictly ascending, unique timestamps.
     const seen = new Set()
@@ -254,16 +469,26 @@ async function load(preserveView = false) {
     state.candles = clean
     candleSeries.setData(candles)
     const closes = candles.map((c) => c.close)
-    const line = (series, period) => series.setData(
-      candles.map((c, i) => ({ time: c.time, value: ema(closes, period)[i] }))
-        .filter((p) => Number.isFinite(p.value)),
-    )
+    const line = (series, period) => {
+      const values = ema(closes, period)
+      series.setData(candles.map((c, i) => ({ time: c.time, value: values[i] }))
+        .filter((p) => Number.isFinite(p.value)))
+    }
     line(ema20, 20)
     line(ema50, 50)
     line(ema200, 200)
     lastCandle = candles[candles.length - 1] || null
     if (chartFeed.value === 'mt5-live' && data.ticker) updateLast(data.ticker)
-    if (preserveView !== true) chart.timeScale().fitContent()
+    loadedViewKey = nextKey
+    let savedRange = previousKey === nextKey ? previousRange : null
+    if (!savedRange) {
+      try { savedRange = JSON.parse(localStorage.getItem(`${VIEW_PREFS_KEY}:${nextKey}`) || 'null') } catch { /* default */ }
+    }
+    if (autoScroll.value) goLatest()
+    else if (savedRange && Number.isFinite(savedRange.from) && Number.isFinite(savedRange.to) && savedRange.to > savedRange.from) {
+      chart.timeScale().setVisibleRange(savedRange)
+    } else chart.timeScale().setVisibleLogicalRange(latestRange())
+    syncViewport()
     drawOverlays()
   } catch (err) {
     if (version !== loadVersion) return
@@ -351,12 +576,14 @@ function drawOverlays() {
 
 function updateLast(tick = state.live?.ticker) {
   if (!tick || !lastCandle) return
-  const seconds = { M1: 60, M5: 300, M15: 900, H1: 3600, H4: 14400 }[state.timeframe] || 300
+  const seconds = timeframeSeconds(state.timeframe)
+  if (!seconds) return
   const bucket = Math.floor(tick.t / seconds) * seconds
   const price = Number(chartFeed.value === 'mt5-live' ? tick.bid : tick.last)
   if (!Number.isFinite(price) || bucket < lastCandle.time) return
   if (bucket > lastCandle.time) {
     lastCandle = { time: bucket, open: price, high: price, low: price, close: price }
+    bars.value += 1
   } else {
     lastCandle = {
       ...lastCandle,
@@ -367,6 +594,8 @@ function updateLast(tick = state.live?.ticker) {
   }
   candleSeries.update(lastCandle)
   lastBar.value = lastCandle.time
+  if (autoScroll.value) goLatest()
+  syncViewport()
 }
 
 watch(() => [state.symbol, state.timeframe, state.range], load)
@@ -401,6 +630,7 @@ async function refreshChartQuote() {
 }
 
 onMounted(async () => {
+  document.addEventListener('fullscreenchange', fullscreenChanged)
   try {
     buildChart()
   } catch (err) {
@@ -417,6 +647,10 @@ onMounted(async () => {
   }, 15000)
 })
 onBeforeUnmount(() => {
+  saveViewPrefs()
+  document.removeEventListener('fullscreenchange', fullscreenChanged)
+  clearTimeout(viewportSaveTimer)
+  if (viewportFrame) cancelAnimationFrame(viewportFrame)
   resizeObs?.disconnect()
   if (quoteTimer) clearInterval(quoteTimer)
   if (historyTimer) clearInterval(historyTimer)

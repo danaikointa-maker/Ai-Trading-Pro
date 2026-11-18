@@ -40,12 +40,14 @@
               <span class="chip">plan levels</span>
             </div>
             <div class="flex items-center gap-1.5">
-              <select v-model.number="state.range" class="input w-[92px] py-1 text-[11px]">
+              <label class="text-[10px] text-muted">ข้อมูลที่โหลด
+              <select v-model.number="state.range" aria-label="จำนวนแท่งข้อมูลที่โหลด ไม่ใช่ระดับซูม" class="input w-[92px] py-1 text-[11px]">
                 <option :value="120">120 bars</option>
                 <option :value="240">240 bars</option>
                 <option :value="480">480 bars</option>
                 <option :value="800">800 bars</option>
               </select>
+              </label>
               <span class="chip">session H {{ fmt(analysis?.session_high, digits) }} / L {{ fmt(analysis?.session_low, digits) }}</span>
             </div>
           </div>

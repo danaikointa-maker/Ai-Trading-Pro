@@ -343,6 +343,30 @@ def test_quote_polls_preserve_the_last_periodic_rate_snapshot(bridge):
     assert current.equals(original)
 
 
+def test_m3_uses_native_bars_when_published(bridge):
+    frame = snapshot()
+    native = [{"t": 900, "o": 2010.0, "h": 2018.0, "l": 2008.0, "c": 2015.0, "v": 77}]
+    frame["rates"]["XAUUSD"]["M3"] = native
+    bridge["relay"].poll(SID, snapshot=frame)
+    bars = bridge["adapter"].candles("XAUUSD", "M3", 20)
+    assert bars.to_dict(orient="records") == native
+
+
+def test_m3_falls_back_to_observed_m1_without_using_m5(bridge):
+    frame = snapshot(rates=False)
+    frame["rates"] = {"XAUUSD": {"M1": [
+        {"t": 900 + i * 60, "o": 10.0 + i, "h": 12.0 + i,
+         "l": 9.0 + i, "c": 11.0 + i, "v": 2} for i in range(6)]}}
+    bridge["relay"].poll(SID, snapshot=frame)
+    bars = bridge["adapter"].candles("XAUUSD", "M3", 20)
+    assert bars["t"].tolist() == [900, 1080]
+    assert bars["o"].tolist() == [10.0, 13.0]
+    assert bars["h"].tolist() == [14.0, 17.0]
+    assert bars["l"].tolist() == [9.0, 12.0]
+    assert bars["c"].tolist() == [13.0, 16.0]
+    assert bars["v"].tolist() == [6.0, 6.0]
+
+
 def test_chart_source_prefers_connected_mt5_without_switching_active_broker(bridge, runtime):
     active_before = runtime.adapter.id
     adapter, feed = runtime.market.chart_source("XAUUSD")
