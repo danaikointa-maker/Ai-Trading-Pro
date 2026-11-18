@@ -252,11 +252,14 @@ def run(args: argparse.Namespace) -> int:
             if response.get("_http_status") == 409:
                 client.session_id = ""
                 client.register(identity, symbols)
+                last_rates_at = 0.0
                 time.sleep(poll_seconds)
                 continue
             if response.get("session_id") != client.session_id:
                 client.session_id = ""
                 client.register(identity, symbols)
+                last_rates_at = 0.0
+                continue
             commands = response.get("commands") or []
             if commands:
                 # A market publisher never interprets or executes bridge commands.

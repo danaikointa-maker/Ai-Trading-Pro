@@ -71,7 +71,7 @@ const quoteWarning = ref('')
 function showFreshness(data) {
   const freshness = data?.freshness
   quoteWarning.value = freshness?.clock_issue === 'future_timestamp'
-    ? 'เวลาราคาจาก MT5 อยู่ในอนาคตเมื่อเทียบกับเซิร์ฟเวอร์ · ยังยืนยันราคาปัจจุบันไม่ได้'
+    ? 'เวลา MT5 ต่างจากเวลา UTC ของเซิร์ฟเวอร์ · แสดงราคาและเวลาแท่งตาม MT5 โดยไม่ปรับเวลาเอง'
     : freshness?.stale ? 'ราคาล่าสุดเกิน 30 วินาที · กราฟนี้เป็นข้อมูลล่าสุดที่ได้รับ ไม่ใช่ราคาปัจจุบัน'
     : data?.feed === 'simulated' ? 'กราฟจำลอง · ขณะนี้ไม่มีข้อมูลตลาดจริงเชื่อมต่อ'
     : data?.feed === 'replay' ? 'กราฟย้อนหลังจากไฟล์ · ไม่ใช่ราคาตลาดปัจจุบัน' : ''
@@ -106,6 +106,7 @@ let priceLines = []
 let lastCandle = null
 let resizeObs = null
 let quoteTimer = null
+let historyTimer = null
 
 // UI preferences only: never write these switches into state.live or send an
 // API request. Engine, risk controls and persisted trade decisions are unchanged.
@@ -206,7 +207,9 @@ function buildChart() {
 const lastBarText = computed(() => {
   if (!lastBar.value) return '—'
   const d = new Date(lastBar.value * 1000)
-  return d.toLocaleString('th-TH', { timeZoneName: 'short' })
+  return chartFeed.value.startsWith('mt5-')
+    ? `${d.toISOString().slice(0, 16).replace('T', ' ')} · เวลาแท่งจาก MT5`
+    : d.toLocaleString('th-TH', { timeZoneName: 'short' })
 })
 
 async function retry() {
@@ -215,16 +218,21 @@ async function retry() {
   await load()
 }
 
-async function load() {
+let loadVersion = 0
+async function load(preserveView = false) {
   if (!candleSeries) return
+  const version = ++loadVersion
   loading.value = true
   error.value = ''
-  chartFeed.value = ''
-  chartSymbol.value = ''
+  if (preserveView !== true) {
+    chartFeed.value = ''
+    chartSymbol.value = ''
+  }
   try {
     const data = await api.get(
       `/api/market/candles?symbol=${encodeURIComponent(state.symbol)}&timeframe=${state.timeframe}&limit=${state.range}${accountQuery()}`,
     )
+    if (version !== loadVersion) return
     chartFeed.value = data.feed || ''
     showFreshness(data)
     chartSymbol.value = data.source_symbol || data.symbol || state.symbol
@@ -254,14 +262,16 @@ async function load() {
     line(ema50, 50)
     line(ema200, 200)
     lastCandle = candles[candles.length - 1] || null
-    chart.timeScale().fitContent()
+    if (chartFeed.value === 'mt5-live' && data.ticker) updateLast(data.ticker)
+    if (preserveView !== true) chart.timeScale().fitContent()
     drawOverlays()
   } catch (err) {
+    if (version !== loadVersion) return
     if (err?.status === 503) chartFeed.value = 'mt5-disconnected'
     error.value = String((err && err.message) || err)
     console.error('[PriceChart] load failed', err)
   } finally {
-    loading.value = false
+    if (version === loadVersion) loading.value = false
   }
 }
 
@@ -361,19 +371,23 @@ function updateLast(tick = state.live?.ticker) {
 
 watch(() => [state.symbol, state.timeframe, state.range], load)
 watch(() => state.live?.version, () => {
-  if (!chartFeed.value.startsWith('mt5-')) updateLast()
+  if (['simulated', 'simulate', 'replay'].includes(chartFeed.value)) updateLast()
   drawOverlays()
 })
 watch(() => state.live?.ticker?.last, (tick) => {
-  if (!chartFeed.value.startsWith('mt5-')) updateLast(state.live?.ticker)
+  if (['simulated', 'simulate', 'replay'].includes(chartFeed.value)) updateLast(state.live?.ticker)
 })
 watch(positions, drawOverlays)
 
 async function refreshChartQuote() {
+  const version = loadVersion
   const data = await api.get(`/api/market/ticker?symbol=${encodeURIComponent(state.symbol)}${accountQuery()}`, { silent: true }).catch(() => null)
+  if (version !== loadVersion || loading.value) return
   if (data?.feed) showFreshness(data)
-  if (data?.feed === 'mt5-live' && data.stale) return
-  if (data?.feed === 'mt5-live' && data.tick && data.stale === false) {
+  // Preserve MT5's own time for display. A freshly received future-dated quote
+  // may be drawn, but the API keeps stale=true so it is never certified fresh.
+  const brokerTimeOnly = data?.freshness?.clock_issue === 'future_timestamp' && data.transport_stale === false
+  if (data?.feed === 'mt5-live' && data.tick && (data.stale === false || brokerTimeOnly)) {
     const reconnected = chartFeed.value !== 'mt5-live'
     chartFeed.value = 'mt5-live'
     if (reconnected) await load()
@@ -398,10 +412,14 @@ onMounted(async () => {
   await refreshMarketContext()
   contextTimer = setInterval(refreshMarketContext, 10000)
   quoteTimer = setInterval(refreshChartQuote, 2000)
+  historyTimer = setInterval(() => {
+    if (chartFeed.value === 'mt5-live' && !loading.value) load(true)
+  }, 15000)
 })
 onBeforeUnmount(() => {
   resizeObs?.disconnect()
   if (quoteTimer) clearInterval(quoteTimer)
+  if (historyTimer) clearInterval(historyTimer)
   if (contextTimer) clearInterval(contextTimer)
   chart?.remove()
   chart = null

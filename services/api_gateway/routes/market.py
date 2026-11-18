@@ -80,6 +80,7 @@ def ticker(symbol: str = "XAUUSD", account_id: str | None = None, runtime: Tradi
     if feed == "mt5-live":
         freshness = quote_freshness(quote["tick"]["t"])
         quote["freshness"] = freshness
+        quote["transport_stale"] = quote["stale"]
         quote["stale"] = quote["stale"] or freshness["stale"]
     return quote
 
