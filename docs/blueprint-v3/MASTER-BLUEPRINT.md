@@ -1,5 +1,8 @@
 # No7 AI Trading Pro — Master Combined Document
 
+> **Historical design reference, not an active parallel backlog.** For current proposed feature scope and task order, see [Unified Master Plan V4](../UNIFIED-MASTER-PLAN-V4.md) and [Task Register V4](../UNIFIED-TASK-REGISTER-V4.md). Preserve safety requirements in [AGENTS.md](AGENTS.md). No runtime behavior is changed by this notice.
+
+
 # Executive Summary — Unified v3
 
 ## System promise
