@@ -5,8 +5,8 @@ Status definitions: EXISTS_CODE = seen in repository but not live certified; NEE
 
 | ID | Phase | Owner code path | Baseline status | Specific next task | Acceptance evidence |
 |---|---|---|---|---|---|
-| U00 | Audit | docs/, tests/, config/ | NEEDS_AUDIT | map each existing feature/config to source and recent tests, verify dev branch and host statuses | signed gap matrix, actual file links |
-| U01 | Market data | services/market_data/, brokers | EXISTS_CODE | validate real Connext tick freshness and metadata; distinguish simulation | broker demo capture, tick provenance tests |
+| U00 | Audit | docs/, tests/, config/ | DONE | Audit receipt: [U00 Project Audit V4](U00-PROJECT-AUDIT-V4.md); baseline commit `559a2ded5dc1530cfcb61072e2432220742f6d0d`; host/branch state recorded | Signed gap matrix, source/test links and current host receipts in U00 report |
+| U01 | Market data | services/market_data/, brokers | BLOCKED / PARTIAL | Freshness now rejects tick timestamps more than configured 2 s clock-skew tolerance in the future; real Connext Demo capture found XAUUSD.s ~7200 s ahead of PC. Resolve authoritative server-time mapping and capture symbol provenance before U02 depends on freshness | recent/stale/future/tolerance tests; normalized server-time capture, DST/offset tests and broker tick provenance still required |
 | U02 | Signal confirmation | services/strategy_engine/ | PLANNED | single 100-point WAIT state + closed M1/M5, timeout, dedup | 99/100-point/expiry/replay tests |
 | U03 | Risk profile | services/risk_engine/ config/risk.yaml | EXISTS_CODE | add VERSIONED candidate separately; audit precedence with legacy | invariants, no activation, config diff |
 | U04 | Initial SL/TP | services/risk_engine/planner.py | EXISTS_CODE | broker-aware ATR/structure and costs with single planning source | lot min and net RR tests |

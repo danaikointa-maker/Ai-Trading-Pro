@@ -29,6 +29,11 @@
   ตัวเลขทุกตัวในภาพรวมจึงเป็นตัวอย่าง ไม่ใช่ราคาตลาดจริง
 - เมื่อตั้ง `NO7_FEED_MODE=mt5` จะอ่านราคาจากเทอร์มินัลจริง แต่ยังไม่ได้ทดสอบกับ Connext
   ในสภาพตลาดจริง (ต้องมี Windows + terminal + บัญชี Demo)
+- **Freshness ของเวลา MT5 ยังไม่ผ่านการรับรอง**: การอ่าน Connext-Demo แบบ read-only บน PC
+  พบ timestamp ของ `XAUUSD.s` ล้ำหน้าเวลาพีซีประมาณ 7,200 วินาที (หลักฐาน 2026-11-20).
+  `MarketDataService` ปฏิเสธ tick ที่ล้ำหน้าเกิน `data_future_tolerance_seconds` (ค่าเริ่ม 2 วินาที)
+  แทนการนับอายุเป็นศูนย์ แต่ยังไม่ได้ map เวลาเซิร์ฟเวอร์/ตรวจ DST หรือยืนยัน timezone
+  จึงยังห้ามถือว่า feed ผ่าน freshness สำหรับการยืนยันสัญญาณหรือเปิดคำสั่ง จนกว่าจะตรวจแหล่งเวลาได้.
 - หน้า Brokers สามารถตรวจและดึง open positions จาก MT5 Demo แบบ on-demand read-only หลัง account
   เป็น `ready_read_only`; response เป็น snapshot ไม่ใช่สตรีม และยังต้องยืนยันบน Windows/Connext จริง.
   Live account และคำสั่งเปิด/แก้/ปิดไม้ไม่อยู่ในเส้นทาง positions นี้
