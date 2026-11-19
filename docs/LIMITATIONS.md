@@ -29,6 +29,9 @@
   ตัวเลขทุกตัวในภาพรวมจึงเป็นตัวอย่าง ไม่ใช่ราคาตลาดจริง
 - เมื่อตั้ง `NO7_FEED_MODE=mt5` จะอ่านราคาจากเทอร์มินัลจริง แต่ยังไม่ได้ทดสอบกับ Connext
   ในสภาพตลาดจริง (ต้องมี Windows + terminal + บัญชี Demo)
+- หน้า Brokers สามารถตรวจและดึง open positions จาก MT5 Demo แบบ on-demand read-only หลัง account
+  เป็น `ready_read_only`; response เป็น snapshot ไม่ใช่สตรีม และยังต้องยืนยันบน Windows/Connext จริง.
+  Live account และคำสั่งเปิด/แก้/ปิดไม้ไม่อยู่ในเส้นทาง positions นี้
 - **ยังไม่มี tick data จริง** สำหรับ backtest → ใช้ M1 ที่ resample เป็น M5/M15/H1/H4
   การจำลองการชน SL/TP ภายในแท่งจึงต้องเดา (เลือก stop ก่อน target แบบ conservative)
 

@@ -189,6 +189,9 @@ H080 reload ใช้ approval ของ payload และ DB ร่วมกั
 
 | Method | Path | Notes |
 |---|---|---|
+| GET | `/api/broker-accounts` | managed accounts visible to the authenticated user; credentials are never returned |
+| POST | `/api/broker-accounts/{id}/validate-demo` | one-shot, read-only identity/quote check for an already logged-in Demo terminal |
+| GET | `/api/broker-accounts/{id}/positions` | fresh on-demand Demo snapshot (`positions`, including broker SL/TP, account id and fetched time); only accounts linked as `ready_read_only`; account-scoped, read-only and `execution_enabled:false`; 404/403/409 on missing/access/link-state errors |
 | GET | `/api/brokers` | รายการ + active + health + account |
 | POST | `/api/brokers/{id}/activate` | สลับโบรกเกอร์ |
 | GET | `/api/brokers/{id}/symbols` | spec จริงต่อบัญชี (`source: broker|declared`) |

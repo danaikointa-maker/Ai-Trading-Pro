@@ -13,7 +13,7 @@ from services.api_gateway.accounts import (AccountError, add_team_member, assign
                                            list_teams, unassign_broker_account)
 from services.api_gateway.credential_vault import CredentialVault
 from services.api_gateway import demo_validation
-from services.api_gateway.demo_validation import validate_demo_account
+from services.api_gateway.demo_validation import read_demo_positions, validate_demo_account
 from services.api_gateway import demo_worker
 from services.api_gateway.tenants import create_tenant
 from services.api_gateway.users import create_user, get_user
@@ -248,6 +248,8 @@ def test_demo_worker_marks_only_matching_read_only_demo_ready(tmp_path, monkeypa
 
     class FakeTerminal:
         ACCOUNT_TRADE_MODE_DEMO = 0
+        POSITION_TYPE_BUY = 0
+        POSITION_TYPE_SELL = 1
 
         @staticmethod
         def initialize(path, timeout):
@@ -267,6 +269,17 @@ def test_demo_worker_marks_only_matching_read_only_demo_ready(tmp_path, monkeypa
             return SimpleNamespace(bid=2000.0, ask=2000.1, time=1_700_000_000)
 
         @staticmethod
+        def positions_get():
+            return [
+                SimpleNamespace(ticket=701, symbol="XAUUSD.s", type=0, volume=0.02,
+                                price_open=1990.0, sl=1980.0, tp=2010.0,
+                                price_current=2000.0, profit=20.0, time=1_700_000_001),
+                SimpleNamespace(ticket=702, symbol="XAUUSD.s", type=1, volume=0.01,
+                                price_open=2005.0, sl=2015.0, tp=1985.0,
+                                price_current=2000.0, profit=5.0, time=1_700_000_002),
+            ]
+
+        @staticmethod
         def shutdown():
             return None
 
@@ -284,5 +297,57 @@ def test_demo_worker_marks_only_matching_read_only_demo_ready(tmp_path, monkeypa
         assert result["execution_enabled"] is False
         assert status["connection_status"] == "ready_read_only"
         assert status["execution_enabled"] == 0
+        snapshot = demo_worker.read_positions(db_path, "local", tenant["id"], account["id"])
+        assert snapshot["read_only"] is True and snapshot["execution_enabled"] is False
+        assert snapshot["account_id"] == account["id"]
+        assert [p["ticket"] for p in snapshot["positions"]] == ["701", "702"]
+        assert snapshot["positions"][0]["direction"] == "up"
+        assert snapshot["positions"][0]["sl"] == 1980.0
+        assert snapshot["positions"][0]["tp"] == 2010.0
+        assert snapshot["positions"][1]["direction"] == "down"
+        assert snapshot["positions"][1]["sl"] == 2015.0
+        assert snapshot["positions"][1]["tp"] == 1985.0
     finally:
         reopened.close()
+
+
+def test_read_demo_positions_uses_verified_link_and_never_passes_credentials(tmp_path, monkeypatch):
+    db = Database(tmp_path / "read-positions.sqlite3")
+    vault_key = CredentialVault.generate_key()
+    monkeypatch.setenv("NO7_CREDENTIAL_VAULT_KEY", vault_key)
+    vault = CredentialVault(vault_key)
+    try:
+        tenant = create_tenant(db, "Read positions", "read-admin@example.com",
+                               "tenant-password1", "root@example.com")["tenant"]
+        owner = create_user(db, "read-owner@example.com", "owner-password1", "trader", tenant["id"])
+        outsider = create_user(db, "read-outsider@example.com", "outsider-password1", "viewer", tenant["id"])
+        account = create_broker_account(
+            db, vault, tenant_id=tenant["id"], owner_email=owner["email"], provider="mt5",
+            label="Read-only Demo", server="Connext-Demo", account_type="demo", login="99887766",
+            password="do-not-pass-to-command", created_by=owner["email"],
+            terminal_path=str(tmp_path / "terminal64.exe"),
+        )
+        db.execute("UPDATE broker_accounts SET connection_status='ready_read_only' WHERE id=?", (account["id"],))
+        captured = {}
+
+        def fake_run(command, **kwargs):
+            captured["command"] = command
+            captured["env"] = kwargs["env"]
+            return subprocess.CompletedProcess(command, 0, json.dumps({
+                "account_id": account["id"], "read_only": True, "execution_enabled": False,
+                "positions": [{"ticket": "701", "sl": 1980.0, "tp": 2010.0}],
+            }), "")
+
+        monkeypatch.setattr(demo_validation.subprocess, "run", fake_run)
+        result = read_demo_positions(db, tenant["id"], account["id"], owner)
+        assert result["positions"][0]["broker_id"] == account["id"]
+        assert "--positions" in captured["command"]
+        assert "99887766" not in " ".join(captured["command"])
+        assert "do-not-pass-to-command" not in " ".join(captured["command"])
+        assert captured["env"]["NO7_CREDENTIAL_VAULT_KEY"] == vault_key
+        with pytest.raises(AccountError, match="not allowed"):
+            read_demo_positions(db, tenant["id"], account["id"], outsider)
+        with pytest.raises(AccountError, match="does not exist"):
+            read_demo_positions(db, tenant["id"], "missing-account", owner)
+    finally:
+        db.close()
