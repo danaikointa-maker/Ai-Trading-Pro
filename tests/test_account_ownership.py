@@ -192,14 +192,17 @@ def test_competing_first_account_bindings_have_one_owner_and_release_transaction
 
 @pytest.mark.parametrize("operation", ["modify", "close", "send", "fill", "recovery"])
 def test_account_switch_during_broker_io_cannot_certify_success(owned, operation):
-    from packages.shared_schemas.models import Direction, OrderResult, OrderState
+    import time
+    from packages.shared_schemas.models import (Direction, OrderResult, OrderState,
+                                                Position, SymbolSpec, Tick)
 
     db, broker, gateway, request = owned
     request = request.model_copy(update={"signal_id": "signal-1"})
     gateway._assert_account(broker)
-    position = SimpleNamespace(ticket="ticket-1", symbol=request.symbol, direction=Direction.up,
-                               volume=request.volume, entry=2000, signal_id=request.signal_id,
-                               broker_id=broker.id)
+    position = Position(ticket="ticket-1", symbol=request.symbol, direction=Direction.up,
+                        volume=request.volume, entry=2000, sl=1890, tp=2100,
+                        current_price=2000, open_time=1, signal_id=request.signal_id,
+                        broker_id=broker.id)
 
     def switched(value):
         def read(*args, **kwargs):
@@ -208,6 +211,10 @@ def test_account_switch_during_broker_io_cannot_certify_success(owned, operation
         return read
 
     if operation == "modify":
+        broker.positions.return_value = [position]
+        broker.symbol_spec.return_value = SymbolSpec(symbol=request.symbol)
+        broker.ticker.return_value = Tick(t=time.time(), bid=2000, ask=2000.1,
+                                          spread_points=10, last=2000)
         broker.modify_position.side_effect = switched(True)
         assert gateway.modify(broker, "ticket-1", sl=1900) is False
         broker.modify_position.assert_called_once()

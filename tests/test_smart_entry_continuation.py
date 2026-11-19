@@ -11,8 +11,9 @@ import pytest
 
 from packages.persistence.db import Database
 from packages.persistence.position_events import PositionEventLog
-from packages.shared_schemas.models import (AnalysisSnapshot, Health, RiskLimits, SignalReadiness,
-                                            Signal, TradePlan, TradeRecord, Zone)
+from packages.shared_schemas.models import (AnalysisSnapshot, Health, Position, RiskLimits,
+                                            SignalReadiness, Signal, SymbolSpec, Tick,
+                                            TradePlan, TradeRecord, Zone)
 from services.execution_gateway.gateway import ExecutionGateway
 from services.api_gateway.state import TradingRuntime
 from services.risk_engine.engine import default_risk_state
@@ -86,6 +87,12 @@ def test_management_revision_records_request_before_broker_io(tmp_path):
     adapter.account_info.return_value = SimpleNamespace(
         broker_id="demo", login="123", server="Demo", currency="USD")
     adapter.health.return_value = Health.connected
+    adapter.positions.return_value = [Position(ticket="T-2", symbol="XAUUSD", direction="up",
+        volume=0.1, entry=2000, sl=1990, tp=2020, current_price=2000,
+        open_time=1, broker_id="demo")]
+    adapter.symbol_spec.return_value = SymbolSpec(symbol="XAUUSD")
+    adapter.ticker.return_value = Tick(t=__import__("time").time(), bid=2000, ask=2000.1,
+                                       spread_points=10, last=2000)
     gateway = ExecutionGateway(SimpleNamespace(execution={}), db)
 
     def modify(*_args, **_kwargs):

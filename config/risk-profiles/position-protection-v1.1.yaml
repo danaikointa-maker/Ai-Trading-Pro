@@ -1,0 +1,58 @@
+# Staged profile. This file is intentionally NOT merged into config/risk.yaml.
+# Current management values remain active until a separately reviewed migration.
+id: position-protection-v1.1
+version: "1.1"
+status: staged
+environment: paper
+default_mode: MANUAL
+
+automation:
+  enabled: false
+  allowed_account_types: [demo]
+  live_allowed: false
+  require_explicit_authorization: true
+
+break_even:
+  enabled: true
+  activation_r: 1.0
+  require_price_confirmation: true
+  extra_lock_points: 0.0
+  estimated_swap_cost_per_lot: 0.0
+  slippage_allowance_points: 15
+
+trailing:
+  enabled: true
+  activation_r: 1.5
+  method: ATR
+  atr_timeframe: M5
+  atr_period: 14
+  atr_closed_bar_only: true
+  atr_multiplier: 1.0
+  step_atr: 0.2
+  max_atr_age_seconds: 90
+  require_break_even_confirmed: true
+  max_modifications_per_minute: 6
+
+partial_close:
+  enabled: false
+
+protection:
+  sl_required: true
+  tp_required: true
+  never_widen_stop_loss: true
+  never_increase_risk_after_entry: true
+  reject_invalid_stop_levels: true
+  reject_unknown_position_identity: true
+
+entry_gates:
+  smart_100_point_confirmation_required: true
+  risk_engine_veto_required: true
+  dynamic_initial_sl_tp_required: true
+  # Protection only manages existing positions; these gates remain the sole
+  # source of authorization for any new entry.
+
+rollout:
+  legacy_profile: preserve
+  auto_apply: false
+  live_auto: false
+  rollback_profile: legacy

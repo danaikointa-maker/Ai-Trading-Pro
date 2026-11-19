@@ -51,6 +51,7 @@ const navItems = [
   { to: '/zones', label: 'Zones S/R', icon: icon('<path d="M4 7h16M4 12h16M4 17h16"/>') },
   { to: '/trades', label: 'Trades', icon: icon('<path d="M4 6h16v12H4z"/><path d="M8 10h8M8 14h5"/>') },
   { to: '/risk', label: 'Risk Engine', icon: icon('<path d="M12 3l8 4v6c0 5-4 7-8 8-4-1-8-3-8-8V7z"/><path d="M9 12l2 2 4-4"/>') },
+  { to: '/position-protection', label: 'Position Protection', icon: icon('<path d="M12 3l8 4v6c0 5-4 7-8 8-4-1-8-3-8-8V7z"/><path d="M8 13l2.5 2.5L16 10"/>') },
   { to: '/backtest', label: 'Backtest Lab', icon: icon('<path d="M4 20V8m5 12V4m5 16v-7m5 7V9"/>') },
   { to: '/journal', label: 'AI Journal', icon: icon('<path d="M6 3h9l3 3v15H6z"/><path d="M9 9h6M9 13h6M9 17h4"/>') },
   { to: '/brokers', label: 'Brokers', icon: icon('<path d="M3 10h18M5 10V6l7-3 7 3v4"/><path d="M5 10v9h14v-9"/>') },

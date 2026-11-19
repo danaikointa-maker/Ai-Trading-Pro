@@ -8,6 +8,7 @@ const routes = [
   { path: '/zones', name: 'zones', component: () => import('./views/Zones.vue'), meta: { title: 'Support & Resistance' } },
   { path: '/trades', name: 'trades', component: () => import('./views/Trades.vue'), meta: { title: 'Trades & Performance' } },
   { path: '/risk', name: 'risk', component: () => import('./views/Risk.vue'), meta: { title: 'Risk Engine' } },
+  { path: '/position-protection', name: 'position-protection', component: () => import('./views/PositionProtection.vue'), meta: { title: 'Position Protection' } },
   { path: '/backtest', name: 'backtest', component: () => import('./views/Backtest.vue'), meta: { title: 'Backtest Lab' } },
   { path: '/journal', name: 'journal', component: () => import('./views/Journal.vue'), meta: { title: 'AI Journal' } },
   { path: '/brokers', name: 'brokers', component: () => import('./views/Brokers.vue'), meta: { title: 'Brokers' } },
