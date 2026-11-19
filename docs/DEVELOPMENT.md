@@ -1,5 +1,8 @@
 # Development — จะพัฒนาต่อยังไง
 
+> **V4 unified development queue (proposal):** New development tasks must be selected from [UNIFIED-TASK-REGISTER-V4](UNIFIED-TASK-REGISTER-V4.md) under [UNIFIED-MASTER-PLAN-V4](UNIFIED-MASTER-PLAN-V4.md). Do not independently execute the legacy lists in this document or older prompts. The procedures and historical results below remain useful for AS-IS development and need evidence-based updates with code changes.
+
+
 เอกสารนี้คือทางเข้าสำหรับ "เปิดเครื่องมาแล้วทำงานต่อ" — ติดตั้งยังไง, ลูปพัฒนาเป็นแบบไหน,
 แก้ตรงไหนไปแตะไฟล์อะไร, เกตก่อนส่งงานคืออะไร, และงานถัดไปที่คุ้มทำที่สุดคืออะไร
 (baseline ที่ตรวจแล้วอยู่ที่ [`BASELINE-P1.th.md`](BASELINE-P1.th.md), ข้อจำกัดอยู่ที่
