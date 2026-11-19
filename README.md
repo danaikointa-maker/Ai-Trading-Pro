@@ -1,5 +1,8 @@
 # No7 AI Trading Pro — V1
 
+> **Development planning (V4, proposal branch):** For all NEW feature work, use [Unified Master Plan](docs/UNIFIED-MASTER-PLAN-V4.md), [Task Register](docs/UNIFIED-TASK-REGISTER-V4.md), and [Conflict Register](docs/UNIFIED-CONFLICTS-V4.md). Older prompts/blueprints are reference material, not parallel work queues. This pointer is documentation-only and does not certify deployment. Security gates in [AGENTS contract](docs/blueprint-v3/AGENTS.md) remain mandatory.
+
+
 [![gate](https://github.com/danaikointa-maker/Ai-Trading-Pro/actions/workflows/ci.yml/badge.svg)](https://github.com/danaikointa-maker/Ai-Trading-Pro/actions/workflows/ci.yml)
 
 แพลตฟอร์มเทรดส่วนตัวแบบ **Local-First + Hybrid Quant AI + Multi-Broker**
