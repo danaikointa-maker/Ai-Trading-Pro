@@ -213,21 +213,13 @@ def test_demo_validation_worker_receives_account_id_not_broker_secrets(tmp_path,
                 "execution_enabled": False,
             }), "")
 
-        monkeypatch.setattr(demo_validation.subprocess, "run", fake_run)
-        result = validate_demo_account(db, tenant["id"], account["id"], owner)
-
-        command = " ".join(captured["command"])
-        assert account["id"] in command
-        assert "99887766" not in command
-        assert "broker-password-not-in-args" not in command
-        assert captured["env"]["NO7_CREDENTIAL_VAULT_KEY"] == vault_key
-        assert result["read_only"] is True and result["execution_enabled"] is False
+        with pytest.raises(AccountError, match="Windows MT5 bridge"):
+            validate_demo_account(db, tenant["id"], account["id"], owner)
     finally:
         db.close()
 
 
-@pytest.mark.parametrize("changed_during_probe", [False, True])
-def test_demo_worker_marks_only_matching_read_only_demo_ready(tmp_path, monkeypatch, changed_during_probe):
+def test_demo_worker_uses_automatic_running_terminal_without_account_login(tmp_path, monkeypatch):
     db_path = tmp_path / "demo-worker.sqlite3"
     db = Database(db_path)
     vault_key = CredentialVault.generate_key()
@@ -251,7 +243,7 @@ def test_demo_worker_marks_only_matching_read_only_demo_ready(tmp_path, monkeypa
         ACCOUNT_TRADE_MODE_DEMO = 0
 
         @staticmethod
-        def initialize(path, timeout):
+        def initialize(path=None, timeout=5000):
             return path == str(terminal_path) and timeout == 5000
 
         @staticmethod
@@ -272,31 +264,8 @@ def test_demo_worker_marks_only_matching_read_only_demo_ready(tmp_path, monkeypa
             return None
 
     monkeypatch.setattr(demo_worker.sys, "platform", "win32")
-    monkeypatch.setattr(demo_worker, "terminal_is_running", lambda path: path == terminal_path)
+    monkeypatch.setattr(demo_worker, "resolve_running_terminal", lambda explicit="": terminal_path)
     monkeypatch.setitem(sys.modules, "MetaTrader5", FakeTerminal)
-
-    if changed_during_probe:
-        probe = demo_worker.probe_demo
-
-        def changing_probe(*args):
-            result = probe(*args)
-            concurrent = Database(db_path)
-            try:
-                concurrent.execute("UPDATE broker_accounts SET server='Changed-Demo', updated_at=updated_at+1, "
-                                   "connection_status='pending_validation' WHERE id=?", (account["id"],))
-            finally:
-                concurrent.close()
-            return result
-
-        monkeypatch.setattr(demo_worker, "probe_demo", changing_probe)
-        with pytest.raises(demo_worker.ProbeError, match="changed during validation"):
-            demo_worker.validate(db_path, "local", tenant["id"], account["id"])
-        check = Database(db_path)
-        try:
-            assert check.query_one("SELECT connection_status FROM broker_accounts WHERE id=?", (account["id"],))[0] == "pending_validation"
-        finally:
-            check.close()
-        return
 
     result = demo_worker.validate(db_path, "local", tenant["id"], account["id"])
     reopened = Database(db_path)

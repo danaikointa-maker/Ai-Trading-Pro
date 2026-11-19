@@ -131,8 +131,8 @@ def _public_account(db: Database, row: Any, user: dict[str, Any]) -> dict[str, A
         "id": row["id"], "tenant_id": row["tenant_id"], "owner_email": row["owner_email"],
         "provider": row["provider"], "label": row["label"], "server": row["server"],
         "account_type": row["account_type"], "login": row["masked_login"],
-        "terminal_path_configured": bool(row["terminal_path"]),
-        "terminal_path": row["terminal_path"], "validation_symbol": row["validation_symbol"],
+        "terminal_selection": "automatic",
+        "validation_symbol": row["validation_symbol"],
         "updated_at": row["updated_at"],
         "connection_status": row["connection_status"],
         "assigned_team_id": row["assignment_team_id"],
@@ -236,7 +236,7 @@ def update_broker_account(db, tenant_id, account_id, actor, expected_updated_at,
     with db.cursor() as cur:
         row = _management_row(db, tenant_id, account_id, actor, expected_updated_at)
         values = dict(row)
-        for key in ("label", "server", "terminal_path", "validation_symbol", "account_type"):
+        for key in ("label", "server", "validation_symbol", "account_type"):
             if key in changes:
                 values[key] = str(changes[key]).strip()
         values["label"] = " ".join(values["label"].split())
@@ -253,14 +253,14 @@ def update_broker_account(db, tenant_id, account_id, actor, expected_updated_at,
             values["credentials_ciphertext"] = vault.encrypt(account_id, login, password)
             values["masked_login"] = mask_login(login)
             values["login_fingerprint"] = vault.fingerprint(tenant_id, row["provider"], values["server"], login)
-        reset = credential_change or any(values[k] != row[k] for k in ("terminal_path", "validation_symbol", "account_type"))
+        reset = credential_change or any(values[k] != row[k] for k in ("validation_symbol", "account_type"))
         status = ("pending_validation" if values["account_type"] == "demo" else "live_disabled") if reset else row["connection_status"]
         try:
-            cur.execute("UPDATE broker_accounts SET label=?,server=?,account_type=?,terminal_path=?,validation_symbol=?,"
+            cur.execute("UPDATE broker_accounts SET label=?,server=?,account_type=?,validation_symbol=?,"
                         "credentials_ciphertext=?,masked_login=?,login_fingerprint=?,connection_status=?,updated_at=? "
                         "WHERE id=? AND tenant_id=? AND updated_at=? AND execution_enabled=0 "
                         "AND assignment_team_id IS NULL AND assignment_manager_email IS NULL",
-                        tuple(values[k] for k in ("label", "server", "account_type", "terminal_path", "validation_symbol",
+                        tuple(values[k] for k in ("label", "server", "account_type", "validation_symbol",
                                                  "credentials_ciphertext", "masked_login", "login_fingerprint"))
                         + (status, time.time(), account_id, tenant_id, expected_updated_at))
             if cur.rowcount != 1:

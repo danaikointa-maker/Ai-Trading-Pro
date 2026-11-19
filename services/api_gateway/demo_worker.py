@@ -4,15 +4,19 @@ from __future__ import annotations
 import argparse
 import json
 import os
-from pathlib import Path
 import shutil
 import subprocess
 import sys
 import time
+from pathlib import Path
 
+from integrations.brokers.mt5_readonly import ProbeError, probe_demo
+from integrations.brokers.terminal_locator import (
+    TerminalDiscoveryError,
+    resolve_running_terminal,
+)
 from packages.persistence.db import Database
 from services.api_gateway.credential_vault import CredentialVault
-from integrations.brokers.mt5_readonly import ProbeError, probe_demo
 
 
 def terminal_is_running(terminal_path: Path) -> bool:
@@ -43,10 +47,10 @@ def validate(database: Path, workspace_id: str, tenant_id: str,
                            (account_id, tenant_id))
         if row is None or row["account_type"] != "demo" or row["provider"] != "mt5":
             raise ProbeError("Only a registered MT5 Demo account can be validated")
-        terminal_path = Path(row["terminal_path"])
-        if (terminal_path.name.lower() != "terminal64.exe" or not terminal_path.is_file()
-                or not terminal_is_running(terminal_path)):
-            raise ProbeError("Open and log in to the specified MT5 terminal first")
+        try:
+            terminal_path = resolve_running_terminal()
+        except TerminalDiscoveryError as exc:
+            raise ProbeError(str(exc)) from exc
 
         credentials = CredentialVault().decrypt(account_id, row["credentials_ciphertext"])
         if not credentials["login"].isdigit():

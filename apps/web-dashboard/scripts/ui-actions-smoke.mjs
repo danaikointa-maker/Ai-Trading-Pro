@@ -60,16 +60,18 @@ try {
   await renderToString(app)
   assert.equal(typeof controls.zoom, 'function')
   let spacing = 16, logical = null, range = { from: 900, to: 2520 }, fitCalls = 0
-  const priceOptions = [], chartOptions = [], scrollPositions = []
+  const priceOptions = [], chartOptions = [], scrollPositions = [], zoneStrokes = []
   const timeScale = {
     width: () => 600, options: () => ({ barSpacing: spacing }),
     applyOptions: o => { spacing = o.barSpacing ?? spacing },
-    getVisibleRange: () => range, setVisibleRange: r => { range = r },
+    getVisibleRange: () => range, setVisibleRange: r => { range = r }, timeToCoordinate: () => 560,
     setVisibleLogicalRange: r => { logical = r }, getVisibleLogicalRange: () => logical,
     fitContent: () => { fitCalls++ }, scrollPosition: () => 0, scrollToPosition: value => scrollPositions.push(value),
   }
   controls.chart = { timeScale: () => timeScale, priceScale: () => ({ applyOptions: o => priceOptions.push(o) }), applyOptions: o => chartOptions.push(o) }
-  controls.candleSeries = { data: () => Array.from({ length: 10 }, (_, i) => ({ time: 900 + i * 180 })) }
+  controls.candleSeries = { data: () => Array.from({ length: 10 }, (_, i) => ({ time: 900 + i * 180 })),
+    priceToCoordinate: price => price >= 0 && price < 100 ? 50 : null,
+    createPriceLine: options => { toolLines.push(options); return options }, removePriceLine: () => {} }
   controls.bars.value = 10
   controls.spacing.value = 16
   controls.zoom(1)
@@ -119,6 +121,7 @@ try {
   controls.fullscreenChanged()
   assert.equal(controls.fullscreen.value, false)
   controls.chartFeed.value = 'mt5-live'
+  controls.selectedAccount.value = 'fixture-account'
   assert.equal(controls.layerUnavailable('plan'), false)
   assert.equal(controls.layerUnavailable('ema'), false)
   const toolLines = []
@@ -129,13 +132,19 @@ try {
     fibonacci_band: { level_50: 12, level_618: 11 },
     sr_flips: [{ level: 14, direction: 'resistance_to_support' }],
     structure: [{ level: 15, kind: 'BOS', confirmed: true }] }
+  controls.lastCandle = { time: 2520 }
+  const context = { setTransform() {}, clearRect() {}, beginPath() {}, moveTo() {}, lineTo() {},
+    stroke() { zoneStrokes.push(true) }, setLineDash() {}, fillText() {}, fillRect() {} }
+  controls.segmentCanvas.value = { style: {}, set width(value) {}, set height(value) {}, getContext: () => context }
+  controls.container.value = { clientWidth: 700, clientHeight: 500 }
+  globalThis.window.devicePixelRatio = 1
   for (const key of ['sr', 'flip', 'fib', 'structure']) {
     assert.equal(controls.layerUnavailable(key), false, `same-source ${key} must be usable`)
     controls.layerVisibility[key] = true
   }
   assert.equal(controls.layerUnavailable('positions'), false)
   controls.drawOverlays()
-  assert.deepEqual(toolLines.map(line => line.price).sort((a,b) => a-b), [10, 11, 12, 14, 15])
+  assert.equal(zoneStrokes.length, 4, 'renders zone bounds plus flip and structure lines')
   controls.chartPositions.value = { available: true, positions: [{ ticket: 'fixture-private', entry: 20, sl: 18, tp: 24 }], reason: '' }
   controls.layerVisibility.positions = true
   controls.layerVisibility.plan = true
@@ -147,8 +156,8 @@ try {
   controls.toggleLayer('positions')
   toolLines.length = 0
   controls.drawOverlays()
-  assert.ok(!toolLines.some(line => line.price === 20), 'POS hides entry lines independently')
-  assert.ok(toolLines.some(line => line.price === 18), 'SL/TP still shows real stops with POS hidden')
+  assert.ok(!toolLines.some(line => line.price === 20), 'POS hides entry independently')
+  assert.ok(toolLines.some(line => line.price === 18), 'SL/TP stays visible when POS is hidden')
   controls.chartOverlays.value.sr_flips = []
   controls.layerVisibility.flip = false
   controls.toggleLayer('flip')

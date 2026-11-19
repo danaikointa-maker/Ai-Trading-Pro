@@ -42,7 +42,7 @@
       <p v-if="!perms.canTrade" class="border-b border-ink-700/60 px-3 py-2 text-[10px] text-amber-200/80">
         บทบาท viewer อ่านสถานะได้อย่างเดียว; เพิ่มบัญชี ตรวจสอบ Demo และเปลี่ยน broker ไม่ได้
       </p>
-      <form v-if="perms.canTrade" class="grid gap-2 border-b border-ink-700/60 p-3 md:grid-cols-3 xl:grid-cols-8" @submit.prevent="createManagedAccount">
+      <form v-if="perms.canTrade" class="grid gap-2 border-b border-ink-700/60 p-3 md:grid-cols-3 xl:grid-cols-7" @submit.prevent="createManagedAccount">
         <label class="text-[9.5px] text-muted">Provider
           <select v-model="accountForm.provider" class="input mt-0.5 py-1.5 text-[10px]"><option value="mt5">MetaTrader 5</option></select>
         </label>
@@ -61,16 +61,14 @@
         <label class="text-[9.5px] text-muted">Broker password
           <input v-model="accountForm.password" type="password" class="input mt-0.5 py-1.5 text-[10px]" required autocomplete="new-password" />
         </label>
-        <label class="text-[9.5px] text-muted">MT5 terminal path
-          <input v-model="accountForm.terminal_path" class="input mt-0.5 py-1.5 text-[10px]" placeholder="C:\Program Files\MetaTrader 5\terminal64.exe" />
-        </label>
         <label class="text-[9.5px] text-muted">Validation symbol
           <input v-model="accountForm.validation_symbol" class="input mt-0.5 py-1.5 text-[10px]" required placeholder="XAUUSD" />
         </label>
-        <button class="btn py-1.5 text-[10px] md:col-span-3 xl:col-span-8" :disabled="creatingAccount">
+        <p class="text-[10px] text-muted md:col-span-3 xl:col-span-7">MT5 · ตรวจหา terminal อัตโนมัติบน Windows PC ผ่าน bridge ไม่ต้องกรอกพาท · ตรวจสอบ Demo หลังล็อกอินบัญชีใน MT5 แล้ว</p>
+        <button class="btn py-1.5 text-[10px] md:col-span-3 xl:col-span-7" :disabled="creatingAccount">
           {{ creatingAccount ? 'Saving encrypted credentials…' : 'Add account record' }}
         </button>
-        <button type="button" class="btn py-1 text-[10px] md:col-span-3 xl:col-span-8" :disabled="creatingAccount" @click="resetCreateForm">ล้าง / ยกเลิกข้อมูลที่กรอก</button>
+        <button type="button" class="btn py-1 text-[10px] md:col-span-3 xl:col-span-7" :disabled="creatingAccount" @click="resetCreateForm">ล้าง / ยกเลิกข้อมูลที่กรอก</button>
       </form>
       <p class="border-b border-ink-700/60 px-3 py-2 text-[9.5px] leading-relaxed text-muted">
         Credentials are write-only and encrypted per account; they are never shown again. Set the vault master key through the OS/secret manager, not `.env`.
@@ -97,13 +95,11 @@
                   <span class="chip chip-down ml-1">orders off</span>
                 </td>
                 <td class="text-right">
-                  <button v-if="perms.canTrade && account.account_type === 'demo' && account.can_control && account.terminal_path_configured && account.connection_status !== 'ready_read_only'"
+                  <button v-if="perms.canTrade && account.account_type === 'demo' && account.can_control"
                           class="btn mr-1 py-0.5 text-[9px]" :disabled="validatingAccountId === account.id"
                           @click="validateDemoAccount(account)">
-                    {{ validatingAccountId === account.id ? 'Checking…' : 'Validate Demo' }}
+                    {{ validatingAccountId === account.id ? 'กำลังตรวจ…' : 'ตรวจสอบ Demo' }}
                   </button>
-                  <span v-else-if="perms.canTrade && account.account_type === 'demo' && account.can_control && !account.terminal_path_configured"
-                        class="text-[9px] text-muted">Set terminal path to validate</span>
                   <button v-if="account.assigned_team_id && state.user?.role === 'admin'" class="btn py-0.5 text-[9px]"
                           @click="unassignManagedAccount(account)">คืนให้ owner</button>
                   <span v-if="account.can_manage && perms.canTrade" class="ml-1 inline-flex gap-1">
@@ -122,7 +118,7 @@
                     <label class="text-[10px]">Login ใหม่<input v-model="editDraft.login" class="input mt-1" :placeholder="`${account.login} · เว้นว่างใช้เดิม`" autocomplete="off" :disabled="savingEdit" /></label>
                     <label class="text-[10px]">รหัสผ่านใหม่<input v-model="editDraft.password" type="password" class="input mt-1" placeholder="เว้นว่างใช้เดิม" autocomplete="new-password" :disabled="savingEdit" /></label>
                     <label class="text-[10px]">Symbol<input v-model="editDraft.validation_symbol" class="input mt-1" required :disabled="savingEdit" /></label>
-                    <label class="text-[10px] md:col-span-3">MT5 terminal path<input v-model="editDraft.terminal_path" class="input mt-1" :disabled="savingEdit" /></label>
+                    <p class="text-[10px] text-muted md:col-span-3">Terminal: ตรวจหาอัตโนมัติบน Windows PC</p>
                     <p class="text-[10px] text-muted md:col-span-3">เปลี่ยนข้อมูลเชื่อมต่อต้องตรวจสอบ Demo ใหม่ · บันทึกแล้วจะยังไม่ส่งคำสั่งซื้อขาย</p>
                     <div class="flex gap-2 md:col-span-3"><button class="btn" :disabled="savingEdit">{{ savingEdit ? 'กำลังบันทึก…' : 'บันทึก' }}</button><button type="button" class="btn" :disabled="savingEdit" @click="cancelAccountEdit">ยกเลิก</button></div>
                   </form>
@@ -248,7 +244,7 @@
           <li>4. Team manager ควบคุมได้ตาม assignment; สมาชิกอื่นอ่านสถานะได้ตามสิทธิ์</li>
         </ol>
         <p class="border-t border-ink-700/60 px-4 py-2 text-[10px] leading-relaxed text-amber-200/70">
-          การบันทึกบัญชียังไม่เชื่อม MT5 หรือเปิด order execution; Demo validation/worker ยังอยู่ระหว่างพัฒนา และ Live ถูกปิดไว้
+          ตรวจสอบ Demo ผ่าน MT5 ที่ล็อกอินอยู่บน Windows PC · บัญชีต้องตรงกับ session ที่ bridge ส่งมา · Live และ order execution ยังปิดไว้
         </p>
       </section>
     </div>
@@ -302,7 +298,7 @@ function startAccountEdit(account) {
   cancelAccountEdit()
   editingAccount.value = { ...account }
   editDraft.value = { label: account.label, server: account.server, account_type: account.account_type,
-    terminal_path: account.terminal_path || '', validation_symbol: account.validation_symbol || 'XAUUSD', login: '', password: '' }
+    validation_symbol: account.validation_symbol || 'XAUUSD', login: '', password: '' }
 }
 async function saveAccountEdit() {
   if (!perms.value.canTrade || !editingAccount.value?.can_manage || savingEdit.value) return
@@ -392,14 +388,13 @@ async function claimTerminalCode() {
   } catch (error) { toast(error.message, 'error') }
   finally { linkingTerminal.value = false }
 }
-const defaultTerminalPath = 'C:\\Program Files\\MetaTrader 5\\terminal64.exe'
 const accountForm = ref({ provider: 'mt5', label: '', server: '', account_type: 'demo', login: '', password: '',
-  terminal_path: defaultTerminalPath, validation_symbol: 'XAUUSD' })
+  validation_symbol: 'XAUUSD' })
 function resetCreateForm() {
   if (creatingAccount.value) return
   accountForm.value.password = ''
-  accountForm.value = { provider: 'mt5', label: '', server: '', account_type: 'demo', login: '', password: '',
-    terminal_path: defaultTerminalPath, validation_symbol: 'XAUUSD' }
+    accountForm.value = { provider: 'mt5', label: '', server: '', account_type: 'demo', login: '', password: '',
+      validation_symbol: 'XAUUSD' }
 }
 const isPlatformSuperAdmin = computed(() => state.user?.platform_role === 'super_admin')
 const isDefaultTenant = computed(() => state.user?.tenant_id === 'default')
@@ -468,7 +463,7 @@ async function createManagedAccount() {
     await api.post('/api/broker-accounts', { ...accountForm.value })
     toast('เพิ่ม broker account record แล้ว (ยังไม่เชื่อม MT5)', 'success')
     accountForm.value = { provider: 'mt5', label: '', server: '', account_type: 'demo', login: '', password: '',
-      terminal_path: defaultTerminalPath, validation_symbol: 'XAUUSD' }
+      validation_symbol: 'XAUUSD' }
     await loadManagedAccounts()
   } catch (err) {
     toast(err.message, 'error')

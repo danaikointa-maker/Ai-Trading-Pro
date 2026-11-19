@@ -37,7 +37,7 @@ def management(tmp_path, settings, monkeypatch):
     with TestClient(app) as client:
         created = client.post("/api/broker-accounts", headers=headers["owner"], json={
             "provider": "mt5", "label": "My Demo", "server": "Broker-Demo", "account_type": "demo",
-            "login": "12345678", "password": "fixture-broker-secret", "terminal_path": "old.exe"})
+            "login": "12345678", "password": "fixture-broker-secret"})
         assert created.status_code == 200
         yield client, db, users, headers, created.json()
     db.close()
@@ -90,6 +90,14 @@ def test_assigned_and_execution_accounts_require_return_or_stop_first(management
     assert client.delete(url, headers=headers["owner"], params={"expected_updated_at": assigned["updated_at"]}).status_code == 409
     db.execute("UPDATE broker_accounts SET assignment_team_id=NULL,assignment_manager_email=NULL,execution_enabled=1 WHERE id=?", (account["id"],))
     assert client.delete(url, headers=headers["owner"], params={"expected_updated_at": assigned["updated_at"]}).status_code == 409
+
+
+def test_create_rejects_manual_terminal_path(management):
+    client, _db, _users, headers, _account = management
+    response = client.post("/api/broker-accounts", headers=headers["owner"], json={
+        "provider": "mt5", "label": "Pathless", "server": "Broker-Demo", "account_type": "demo",
+        "login": "33333333", "password": "pathless-secret", "terminal_path": "C:/must/not/be/used/terminal64.exe"})
+    assert response.status_code == 422
 
 
 def test_duplicate_identity_is_atomic_and_live_stays_disabled(management):

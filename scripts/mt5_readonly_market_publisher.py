@@ -17,6 +17,14 @@ from typing import Any
 from urllib.error import HTTPError, URLError
 from urllib.request import Request, urlopen
 
+if __package__ in (None, ""):
+    sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+
+from integrations.brokers.terminal_locator import (
+    TerminalDiscoveryError,
+    resolve_running_terminal,
+)
+
 TIMEFRAMES = {
     "M1": "TIMEFRAME_M1",
     "M3": "TIMEFRAME_M3",
@@ -233,13 +241,16 @@ def run(args: argparse.Namespace) -> int:
     if not args.symbols or any(not symbol.strip() for symbol in args.symbols):
         raise PublisherError("at least one exact Market Watch symbol is required")
     token = read_bridge_token(args.token_file)
-    require_running_terminal()
+    try:
+        terminal_path = resolve_running_terminal(args.terminal)
+    except TerminalDiscoveryError as exc:
+        raise PublisherError(str(exc)) from exc
     try:
         import MetaTrader5 as terminal
     except ImportError as exc:
         raise PublisherError("MetaTrader5 package is not installed in this Python environment") from exc
 
-    if not terminal.initialize(args.terminal, timeout=5000):
+    if not terminal.initialize(str(terminal_path), timeout=5000):
         raise PublisherError("could not attach to the already-running MT5 terminal")
     try:
         account, status, identity = account_identity(
@@ -311,7 +322,7 @@ def run(args: argparse.Namespace) -> int:
 
 def main() -> int:
     parser = argparse.ArgumentParser(description="Read-only MT5 market data bridge; no order support")
-    parser.add_argument("--terminal", required=True, help="installed terminal64.exe path")
+    parser.add_argument("--terminal", default="", help="optional administrator override; otherwise detect the running MT5 automatically")
     parser.add_argument("--base-url", default="http://127.0.0.1:18080",
                         help="API URL through the local SSH tunnel")
     parser.add_argument("--account-id", default="mt5-bridge-demo")
@@ -322,8 +333,8 @@ def main() -> int:
     parser.add_argument("--token-file", default="")
     parser.add_argument("--include-positions", action="store_true", help="read positions without sending any trade requests")
     parser.add_argument("--link-code-file", default="", help="protected local file for the one-use read-only account link code")
-    parser.add_argument("--poll-ms", type=int, default=1000)
-    parser.add_argument("--rates-interval", type=float, default=10.0,
+    parser.add_argument("--poll-ms", type=int, default=250)
+    parser.add_argument("--rates-interval", type=float, default=5.0,
                         help="history refresh seconds (minimum 5; quotes poll independently)")
     parser.add_argument("--rates-bars", type=int, default=600)
     args = parser.parse_args()

@@ -24,13 +24,13 @@ router = APIRouter(prefix="/api/broker-accounts", tags=["broker-accounts"])
 
 
 class CreateBrokerAccountRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
     provider: str
     label: str
     server: str
     account_type: Literal["demo", "live"]
     login: str
     password: str
-    terminal_path: str = ""
     validation_symbol: str = "XAUUSD"
 
 
@@ -46,7 +46,6 @@ class UpdateBrokerAccountRequest(BaseModel):
     label: str | None = Field(default=None, min_length=2, max_length=100)
     server: str | None = Field(default=None, min_length=1, max_length=200)
     account_type: Literal["demo", "live"] | None = None
-    terminal_path: str | None = Field(default=None, max_length=1024)
     validation_symbol: str | None = Field(default=None, min_length=1, max_length=100)
     login: str | None = Field(default=None, max_length=200)
     password: str | None = Field(default=None, max_length=1024)
@@ -91,7 +90,7 @@ def add_broker_account(payload: CreateBrokerAccountRequest,
             runtime.db, vault, tenant_id=user["tenant_id"], owner_email=user["email"],
             provider=payload.provider, label=payload.label, server=payload.server,
             account_type=payload.account_type, login=payload.login, password=payload.password,
-            created_by=user["email"], terminal_path=payload.terminal_path,
+            created_by=user["email"],
             validation_symbol=payload.validation_symbol,
         )
     except AccountError as exc:
@@ -137,9 +136,10 @@ def unassign(account_id: str, expected_version: int,
 def validate_demo(account_id: str, runtime: TradingRuntime = Runtime,
                   user=Depends(current_user)):
     try:
-        result = validate_demo_account(runtime.db, user["tenant_id"], account_id, user)
+        result = validate_demo_account(runtime.db, user["tenant_id"], account_id, user,
+                                       relay=getattr(runtime, "bridge", None))
     except AccountError as exc:
-        raise HTTPException(status_code=400, detail=str(exc)) from exc
+        raise HTTPException(status_code=exc.status_code, detail=str(exc)) from exc
     runtime.db.audit(user["email"], "broker_account.demo.validate",
                      {"account_id": account_id, "symbol": result.get("symbol"),
                       "read_only": True, "execution_enabled": False})
