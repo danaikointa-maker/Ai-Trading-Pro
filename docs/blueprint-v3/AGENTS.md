@@ -1,5 +1,8 @@
 # Ai-Trading-Pro UNIFIED PLATFORM — AGENT CONTRACT V2
 
+> **Unified feature work queue (V4, proposal):** Read [UNIFIED-MASTER-PLAN-V4](../UNIFIED-MASTER-PLAN-V4.md), [UNIFIED-TASK-REGISTER-V4](../UNIFIED-TASK-REGISTER-V4.md), and [UNIFIED-CONFLICTS-V4](../UNIFIED-CONFLICTS-V4.md) before new feature work. This AGENTS contract's safety controls retain higher precedence; the new plan cannot grant execution or deployment permission. Legacy blueprint feature checklists are references, not separate simultaneous work queues.
+
+
 ## Source of truth
 Use https://github.com/danaikointa-maker/Ai-Trading-Pro as the ONLY main application repository. Read its README.md, docs/ARCHITECTURE.md, docs/RUNBOOK.md, docs/LIMITATIONS.md, config/app.yaml, config/brokers.yaml, config/risk.yaml, and this file before changing code. Preserve existing Python FastAPI, Vue 3, MQL5 bridge, broker adapters, and tests. Do NOT scaffold Laravel or reimplement existing modules without an approved migration.
 
