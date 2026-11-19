@@ -13,6 +13,7 @@ database, or ambiguous broker history still needs separate operator reconciliati
 from __future__ import annotations
 
 import json
+import hashlib
 import math
 import time
 import uuid
@@ -353,26 +354,177 @@ class ExecutionGateway:
 
     # ------------------------------------------------------------ management
     def modify(self, adapter: BrokerAdapter, ticket: str, sl: float | None = None,
-               tp: float | None = None, reason: str = "") -> bool:
+               tp: float | None = None, reason: str = "",
+               idempotency_key: str | None = None) -> bool:
         try:
             identity = self._assert_account(adapter)
-            ledger = PositionEventLog(self.db)
-            detail = {"sl": sl, "tp": tp, "reason": reason}
-            ledger.append(broker_id=adapter.id, ticket=ticket, actor="position-manager",
-                          kind="modify", status="requested", account_identity=identity, detail=detail)
-            ok = adapter.modify_position(ticket, sl=sl, tp=tp)
-            self._assert_account(adapter)
-            ledger.append(broker_id=adapter.id, ticket=ticket, actor="position-manager",
-                          kind="modify", status="accepted_unverified" if ok else "unknown",
-                          account_identity=identity, detail=detail)
-            self.db.audit("position-manager", "position.modify",
-                          {"ticket": ticket, "sl": sl, "tp": tp, "ok": ok, "reason": reason})
-            return ok
         except BrokerError as exc:
-            # The request already exists in append-only evidence; a transport
-            # exception cannot prove that the broker rejected it.
-            self.db.audit("position-manager", "position.modify_failed", {"ticket": ticket, "error": str(exc)})
+            self.db.audit("position-manager", "position.modify_blocked",
+                          {"ticket": ticket, "reason": str(exc)})
             return False
+        ledger = PositionEventLog(self.db)
+        if idempotency_key is not None and (not isinstance(idempotency_key, str)
+                                            or len(idempotency_key) < 16
+                                            or len(idempotency_key) > 128
+                                            or idempotency_key != idempotency_key.strip()):
+            raise BrokerError("invalid modification idempotency key")
+        for label, value in (("sl", sl), ("tp", tp)):
+            if value is not None and (type(value) not in (int, float) or not math.isfinite(value)):
+                self.db.audit("position-manager", "position.modify_blocked",
+                              {"ticket": ticket, "reason": f"invalid {label}"})
+                return False
+        detail = {"sl": sl, "tp": tp, "reason": reason}
+        operation_id = hashlib.sha256(json.dumps(
+            {"identity": identity, "ticket": str(ticket), "sl": sl, "tp": tp,
+             "idempotency_key": idempotency_key},
+            sort_keys=True, allow_nan=False).encode()).hexdigest()
+        try:
+            positions = adapter.positions()
+            matches = [position for position in positions
+                       if str(position.ticket) == str(ticket) and position.broker_id == adapter.id]
+            if len(matches) != 1:
+                raise BrokerError("position identity is missing, stale or ambiguous")
+            position = matches[0]
+            spec = adapter.symbol_spec(position.symbol)
+            tick = adapter.ticker(position.symbol)
+            if not math.isfinite(tick.t) or abs(time.time() - tick.t) > 5:
+                raise BrokerError("fresh broker quote unavailable; no stop modification sent")
+            closing_price = tick.bid if position.direction == Direction.up else tick.ask
+            requested_sl = float(sl) if sl is not None else float(position.sl)
+            requested_tp = float(tp) if tp is not None else float(position.tp)
+            sl_already_applied = (sl is not None and
+                math.isclose(position.sl, requested_sl, rel_tol=0, abs_tol=spec.tick_size / 2) and
+                math.isclose(position.tp, requested_tp, rel_tol=0, abs_tol=spec.tick_size / 2))
+            if sl_already_applied:
+                active = self.db.query_one(
+                    "SELECT * FROM position_modification_intents WHERE broker_id=? AND ticket=? "
+                    "AND status IN ('requested','accepted_unverified','unknown') ORDER BY created_at DESC LIMIT 1",
+                    (adapter.id, str(ticket)))
+                if active:
+                    if json.loads(active["account_identity"]) != identity:
+                        raise BrokerError("unresolved modification belongs to a different account identity")
+                    if (math.isclose(float(active["requested_sl"] or 0), requested_sl, rel_tol=0,
+                                     abs_tol=spec.tick_size / 2)
+                            and math.isclose(float(active["requested_tp"] or 0), requested_tp,
+                                             rel_tol=0, abs_tol=spec.tick_size / 2)):
+                        self._set_modification_status(active["operation_id"], "broker_confirmed",
+                                                      {"reconciled_from": "fresh_positions"})
+                        ledger.append(broker_id=adapter.id, ticket=str(ticket), actor="broker-reconciler",
+                                      kind="modify", status="broker_confirmed", account_identity=identity,
+                                      detail={"operation_id": active["operation_id"],
+                                              "sl": position.sl, "tp": position.tp})
+                    else:
+                        raise BrokerError("prior modification outcome unresolved; reconciliation required before another send")
+                self.db.audit("position-manager", "position.modify_already_applied",
+                              {"ticket": ticket, "operation_id": operation_id})
+                return True
+            if sl is not None:
+                if not math.isfinite(requested_sl) or requested_sl <= 0:
+                    raise BrokerError("stop loss cannot be removed or invalid")
+                normalized = spec.round_price(requested_sl)
+                if abs(normalized - requested_sl) > max(1e-10, spec.tick_size * 1e-7):
+                    raise BrokerError("stop loss is not normalized to broker tick size")
+                is_buy = position.direction == Direction.up
+                if (is_buy and (requested_sl >= closing_price or
+                                (position.sl > 0 and requested_sl <= position.sl))
+                        or not is_buy and (requested_sl <= closing_price or
+                                           (position.sl > 0 and requested_sl >= position.sl))):
+                    raise BrokerError("stop must improve monotonically and remain on the safe side of market")
+                min_distance = max(spec.stops_level_points, spec.freeze_level_points) * spec.point
+                if abs(closing_price - requested_sl) + 1e-12 < min_distance:
+                    raise BrokerError("stop violates broker stops/freeze level")
+            if position.tp > 0 and requested_tp <= 0:
+                raise BrokerError("take profit cannot be removed")
+            if not math.isfinite(requested_tp) or requested_tp < 0:
+                raise BrokerError("take profit is invalid")
+
+            # Resolve prior ambiguous intent from a fresh broker snapshot. A
+            # matching SL/TP is confirmation; any other unresolved intent blocks
+            # new sends until an operator reconciles it.
+            active = self.db.query_one(
+                "SELECT * FROM position_modification_intents WHERE broker_id=? AND ticket=? "
+                "AND status IN ('requested','accepted_unverified','unknown') ORDER BY created_at DESC LIMIT 1",
+                (adapter.id, str(ticket)))
+            if active:
+                prior_identity = json.loads(active["account_identity"])
+                if prior_identity != identity:
+                    raise BrokerError("unresolved modification belongs to a different account identity")
+                sl_matches = math.isclose(position.sl, float(active["requested_sl"] or 0),
+                                          rel_tol=0, abs_tol=spec.tick_size / 2)
+                tp_matches = math.isclose(position.tp, float(active["requested_tp"] or 0),
+                                          rel_tol=0, abs_tol=spec.tick_size / 2)
+                if sl_matches and tp_matches:
+                    self._set_modification_status(active["operation_id"], "broker_confirmed",
+                                                  {"reconciled_from": "fresh_positions"})
+                    ledger.append(broker_id=adapter.id, ticket=str(ticket), actor="broker-reconciler",
+                                  kind="modify", status="broker_confirmed", account_identity=identity,
+                                  detail={"operation_id": active["operation_id"],
+                                          "sl": position.sl, "tp": position.tp})
+                    if active["operation_id"] == operation_id:
+                        return True
+                else:
+                    raise BrokerError("prior modification outcome unresolved; reconciliation required before another send")
+
+            # Reserve one durable active operation per broker position. No broker
+            # I/O happens while the SQLite writer lock is held.
+            with self.db.cursor() as cur:
+                cur.execute("BEGIN IMMEDIATE")
+                active = cur.execute(
+                    "SELECT operation_id FROM position_modification_intents WHERE broker_id=? AND ticket=? "
+                    "AND status IN ('requested','accepted_unverified','unknown') LIMIT 1",
+                    (adapter.id, str(ticket))).fetchone()
+                if active:
+                    raise BrokerError("another position modification is active")
+                now = time.time()
+                cur.execute(
+                    "INSERT INTO position_modification_intents"
+                    "(operation_id,broker_id,ticket,account_identity,requested_sl,requested_tp,status,detail,created_at,updated_at) "
+                    "VALUES(?,?,?,?,?,?,?,?,?,?)",
+                    (operation_id, adapter.id, str(ticket), json.dumps(identity, sort_keys=True),
+                     requested_sl, requested_tp, "requested", json.dumps(detail, sort_keys=True), now, now))
+            ledger.append(broker_id=adapter.id, ticket=str(ticket), actor="position-manager",
+                          kind="modify", status="requested", account_identity=identity,
+                          detail={**detail, "operation_id": operation_id})
+            try:
+                ok = adapter.modify_position(str(ticket), sl=requested_sl, tp=requested_tp)
+                self._assert_account(adapter)
+                after = [p for p in adapter.positions()
+                         if str(p.ticket) == str(ticket) and p.broker_id == adapter.id]
+                confirmed = (len(after) == 1
+                             and math.isclose(after[0].sl, requested_sl, rel_tol=0, abs_tol=spec.tick_size / 2)
+                             and math.isclose(after[0].tp, requested_tp, rel_tol=0, abs_tol=spec.tick_size / 2))
+                status = "broker_confirmed" if confirmed else "accepted_unverified" if ok else "rejected"
+                self._set_modification_status(operation_id, status,
+                                              {"adapter_ack": bool(ok), "broker_snapshot_confirmed": confirmed})
+                ledger.append(broker_id=adapter.id, ticket=str(ticket), actor="position-manager",
+                              kind="modify", status=status, account_identity=identity,
+                              detail={**detail, "operation_id": operation_id,
+                                      "broker_snapshot_confirmed": confirmed})
+                self.db.audit("position-manager", "position.modify",
+                              {"ticket": ticket, "sl": requested_sl, "tp": requested_tp,
+                               "ok": bool(ok), "confirmed": confirmed, "reason": reason,
+                               "operation_id": operation_id})
+                return bool(ok)
+            except Exception as exc:  # noqa: BLE001 - after send, outcome may be ambiguous
+                self._set_modification_status(operation_id, "unknown", {"error_type": type(exc).__name__})
+                ledger.append(broker_id=adapter.id, ticket=str(ticket), actor="position-manager",
+                              kind="modify", status="unknown", account_identity=identity,
+                              detail={**detail, "operation_id": operation_id})
+                self.db.audit("position-manager", "position.modify_unknown",
+                              {"ticket": ticket, "operation_id": operation_id,
+                               "error_type": type(exc).__name__})
+                return False
+        except BrokerError as exc:
+            self.db.audit("position-manager", "position.modify_blocked",
+                          {"ticket": ticket, "reason": str(exc)})
+            return False
+
+    def _set_modification_status(self, operation_id: str, status: str,
+                                 detail: dict[str, Any]) -> None:
+        if status not in {"requested", "accepted_unverified", "unknown", "rejected", "broker_confirmed"}:
+            raise ValueError("invalid position modification state")
+        self.db.execute("UPDATE position_modification_intents SET status=?,detail=?,updated_at=? WHERE operation_id=?",
+                        (status, json.dumps(detail, sort_keys=True), time.time(), operation_id))
 
     def close(self, adapter: BrokerAdapter, ticket: str, volume: float | None = None,
               reason: str = "manual", actor: str = "user") -> dict[str, Any]:

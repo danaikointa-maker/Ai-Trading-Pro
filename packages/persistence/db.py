@@ -63,6 +63,20 @@ CREATE TABLE IF NOT EXISTS position_events (
 CREATE INDEX IF NOT EXISTS idx_position_events_ticket
     ON position_events(broker_id, ticket, created_at);
 
+-- Current one-at-a-time protection modification fence. Append-only evidence
+-- remains in position_events. This row is the reconciled execution state.
+CREATE TABLE IF NOT EXISTS position_modification_intents (
+    operation_id TEXT PRIMARY KEY, broker_id TEXT NOT NULL, ticket TEXT NOT NULL,
+    account_identity TEXT NOT NULL, requested_sl REAL, requested_tp REAL,
+    status TEXT NOT NULL, detail TEXT NOT NULL DEFAULT '{}',
+    created_at REAL NOT NULL, updated_at REAL NOT NULL
+);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_position_modification_one_active
+    ON position_modification_intents(broker_id, ticket)
+    WHERE status IN ('requested', 'accepted_unverified', 'unknown');
+CREATE INDEX IF NOT EXISTS idx_position_modification_state
+    ON position_modification_intents(broker_id, ticket, updated_at);
+
 -- Closed M5 bars observed while a broker position is open. The stored source
 -- distinguishes an analytical live/replay observation from broker tick proof.
 CREATE TABLE IF NOT EXISTS position_candles (
