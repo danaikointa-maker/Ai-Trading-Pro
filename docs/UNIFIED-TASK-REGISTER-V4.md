@@ -5,7 +5,7 @@ Status definitions: EXISTS_CODE = seen in repository but not live certified; NEE
 
 | ID | Phase | Owner code path | Baseline status | Specific next task | Acceptance evidence |
 |---|---|---|---|---|---|
-| U00 | Audit | docs/, tests/, config/ | DONE | Audit receipt: [U00 Project Audit V4](U00-PROJECT-AUDIT-V4.md); baseline commit `559a2ded5dc1530cfcb61072e2432220742f6d0d`; host/branch state recorded | Signed gap matrix, source/test links and current host receipts in U00 report |
+| U00 | Audit | docs/, tests/, config/ | DONE | Audit receipt: [U00 Project Audit V4](U00-PROJECT-AUDIT-V4.md); audit receipt commit `21a8b65cd11a81e5ac39a86da97dc6fd1564b321`; baseline `559a2ded5dc1530cfcb61072e2432220742f6d0d` | Signed gap matrix, source/test links and current host receipts in U00 report |
 | U01 | Market data | services/market_data/, brokers | BLOCKED / PARTIAL | Freshness now rejects tick timestamps more than configured 2 s clock-skew tolerance in the future; real Connext Demo capture found XAUUSD.s ~7200 s ahead of PC. Resolve authoritative server-time mapping and capture symbol provenance before U02 depends on freshness | recent/stale/future/tolerance tests; normalized server-time capture, DST/offset tests and broker tick provenance still required |
 | U02 | Signal confirmation | services/strategy_engine/ | PLANNED | single 100-point WAIT state + closed M1/M5, timeout, dedup | 99/100-point/expiry/replay tests |
 | U03 | Risk profile | services/risk_engine/ config/risk.yaml | EXISTS_CODE | add VERSIONED candidate separately; audit precedence with legacy | invariants, no activation, config diff |
