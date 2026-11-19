@@ -29,6 +29,12 @@
   ตัวเลขทุกตัวในภาพรวมจึงเป็นตัวอย่าง ไม่ใช่ราคาตลาดจริง
 - เมื่อตั้ง `NO7_FEED_MODE=mt5` จะอ่านราคาจากเทอร์มินัลจริง แต่ยังไม่ได้ทดสอบกับ Connext
   ในสภาพตลาดจริง (ต้องมี Windows + terminal + บัญชี Demo)
+- **Freshness ของเวลา MT5 ยังไม่ผ่านการรับรอง**: บันทึก read-only ของ Connext-Demo
+  วันที่ 2026-11-20 พบ `XAUUSD.s` timestamp ล้ำหน้าเวลาพีซีประมาณ 7,200 วินาที.
+  `MarketDataService` ปฏิเสธ tick ที่ล้ำหน้าเกิน `data_future_tolerance_seconds` (2 วินาที)
+  แต่การ map เวลา broker-server/DST และการ capture สดซ้ำยังไม่ผ่าน acceptance.
+- ใน V4 branch นี้ยังไม่มี API อ่าน positions รายบัญชี MT5; `tests/test_mt5_readonly.py`
+  ยืนยัน adapter-level behavior เท่านั้น ไม่ใช่ UI/API หรือ broker round-trip.
 - **ยังไม่มี tick data จริง** สำหรับ backtest → ใช้ M1 ที่ resample เป็น M5/M15/H1/H4
   การจำลองการชน SL/TP ภายในแท่งจึงต้องเดา (เลือก stop ก่อน target แบบ conservative)
 

@@ -574,6 +574,7 @@ class RiskLimits(BaseModel):
     min_reward_risk: float = 1.3
     max_weekly_trades: int = 60
     data_staleness_seconds: int = 30
+    data_future_tolerance_seconds: int = 2
     news_lockout_enabled: bool = True
     news_window_before_minutes: int = 30
     news_window_after_minutes: int = 15
