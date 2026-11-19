@@ -1,4 +1,7 @@
 # No7 AI Trading Pro — Integrated Position Protection V1.1
+
+> **SUPERSEDED AS AN INDEPENDENT EXECUTION PLAN.** This V1.1 document remains detailed historical input. Do not run it separately from [Unified Master Plan V4](UNIFIED-MASTER-PLAN-V4.md) and [Task Register V4](UNIFIED-TASK-REGISTER-V4.md), which de-duplicate and schedule its work. Do not infer live authorization.
+
 Status: DESIGN / NOT DEPLOYED. This file is a proposed implementation contract; it is not a claim of completed runtime code or demo acceptance.
 
 ## Source of truth and scope
