@@ -373,6 +373,29 @@ class MT5Broker(BrokerAdapter):
         if request.tp:
             payload["tp"] = spec.round_price(request.tp)
         self._account_identity()
+        try:
+            check = mt5.order_check(payload)
+        except Exception:  # noqa: BLE001 - preflight failure must never fall through to send
+            return OrderResult(
+                order_id=request.idempotency_key or "",
+                idempotency_key=request.idempotency_key or "",
+                status=OrderState.rejected, retcode=-1,
+                message="MT5 pre-trade check unavailable; no order was sent",
+                created_at=time.time(),
+            )
+        check_retcode = getattr(check, "retcode", None)
+        if type(check_retcode) is not int or check_retcode != 0:
+            return OrderResult(
+                order_id=request.idempotency_key or "",
+                idempotency_key=request.idempotency_key or "",
+                status=OrderState.rejected,
+                retcode=(check_retcode if type(check_retcode) is int else -1),
+                message="MT5 pre-trade check rejected the request; no order was sent",
+                created_at=time.time(),
+            )
+        # The MT5 Python binding is process-global; do not let an account switch
+        # between preflight and submission redirect an approved request.
+        self._account_identity()
         result = mt5.order_send(payload)
         if result is None:
             raise BrokerError(f"order_send returned None: {mt5.last_error()}", retcode=-1)

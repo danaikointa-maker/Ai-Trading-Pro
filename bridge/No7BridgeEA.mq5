@@ -667,8 +667,10 @@ string DoOrder(const string command)
    bool is_buy = (side == "buy" || side == "up" || side == "long");
    MqlTradeRequest request;
    MqlTradeResult result;
+   MqlTradeCheckResult check;
    ZeroMemory(request);
    ZeroMemory(result);
+   ZeroMemory(check);
    request.action = TRADE_ACTION_DEAL;
    request.symbol = symbol;
    request.volume = NormalizeVolume(symbol, volume);
@@ -681,9 +683,14 @@ string DoOrder(const string command)
    request.comment = "no7 bridge";
    request.type_filling = FillingMode(symbol);
 
-    if(InpReadOnly || !DemoIdentityValid())
-       return("\"ok\":false,\"error\":\"read-only or invalid Demo identity\"");
-    if(!OrderSend(request, result))
+   if(InpReadOnly || !DemoIdentityValid())
+      return("\"ok\":false,\"error\":\"read-only or invalid Demo identity\"");
+   if(!OrderCheck(request, check) || check.retcode != 0)
+      return(StringFormat("\"ok\":false,\"error\":\"pre-trade check failed; no order sent\",\"retcode\":%d",
+                          (int)check.retcode));
+   if(InpReadOnly || !DemoIdentityValid())
+      return("\"ok\":false,\"error\":\"read-only or invalid Demo identity\"");
+   if(!OrderSend(request, result))
       return(StringFormat("\"ok\":false,\"error\":\"OrderSend failed %d: %s\",\"retcode\":%d",
                           GetLastError(), result.comment, (int)result.retcode));
    if(result.retcode != TRADE_RETCODE_DONE && result.retcode != TRADE_RETCODE_PLACED)
