@@ -18,6 +18,7 @@ Updated: 2026-11-19. These are comparisons based on repository content, NOT inst
 | Symbol | app XAUUSD | request XAUUSD.m | resolve exact mapping from broker spec; no hardcoding suffix |
 | Architecture | FastAPI/Vue3/MQL5, SQLite | prior prompts may suggest new services/database | reuse existing stack; PG only approved migration |
 | Position modification | `manager.py` can generate BE and trailing actions | new ProtectionEngine | single candidate reducer and one existing execution gateway, avoid two commands |
+| Linked MT5 Demo orders | Dirty PC dashboard/runtime source has per-account `demo-execution`, `orders`, and `demo-auto` routes; current VM OpenAPI exposes them as POST. V4 branch lacks these routes and `/api/trading/order` still targets only the active runtime adapter. VM feed is `simulate`, and the VM checkout is dirty | UI shows per-account Demo control and order buttons | do not treat the dirty runtime as a V4 release; reconcile the per-account ownership/bridge/risk guards into the canonical branch after U01 review, then validate Demo end-to-end. The earlier 405 is not reproduced by current OpenAPI; method availability alone does not certify account readiness or order safety |
 | MATH | old docs describe point/lot and legacy partials | newer risk/BE maths | tech math doc reflects active code; new math in plan until implemented |
 | Reality | simulation default; demo not fully validated | prompts say auto/open immediately | not considered operational; Demo explicit permission only |
 
