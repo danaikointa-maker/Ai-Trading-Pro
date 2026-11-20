@@ -962,7 +962,8 @@ class TradingRuntime:
         # Archive only recently observed, already-closed M5 bars for positions
         # with an available *matching* analysed context, including non-active
         # symbols. Never fetch a current chart to fill a missing past interval.
-        feed = getattr(getattr(self, "market", None), "feed_mode", None)
+        market = getattr(self, "market", None)
+        feed = getattr(market, "effective_mode", getattr(market, "feed_mode", None))
         if not isinstance(feed, str) or not feed.strip():
             feed = getattr(adapter, "adapter_type", "unknown")
         if not isinstance(feed, str) or not feed.strip():
@@ -1607,7 +1608,7 @@ class TradingRuntime:
             "reconcile": self.last_reconcile,
             "unresolved_orders": self.gateway.unresolved_orders(self.adapter.id),
             "errors": errors,
-            "feed": getattr(self, "feed_mode", None)
+            "feed": getattr(self.market, "effective_mode", getattr(self, "feed_mode", None))
             or ("simulated" if self.adapter.adapter_type == "simulated_mt5" else "mt5"),
             "alerts": self.notifier.recent(8),
         }
@@ -1628,6 +1629,8 @@ class TradingRuntime:
             "training": self.training.get("state", "idle"),
             "notify": self.notifier.status()["state"],
         }
+        if self.market.publisher.get("enabled"):
+            services["feed"] = "ok" if self.market._publisher_fresh() else "stale"
         lease_state = self.lease.get("state", "unclaimed")
         role = self.role()
         if self.replica:
@@ -1642,7 +1645,7 @@ class TradingRuntime:
             "server_time": time.time(),
             "virtual_time": self.market.now(),
             "uptime_seconds": round(time.time() - self.started_at, 1),
-            "feed_mode": getattr(self, "feed_mode", None)
+            "feed_mode": getattr(self.market, "effective_mode", getattr(self, "feed_mode", None))
             or self.settings.market_data.get("feed_mode", "simulate"),
             "feed_note": getattr(self, "feed_note", None),
             "feed": self._feed_status(),
@@ -1736,6 +1739,12 @@ class TradingRuntime:
         }
 
     def _feed_status(self) -> dict[str, Any]:
+        if self.market.publisher.get("enabled"):
+            age = (time.time() - self.market._publisher_received_at
+                   if self.market._publisher_received_at else None)
+            return {"mode": self.market.effective_mode, "fresh": self.market._publisher_fresh(),
+                    "age_seconds": round(age, 2) if age is not None else None,
+                    "account_id": self.market.publisher.get("account_id")}
         describe = getattr(self.feed, "describe", None)
         if callable(describe):
             try:

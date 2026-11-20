@@ -44,6 +44,10 @@ Snapshot ใหม่จาก `No7BridgeEA.mq5` ประกาศ `time_basis:
 
 Snapshot เก่าที่ไม่มี `time_basis` คงสัญญาเดิมเพื่อ backward compatibility; ห้ามใช้หลักฐานเก่านี้รับรองว่าเวลาตรงกับ MT5. `GET /api/market/candles` คืน `time: {basis, display_basis, server_utc_offset_seconds}`; chart ใช้ offset แสดงเวลาโบรกเกอร์ ส่วน candle/tick ที่ส่งเข้า engine ยังคงเป็น UTC. การ map ใช้ offset ปัจจุบัน จึงยังต้องทดสอบ broker DST/การเปลี่ยน offset กับ terminal จริงก่อนรับรอง history ที่คร่อมการเปลี่ยน DST. `TimeTradeServer()` เป็นเวลาประมาณจาก terminal PC; ความสดของ snapshot และ future-tick gate ยังคงบังคับใช้แยกกัน.
 
+### Isolated MT5 market publisher (V4 source; not deployed)
+
+`POST /api/market/publish/mt5` เป็น data plane แบบ read-only แยกจาก EA bridge. รับเฉพาะ Demo identity, timestamp anchors, quotes, OHLCV rates และ symbol specs; schema ปฏิเสธฟิลด์ตำแหน่งบนสุดอย่าง positions/orders/commands. ใช้ `NO7_MT5_MARKET_PUBLISHER_TOKEN` ที่แยกจาก `NO7_BRIDGE_TOKEN`. เมื่อเปิดใช้ chart จะใช้เฉพาะ snapshot สด และปฏิเสธข้อมูลเก่าแทนการ fallback เป็น simulation. ปิดเป็นค่าเริ่มต้น. การตั้งค่าปัจจุบันรองรับ publisher identity เดียวต่อ runtime; การแยก cache ไม่ได้หมายความว่าระบบรองรับหลายบัญชีหรือเทรดหลายบัญชีพร้อมกัน. ส่ง token ผ่าน HTTPS หรือ SSH loopback tunnel เท่านั้น; ห้ามส่ง bearer token บน plaintext LAN HTTP.
+
 ## PWA (manifest / service worker / offline)
 
 | path | หมายเหตุ |
@@ -144,6 +148,7 @@ CORS เป็น **allowlist**: ค่าเริ่มต้นไม่ใ�
 |---|---|---|
 | GET | `/api/market/candles?symbol=&timeframe=&limit=` | `limit ≥ 20` |
 | GET | `/api/market/ticker?symbol=` | last/bid/ask/spread |
+| POST | `/api/market/publish/mt5` | dedicated `Bearer` market-publisher token; Demo quotes/rates/specs only, separate from EA bridge poll/command queue |
 | GET | `/api/market/specs?symbol=` | digits/point/tick/contract/lot step/stops level |
 | GET | `/api/market/calculator?symbol=&points=&lot=` | points → profit (ไม่รวม spread/commission/swap/slippage) |
 | GET | `/api/analysis/{symbol}` | snapshot เต็ม (trend, structure, zones, indicators, regime) |
