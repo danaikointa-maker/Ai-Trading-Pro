@@ -361,6 +361,12 @@ curl -s -X POST localhost:8000/api/brokers/mt5-bridge-demo/activate \
 - คำสั่งที่ EA ไม่ ack จะหมดอายุ (`command_ttl_seconds` 30s / `ack_grace_seconds` 20s) และ **ไม่ส่งซ้ำ**
 - ต้องเปิด Algo Trading ในเทอร์มินัล ไม่งั้น EA ไม่ execute (ฝั่งเซิร์ฟเวอร์จะเห็นแค่ `expired`)
 
+**สถานะ V4 (2026-11-20):** source EA ส่ง `time_basis: broker_server`, `server_time` และ `utc_time`
+เพื่อให้ adapter แปลงเวลาเข้า UTC; ต้อง compile และทดสอบ capture บน Demo ใหม่ก่อนใช้ข้อมูลนั้นอนุมัติสัญญาณ.
+อย่าใช้ขั้นตอน activate/เปิด Algo Trading ข้างบนกับ runtime ปัจจุบันโดยอัตโนมัติ: VM100 ยังไม่ตรงกับ source
+และ V4 Demo order route ยังไม่พร้อม/ไม่เปิดใช้งาน. คำสั่ง Demo จะต้องผ่าน ExecutionGateway, identity/risk/freshness
+และ reconciliation gate หลังมี test evidence และอนุมัติการทดสอบ Demo แยกต่างหากเท่านั้น.
+
 ## 12.4 แจ้งเตือนออกนอกเครื่อง (Telegram / LINE / webhook)
 
 in-app ทำงานเสมอ; ช่องทางภายนอกเป็น **opt-in** (ต้องมี token *และ* เปิดใช้)

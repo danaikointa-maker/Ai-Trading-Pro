@@ -1,5 +1,7 @@
 # U00 Project Audit — Unified Master Plan V4
 
+> Historical snapshot dated 2026-11-20 from a separate feature worktree. Current V4 source/host findings are in [U00-PROJECT-AUDIT-2026-11-21](audits/U00-PROJECT-AUDIT-2026-11-21.th.md); use that report and the task register for current status.
+
 Audit date: 2026-11-20 (Asia/Bangkok)  
 Repository: `danaikointa-maker/Ai-Trading-Pro`  
 Planning baseline: `plan/unified-development-v4` at `559a2ded5dc1530cfcb61072e2432220742f6d0d`  

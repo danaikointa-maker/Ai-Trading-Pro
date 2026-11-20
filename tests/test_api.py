@@ -234,6 +234,17 @@ def test_ticker_endpoint_retains_quote_when_market_is_closed(client, auth, runti
     assert response.json() == {"tick": tick.model_dump(), "stale": True, "source": "persisted"}
 
 
+def test_market_candles_expose_broker_clock_for_chart_display(client, auth, runtime, monkeypatch):
+    monkeypatch.setattr(runtime.adapter, "timestamp_metadata", lambda: {
+        "basis": "utc", "display_basis": "broker_server", "server_utc_offset_seconds": 7200,
+    }, raising=False)
+    response = client.get("/api/market/candles?symbol=XAUUSD&timeframe=M1&limit=20", headers=auth)
+    assert response.status_code == 200, response.text
+    assert response.json()["time"] == {
+        "basis": "utc", "display_basis": "broker_server", "server_utc_offset_seconds": 7200,
+    }
+
+
 def test_health_is_public(client):
     res = client.get("/api/system/health")
     assert res.status_code == 200

@@ -32,7 +32,9 @@
 - **Freshness ของเวลา MT5 ยังไม่ผ่านการรับรอง**: บันทึก read-only ของ Connext-Demo
   วันที่ 2026-11-20 พบ `XAUUSD.s` timestamp ล้ำหน้าเวลาพีซีประมาณ 7,200 วินาที.
   `MarketDataService` ปฏิเสธ tick ที่ล้ำหน้าเกิน `data_future_tolerance_seconds` (2 วินาที)
-  แต่การ map เวลา broker-server/DST และการ capture สดซ้ำยังไม่ผ่าน acceptance.
+  Bridge EA ใน source ระบุ broker-server time พร้อม UTC anchor ใน snapshot เดียวกัน;
+  `BridgeBroker` normalize timestamps เป็น UTC และปฏิเสธ anchor ที่ผิดรูปแบบ/เก่า/ล้ำเวลา.
+  ยังไม่ compile EA หรือยืนยัน capture สดหลังเปลี่ยน และ DST/offset ในอดีตยังไม่ผ่าน acceptance.
 - ใน V4 branch นี้ยังไม่มี API อ่าน positions รายบัญชี MT5; `tests/test_mt5_readonly.py`
   ยืนยัน adapter-level behavior เท่านั้น ไม่ใช่ UI/API หรือ broker round-trip.
 - **ยังไม่มี tick data จริง** สำหรับ backtest → ใช้ M1 ที่ resample เป็น M5/M15/H1/H4

@@ -6,7 +6,7 @@ Status definitions: EXISTS_CODE = seen in repository but not live certified; NEE
 | ID | Phase | Owner code path | Baseline status | Specific next task | Acceptance evidence |
 |---|---|---|---|---|---|
 | U00 | Audit | docs/, tests/, config/ | DONE (source audit; live feed unavailable) | See `docs/audits/U00-PROJECT-AUDIT-2026-11-21.th.md`; VM100 8000 is development/simulated, 18081 is isolated staging on another branch with stale feed | commits `85c3936`, `fe9f1c4`; baseline `559a2de`; focused test/build receipt in audit report; backup restore and fresh feed remain NOT TESTED |
-| U01 | Market data | services/market_data/, brokers | PARTIAL / BLOCKED (code added; live publisher not running) | freshness gate now rejects future timestamps; add and validate the existing read-only PC publisher in V4, align only isolated 18081, then capture fresh Demo quote data and provenance | future/stale/clock-skew and publisher tests; current V4 staging health + timestamped broker Demo quote receipt |
+| U01 | Market data | services/market_data/, brokers | PARTIAL / BLOCKED (freshness + bridge clock normalization source added; publisher not running) | market freshness rejects excessive future ticks; bridge now labels broker-server clock and normalizes using same-snapshot UTC anchor. Integrate/review existing read-only PC publisher, align only isolated 18081, and capture fresh Demo quote data/provenance | rerun future/stale/clock-skew, bridge normalization and publisher tests; MetaEditor compile + post-change Demo tick + V4 staging health receipt |
 | U02 | Signal confirmation | services/strategy_engine/ | PLANNED | single 100-point WAIT state + closed M1/M5, timeout, dedup | 99/100-point/expiry/replay tests |
 | U03 | Risk profile | services/risk_engine/ config/risk.yaml | EXISTS_CODE | add VERSIONED candidate separately; audit precedence with legacy | invariants, no activation, config diff |
 | U04 | Initial SL/TP | services/risk_engine/planner.py | EXISTS_CODE | broker-aware ATR/structure and costs with single planning source | lot min and net RR tests |
@@ -19,6 +19,13 @@ Status definitions: EXISTS_CODE = seen in repository but not live certified; NEE
 | U11 | Demo acceptance | tests/, scripts/ | BLOCKED | approve and conduct real broker Demo/power-loss/partial-fill tests | receipts and rollback, no LIVE |
 | U12 | AI Trader Team | integrations/no7_local_ai/ | PLANNED | read-only shared research/observability | explicit non-execution access test |
 | U13 | Documentation sync | README/API/MATH/RUNBOOK/LIMITATIONS | PLANNED | patch tech docs only alongside code changes | docs checklist in each PR |
+
+### U01 implementation delta — future-tick refusal and broker clock normalization
+
+- Source commits reused from the existing feature branch: `21a8b65` (reject future ticks) and `5952e42` (same-snapshot broker-server/UTC normalization). No second market service was created.
+- `MarketDataService.data_quality()` now fails closed when a tick is beyond the configured clock-skew tolerance. `BridgeBroker` normalizes quote, candle and position timestamps only when a declared broker-server snapshot has a valid, fresh UTC anchor; the EA now emits that anchor. Market candles expose display-clock metadata.
+- Test definitions were ported with the code; exact V4 worktree rerun results, MetaEditor compilation and live Demo post-change capture are pending. Rollback: revert these two focused commits; no runtime/config defaults were activated beyond the 2-second future-tick tolerance.
+- No EA compile, publisher start, service restart, order or deployment was performed by these source commits.
 
 ## Anti-duplication ledger
 - Do NOT create a second RiskEngine or PositionManager. Existing: `services/risk_engine/engine.py`, `manager.py`.
