@@ -217,6 +217,21 @@ def test_gateway_rejects_live_account_before_modify_or_intent(tmp_path):
         db.close()
 
 
+def test_read_only_bridge_is_rejected_before_modify_intent_reservation(tmp_path):
+    db = Database(tmp_path / "gateway-read-only.db")
+    adapter, gateway = _gateway_case(db)
+    adapter.adapter_type = "bridge"
+    adapter.relay = SimpleNamespace(read_only=True)
+    try:
+        assert gateway.modify(adapter, "T-1", sl=1995.0, reason="trailing") is False
+
+        adapter.positions.assert_not_called()
+        adapter.modify_position.assert_not_called()
+        assert db.query("SELECT * FROM position_modify_intents") == []
+    finally:
+        db.close()
+
+
 def test_gateway_rejects_stop_inside_broker_stops_level(tmp_path):
     db = Database(tmp_path / "gateway-stops.db")
     adapter, gateway = _gateway_case(db, stops_level_points=10)

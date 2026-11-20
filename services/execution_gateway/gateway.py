@@ -377,6 +377,10 @@ class ExecutionGateway:
             info = adapter.account_info()
             if str(info.account_type).lower() != "demo":
                 raise BrokerError("position modification is restricted to DEMO/Paper accounts")
+            relay = getattr(adapter, "relay", None)
+            if (getattr(adapter, "adapter_type", "") == "bridge"
+                    and getattr(relay, "read_only", True)):
+                raise BrokerError("MT5 bridge is read-only; modify blocked before intent reservation")
             if adapter.health() != Health.connected:
                 raise BrokerError("broker is not connected; modify blocked")
 
