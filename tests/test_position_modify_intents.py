@@ -390,6 +390,35 @@ def test_gateway_timeout_is_reconciled_from_exact_readback_without_resend(
         db.close()
 
 
+@pytest.mark.parametrize("interrupted_state", ["sending", "accepted_unverified"])
+def test_interrupted_modify_state_stays_fenced_after_restart(tmp_path, interrupted_state):
+    path = tmp_path / f"gateway-restart-{interrupted_state}.db"
+    db = Database(path)
+    owner = _owner(db)
+    key, detail = _gateway_modify_key(owner)
+    ledger = PositionEventLog(db)
+    ledger.reserve_modify(broker_id="demo", ticket="T-1", idempotency_key=key,
+                          account_identity=owner, detail=detail)
+    assert ledger.transition_modify(broker_id="demo", ticket="T-1", idempotency_key=key,
+                                    account_identity=owner, state="sending")
+    if interrupted_state == "accepted_unverified":
+        assert ledger.transition_modify(broker_id="demo", ticket="T-1", idempotency_key=key,
+                                        account_identity=owner, state="accepted_unverified")
+    db.close()
+
+    reopened = Database(path)
+    adapter, _ = _gateway_case(reopened)
+    gateway = ExecutionGateway(SimpleNamespace(execution={}), reopened)
+    try:
+        assert gateway.modify(adapter, "T-1", sl=1995.0, reason="trailing") is False
+
+        adapter.modify_position.assert_not_called()
+        assert reopened.query_one(
+            "SELECT state FROM position_modify_intents")["state"] == interrupted_state
+    finally:
+        reopened.close()
+
+
 def test_gateway_rejects_live_account_before_modify_or_intent(tmp_path):
     db = Database(tmp_path / "gateway-live.db")
     adapter, gateway = _gateway_case(db, account_type="live")
