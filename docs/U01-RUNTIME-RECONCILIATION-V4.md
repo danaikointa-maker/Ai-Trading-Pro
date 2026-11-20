@@ -20,6 +20,8 @@ A later PC probe first used the wrong paths (`/api/health`, `/openapi.json`), wh
 
 Using the actual paths, read-only GET requests to `/api/system/health` and `/api/openapi.json` both succeeded on ports `18000` and `18080`. Both health responses report `status=ok`, `feed_mode=simulate`; both schemas expose 88 paths and do not contain `/api/market/publish/mt5`. Direct SSH confirmed VM100's `integration/unified-tradeai` Uvicorn process on `127.0.0.1:8000`, with the same health and schema results. Therefore the API tunnel works; the runtime itself is still the older simulated-feed API without the isolated publisher route. No authenticated API call, configuration change, or trading mutation was attempted. Review/reconcile the dirty VM runtime and deploy the reviewed isolated market route before Demo data acceptance.
 
+The repository preflight `scripts/check_mt5_market_runtime.py` was run against both loopback ports. Each result was `health_api=true`, `publisher_route=false`, `publisher_fresh=false`, `feed_mode=simulate`, `ready=false`.
+
 Fresh read-only Git inventory of that VM checkout: branch `integration/unified-tradeai`, HEAD `57fc321`; 21 tracked files modified and 5 untracked files (including `.orig` copies). `git diff --stat` reports 8,782 insertions and 7,868 deletions across the tracked changes. File contents were not read during this inventory. This is too broad for a safe blind overlay; reconcile selected behavior in a separate reviewed worktree/release artifact and preserve the VM checkout untouched.
 
 ## Why the old publisher was refused
