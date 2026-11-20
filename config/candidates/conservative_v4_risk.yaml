@@ -37,6 +37,7 @@ plan_options:
   sl_structure_buffer_atr: 0.2
   swing_lookback_bars: 10
   directional_tick_rounding: true
+  single_target_r: 2.0
   enforcement_status: candidate_only
 
 position_protection:

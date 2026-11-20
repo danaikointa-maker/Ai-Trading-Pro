@@ -56,6 +56,7 @@ class PlanInputs:
     sl_structure_buffer_atr: float = 0.35
     swing_lookback_bars: int = 0
     m5_bar_count: int = 0
+    single_target_r: float | None = None
 
 
 @dataclass
@@ -111,6 +112,9 @@ def build_plan_inputs(*, risk_cfg: dict[str, Any], effective: Any,
         swing_lookback_bars=int(
             risk_cfg.get("plan_options", {}).get("swing_lookback_bars", 0)),
         m5_bar_count=int(m5_bar_count),
+        single_target_r=(float(risk_cfg["plan_options"]["single_target_r"])
+                         if risk_cfg.get("plan_options", {}).get("single_target_r") is not None
+                         else None),
         directional_tick_rounding=bool(
             risk_cfg.get("plan_options", {}).get("directional_tick_rounding", False)),
     )
@@ -349,11 +353,43 @@ class TradePlanner:
             spec, ctx.entry - sign * spec.points_to_price(sl_points), direction,
             is_stop=True, directional=ctx.directional_tick_rounding)
 
-        ladder, tp_notes, tp_blockers = self._tp_ladder(direction, ctx.entry, ctx)
+        single_target = ctx.single_target_r is not None
+        if single_target:
+            target_r = float(ctx.single_target_r)
+            if not math.isfinite(target_r) or target_r <= 0:
+                block("invalid_target_policy", "single-target R multiple must be positive")
+                return PlanResult(plan=None, blockers=blockers,
+                                  blocker_codes=codes, notes=notes)
+            target_points = sl_points * target_r
+            if target_points > ctx.max_points:
+                block("target_distance_max",
+                      f"{target_r:.2f}R target is {target_points:.0f} points, above configured "
+                      f"maximum {ctx.max_points:.0f}; reject instead of truncating the target")
+                return PlanResult(plan=None, blockers=blockers,
+                                  blocker_codes=codes, notes=notes)
+            if target_points <= spec.stops_level_points:
+                block("broker_target_distance", "single target is inside the broker stops level")
+                return PlanResult(plan=None, blockers=blockers,
+                                  blocker_codes=codes, notes=notes)
+            target_price = ctx.entry + sign * spec.points_to_price(target_points)
+            opposing = strongest_opposing_zone(
+                ctx.resistances if direction == Direction.up else ctx.supports,
+                ctx.entry, target_price, "up" if direction == Direction.up else "down")
+            if opposing is not None and opposing.quality != ZoneQuality.low:
+                block("opposing_zone",
+                      f"strong opposing zone {opposing.id} is before the {target_r:.2f}R target; "
+                      "reject the plan")
+                return PlanResult(plan=None, blockers=blockers,
+                                  blocker_codes=codes, notes=notes)
+            ladder = [target_points, target_points, target_points]
+            tp_notes: list[str] = [f"single target at {target_r:.2f}R; partials disabled"]
+            tp_blockers: list[str] = []
+        else:
+            ladder, tp_notes, tp_blockers = self._tp_ladder(direction, ctx.entry, ctx)
         notes.extend(tp_notes)
         for text in tp_blockers:
             block("opposing_zone", text)
-        closes = ctx.closes_pct or [40, 30, 30]
+        closes = [100, 0, 0] if single_target else (ctx.closes_pct or [40, 30, 30])
         closes = closes[:3] if len(closes) >= 3 else (closes + [100 / max(1, len(closes))] * 3)[:3]
         blended = float(sum(t * c for t, c in zip(ladder, closes)) / max(1e-9, sum(closes)))
 
@@ -392,35 +428,47 @@ class TradePlanner:
             block("stop_vs_costs", "stop distance is too small relative to trading costs")
 
         # --- partial close feasibility (lot step aware)
-        volumes = _split_lot(spec, lot, closes)
         partials: list[PartialTarget] = []
-        feasible_all = lot > 0
-        running = 0.0
-        for i, (tp, pct, vol) in enumerate(zip(ladder, closes, volumes), start=1):
-            running = round(running + vol, 4)
-            feasible = bool(lot > 0 and spec.lot_is_valid(vol) and vol >= spec.min_lot - 1e-9)
-            if not feasible:
-                feasible_all = False
+        if single_target:
             partials.append(PartialTarget(
-                level=i,
-                price=spec.round_price(ctx.entry + sign * spec.points_to_price(tp)),
-                points=round(tp, 0),
-                close_pct=pct,
-                volume=vol,
-                feasible=feasible,
-                note="" if feasible else (
-                    f"{vol:.2f} lot cannot be closed legally with step {spec.lot_step} / "
-                    f"min {spec.min_lot}"),
+                level=1, price=self._round_level(
+                    spec, ctx.entry + sign * spec.points_to_price(ladder[0]), direction,
+                    is_stop=False, directional=ctx.directional_tick_rounding),
+                points=round(ladder[0], 0), close_pct=100.0, volume=lot,
+                feasible=bool(lot > 0 and spec.lot_is_valid(lot)),
+                note="single broker TP; manager partial closes disabled",
             ))
-        # The ladder must add up to exactly the position that was opened.
-        if lot > 0 and abs(running - lot) > 1e-6:
-            notes.append(f"Partial ladder sums to {running:.2f} lot instead of {lot:.2f}; "
-                         f"remaining volume runs to the final target.")
-        if not feasible_all:
-            notes.append(
-                f"Lot {lot:.2f} is too small to split into 3 partials legally "
-                f"(min {spec.min_lot}, step {spec.lot_step}) — the ladder will run as a single position "
-                f"or be skipped.")
+        else:
+            volumes = _split_lot(spec, lot, closes)
+            feasible_all = lot > 0
+            running = 0.0
+            for i, (tp, pct, vol) in enumerate(zip(ladder, closes, volumes), start=1):
+                running = round(running + vol, 4)
+                feasible = bool(lot > 0 and spec.lot_is_valid(vol) and vol >= spec.min_lot - 1e-9)
+                if not feasible:
+                    feasible_all = False
+                partials.append(PartialTarget(
+                    level=i,
+                    price=self._round_level(
+                        spec, ctx.entry + sign * spec.points_to_price(tp), direction,
+                        is_stop=False, directional=ctx.directional_tick_rounding),
+                    points=round(tp, 0),
+                    close_pct=pct,
+                    volume=vol,
+                    feasible=feasible,
+                    note="" if feasible else (
+                        f"{vol:.2f} lot cannot be closed legally with step {spec.lot_step} / "
+                        f"min {spec.min_lot}"),
+                ))
+            # The ladder must add up to exactly the position that was opened.
+            if lot > 0 and abs(running - lot) > 1e-6:
+                notes.append(f"Partial ladder sums to {running:.2f} lot instead of {lot:.2f}; "
+                             f"remaining volume runs to the final target.")
+            if not feasible_all:
+                notes.append(
+                    f"Lot {lot:.2f} is too small to split into 3 partials legally "
+                    f"(min {spec.min_lot}, step {spec.lot_step}) — the ladder will run as a single position "
+                    f"or be skipped.")
 
         if blockers:
             return PlanResult(plan=None, blockers=blockers, blocker_codes=codes,
@@ -447,7 +495,7 @@ class TradePlanner:
             estimated_cost=round(costs, 1),
             expected_value=0.0,
             partials=partials,
-            target_mode=ctx.target_mode,
+            target_mode="single_2r" if single_target else ctx.target_mode,
             notes=notes + ([sl_note] if sl_note else []),
         )
         return PlanResult(plan=plan, blockers=[], blocker_codes=[], notes=plan.notes)

@@ -45,10 +45,10 @@ from runtime settings.
    stops/freeze constraints and post-fill accepted levels are not all verified
    there. These belong to the existing execution gateway / broker reconciliation
    contract and must remain a hard pre-send/post-fill gate.
-6. The runtime has no accepted V4 mode that guarantees single 2R target,
-   partials off, ATR(14) from a closed M5 bar and 10-bar swing provenance.
-   `AnalysisService` already passes closed M5 frames for structure, but these
-   exact inputs need explicit tests before they can be called verified.
+6. Candidate planner support now produces one 2R broker TP, one 100% target
+   record, disables manager partials for that plan and rejects opposing zones.
+   Runtime profile remains inactive; post-fill broker acceptance remains
+   unverified.
 7. The audit found ATR buffers treated as raw price units and structural
    distances compared as prices to point thresholds. Both now convert between
    points and price using `SymbolSpec`. A high-quality opposing zone that leaves
@@ -60,7 +60,8 @@ from runtime settings.
 `pytest tests/test_invariants.py tests/test_spec_safety.py
 tests/test_v4_risk_candidate.py tests/test_v4_plan_candidate.py
 tests/test_risk_engine.py tests/test_risk_state_failure.py
-tests/test_smart_entry_continuation.py -q` — **89 passed**.
+tests/test_smart_entry_continuation.py tests/test_v4_single_target_manager.py
+-q` — **94 passed**.
 These protect current sizing, side-correct geometry, broker tick grid, RR,
 partial-volume feasibility, legacy Risk Engine vetoes and candidate isolation.
 They do not establish broker Demo acceptance or validate an SL/TP order.
@@ -76,7 +77,8 @@ Candidate-only tick-normalization tests cover BUY and SELL geometry with a
 3. **DONE:** Auto and Manual construct inputs through the shared helper.
 4. **DONE:** Candidate ATR+structure sizing, closed-M5 lookback, max-stop
    rejection and point/price conversion tests.
-5. Add candidate single-2R / partial-off semantics and min-lot/cost cases.
+5. **DONE:** Candidate 2R target, partial-off, opposing-zone rejection and
+   net-RR behavior are covered.
 6. Verify `order_check`, margin, stops/freeze levels and post-fill SL/TP only
    through the existing ExecutionGateway and an explicitly approved Demo.
 
