@@ -81,6 +81,33 @@ class BridgeBroker(BrokerAdapter):
                 f"refusing to serve stale account/position data")
         return session.snapshot
 
+    @staticmethod
+    def _server_utc_offset(snapshot: dict[str, Any]) -> int:
+        """Return the snapshot's broker-server offset, failing closed if malformed.
+
+        The EA reports MT5 tick/bar epochs in broker-server time. Keep timestamps
+        in UTC inside the application so freshness and closed-bar checks share one
+        clock. Legacy snapshots without a declared basis retain their old contract.
+        """
+        if snapshot.get("time_basis") != "broker_server":
+            return 0
+        try:
+            server_time = float(snapshot["server_time"])
+            utc_time = float(snapshot["utc_time"])
+        except (KeyError, TypeError, ValueError) as exc:
+            raise BrokerError("bridge server-time snapshot is missing its UTC anchor") from exc
+        if not math.isfinite(server_time) or not math.isfinite(utc_time):
+            raise BrokerError("bridge server-time snapshot has invalid clock values")
+        offset = server_time - utc_time
+        # Broker clocks outside this range or a terminal UTC clock far from the API
+        # host cannot be safely interpreted. Never guess a fixed +1/+2 hour shift.
+        if abs(offset) > 14 * 60 * 60:
+            raise BrokerError("bridge broker-server UTC offset is outside the supported range")
+        anchor_age = time.time() - utc_time
+        if anchor_age < -2 or anchor_age > 60:
+            raise BrokerError("bridge UTC clock anchor is future-dated or stale")
+        return int(round(offset))
+
     def _require_connected(self) -> None:
         state = self.relay.session_health(self.account_id)
         if state != "connected":
@@ -139,21 +166,44 @@ class BridgeBroker(BrokerAdapter):
         return SymbolSpec(**merged)
 
     def ticker(self, symbol: str) -> Tick:
-        quotes = self._snapshot().get("quotes") or {}
+        snapshot = self._snapshot()
+        offset = self._server_utc_offset(snapshot)
+        quotes = snapshot.get("quotes") or {}
         quote = quotes.get(symbol)
         if not quote:
             raise BrokerError(f"bridge snapshot has no quote for {symbol}")
         bid, ask = float(quote.get("bid") or 0.0), float(quote.get("ask") or 0.0)
         if bid <= 0 or ask <= 0 or ask < bid:
             raise BrokerError(f"bridge quote for {symbol} is unusable (bid={bid}, ask={ask})")
+        raw_tick_time = quote.get("t")
+        if snapshot.get("time_basis") == "broker_server":
+            try:
+                tick_time = float(raw_tick_time)
+            except (TypeError, ValueError) as exc:
+                raise BrokerError("bridge quote is missing its broker-server timestamp") from exc
+            if not math.isfinite(tick_time) or tick_time <= 0:
+                raise BrokerError("bridge quote has an invalid broker-server timestamp")
+        else:
+            tick_time = float(raw_tick_time or time.time())
         spec = self.symbol_spec(symbol)
-        return Tick(t=float(quote.get("t") or time.time()), bid=bid, ask=ask,
+        return Tick(t=tick_time - offset, bid=bid, ask=ask,
                     spread_points=round((ask - bid) / spec.point, 1),
                     last=float(quote.get("last") or (bid + ask) / 2))
 
+    def timestamp_metadata(self) -> dict[str, Any]:
+        """Describe the UTC normalization and the broker clock used for display."""
+        snapshot = self._snapshot()
+        if snapshot.get("time_basis") != "broker_server":
+            return {"basis": "unknown", "display_basis": "unknown",
+                    "server_utc_offset_seconds": None}
+        return {"basis": "utc", "display_basis": "broker_server",
+                "server_utc_offset_seconds": self._server_utc_offset(snapshot)}
+
     def candles(self, symbol: str, timeframe: str, limit: int) -> pd.DataFrame:
         """Rates the EA forwarded. Nothing is synthesised here: absent means an error."""
-        rates = (self._snapshot().get("rates") or {})
+        snapshot = self._snapshot()
+        offset = self._server_utc_offset(snapshot)
+        rates = (snapshot.get("rates") or {})
         bars = ((rates.get(symbol) or {}).get(timeframe)) or []
         if not bars:
             raise BrokerError(
@@ -170,6 +220,8 @@ class BridgeBroker(BrokerAdapter):
         for column in ("o", "h", "l", "c", "v"):
             frame[column] = frame[column].astype(float)
         frame["t"] = frame["t"].astype("int64")
+        if offset:
+            frame["t"] -= offset
         return frame[["t", "o", "h", "l", "c", "v"]]
 
     # --------------------------------------------------------------- trading
@@ -272,7 +324,9 @@ class BridgeBroker(BrokerAdapter):
 
     def positions(self) -> list[Position]:
         """The EA's snapshot *is* the position list — replaced, never merged."""
-        rows = self._snapshot().get("positions")
+        snapshot = self._snapshot()
+        offset = self._server_utc_offset(snapshot)
+        rows = snapshot.get("positions")
         if not isinstance(rows, list):
             raise BrokerError("bridge snapshot has no valid positions list")
         out: list[Position] = []
@@ -288,7 +342,7 @@ class BridgeBroker(BrokerAdapter):
                 entry=float(row.get("price_open") or row.get("entry") or 0.0),
                 sl=float(row.get("sl") or 0.0),
                 tp=float(row.get("tp") or 0.0),
-                open_time=int(row.get("time") or 0),
+                open_time=int(row.get("time") or 0) - offset,
                 current_price=float(row.get("price_current") or row.get("price_open") or 0.0),
                 points=float(row.get("points") or 0.0),
                 unrealized=float(row.get("profit") or 0.0),
