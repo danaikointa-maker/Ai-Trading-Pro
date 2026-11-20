@@ -16,9 +16,9 @@ The active PC and VM checkouts are dirty `integration/unified-tradeai` copies, n
 
 ## Follow-up read-only probe
 
-A later PC probe of `http://127.0.0.1:18000` and `:18080` returned the Vue/Vite application HTML. `GET /api/health` returned HTTP 404 on both, and `/openapi.json` also returned HTML rather than an API schema. This means these two browser-facing ports do not currently provide a verifiable API health/schema surface; the earlier health result above is historical and must not be treated as the present API state. No authenticated API call or mutation was attempted. Resolve the active API/tunnel port mapping and repeat the read-only health/OpenAPI probe before Demo acceptance.
+A later PC probe of `http://127.0.0.1:18000` and `:18080` returned Vue/Vite application HTML. `GET /api/health` returned HTTP 404 on both, and `/openapi.json` also returned HTML. Listener inspection found `18000` owned by `node` and `18080` owned by `ssh`; no local listener was found on `8000`. Process IDs are transient and intentionally omitted.
 
-Listener inspection found `18000` owned by `node` and `18080` owned by `ssh`; no local listener was found on `8000`. This matches a frontend plus an SSH forward, but the forwarded destination currently responds as a web page rather than a verifiable API schema. Process IDs are transient and intentionally omitted.
+A direct read-only SSH inspection then confirmed VM100's `integration/unified-tradeai` Uvicorn process on `127.0.0.1:8000`. Its actual health path is `/api/system/health` (not `/api/health`) and reports `status=ok`, `feed_mode=simulate`. The schema path is `/api/openapi.json`; it does not contain `POST /api/market/publish/mt5`. Thus the API is reachable on VM100, but the current local `18080` forward is presenting frontend HTML instead of exposing the API path used by the health check. No authenticated API call, configuration change, or trading mutation was attempted. Fix/verify the API tunnel mapping and deploy the reviewed isolated market route before Demo acceptance.
 
 ## Why the old publisher was refused
 
