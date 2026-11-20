@@ -6,11 +6,26 @@ from unittest.mock import Mock
 import time
 from concurrent.futures import ThreadPoolExecutor
 from threading import Barrier
+import multiprocessing
 
 from packages.shared_schemas.models import Direction, Health, Position, SymbolSpec, Tick
 from packages.persistence.db import Database
 from packages.persistence.position_events import PositionEventLog
 from services.execution_gateway.gateway import ExecutionGateway
+
+
+def _reserve_modify_in_child(path: str, key: str, stop: float, barrier, queue) -> None:
+    db = Database(path)
+    try:
+        barrier.wait(timeout=5)
+        result = PositionEventLog(db).reserve_modify(
+            broker_id="demo", ticket="T-1", idempotency_key=key,
+            account_identity=_owner(db), detail={"sl": stop})
+        queue.put(result)
+    except Exception as exc:  # propagate child failure to the parent test
+        queue.put({"child_error": str(exc)})
+    finally:
+        db.close()
 
 
 def _owner(db: Database, login: str = "123") -> dict[str, str]:
@@ -131,6 +146,42 @@ def test_concurrent_connections_reserve_only_one_modify_for_ticket(tmp_path):
     finally:
         first_db.close()
         second_db.close()
+
+
+def test_separate_processes_reserve_only_one_modify_for_ticket(tmp_path):
+    path = str(tmp_path / "modify-processes.db")
+    bootstrap = Database(path)
+    bootstrap.close()
+    context = multiprocessing.get_context("spawn")
+    barrier = context.Barrier(2)
+    queue = context.Queue()
+    processes = [
+        context.Process(target=_reserve_modify_in_child,
+                        args=(path, "process-a", 1995.0, barrier, queue)),
+        context.Process(target=_reserve_modify_in_child,
+                        args=(path, "process-b", 1996.0, barrier, queue)),
+    ]
+    try:
+        for process in processes:
+            process.start()
+        results = [queue.get(timeout=20) for _ in processes]
+        for process in processes:
+            process.join(timeout=20)
+
+        assert all(process.exitcode == 0 for process in processes)
+        assert not any("child_error" in result for result in results)
+        assert sum(bool(result.get("created")) for result in results) == 1
+        assert sum(bool(result.get("blocked")) for result in results) == 1
+        check = Database(path)
+        try:
+            assert len(check.query("SELECT * FROM position_modify_intents")) == 1
+        finally:
+            check.close()
+    finally:
+        for process in processes:
+            if process.is_alive():
+                process.terminate()
+                process.join(timeout=3)
 
 
 def test_modify_intents_are_isolated_by_account_identity(tmp_path):
