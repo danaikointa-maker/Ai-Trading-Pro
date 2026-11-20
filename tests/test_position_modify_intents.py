@@ -4,6 +4,8 @@ import pytest
 from types import SimpleNamespace
 from unittest.mock import Mock
 import time
+from concurrent.futures import ThreadPoolExecutor
+from threading import Barrier
 
 from packages.shared_schemas.models import Direction, Health, Position, SymbolSpec, Tick
 from packages.persistence.db import Database
@@ -101,6 +103,34 @@ def test_unresolved_intent_fences_other_modifications_for_same_account_ticket(tm
         assert blocked["idempotency_key"] == "first"
     finally:
         db.close()
+
+
+def test_concurrent_connections_reserve_only_one_modify_for_ticket(tmp_path):
+    path = tmp_path / "modify-concurrent.db"
+    first_db = Database(path)
+    second_db = Database(path)
+    owner = _owner(first_db)
+    barrier = Barrier(2)
+
+    def reserve(db: Database, key: str, stop: float):
+        barrier.wait(timeout=3)
+        return PositionEventLog(db).reserve_modify(
+            broker_id="demo", ticket="T-1", idempotency_key=key,
+            account_identity=owner, detail={"sl": stop})
+
+    try:
+        with ThreadPoolExecutor(max_workers=2) as pool:
+            results = list(pool.map(lambda args: reserve(*args), [
+                (first_db, "worker-a", 1995.0),
+                (second_db, "worker-b", 1996.0),
+            ]))
+
+        assert sum(result["created"] for result in results) == 1
+        assert sum(bool(result.get("blocked")) for result in results) == 1
+        assert len(first_db.query("SELECT * FROM position_modify_intents")) == 1
+    finally:
+        first_db.close()
+        second_db.close()
 
 
 def test_modify_intents_are_isolated_by_account_identity(tmp_path):
