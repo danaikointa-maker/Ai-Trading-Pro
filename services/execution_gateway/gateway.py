@@ -445,6 +445,39 @@ class ExecutionGateway:
             intent = ledger.reserve_modify(broker_id=adapter.id, ticket=str(ticket),
                                            idempotency_key=idempotency_key,
                                            account_identity=owner, detail=detail)
+            base_idempotency_key = idempotency_key
+            recovery_generation = 0
+            while not intent.get("created") and recovery_generation < 5:
+                if intent.get("state") == "reserved":
+                    if float(intent.get("age_seconds", 0.0)) < 30.0:
+                        break
+                    stale_key = str(intent.get("idempotency_key", idempotency_key))
+                    # A reservation cannot reach the adapter until the same
+                    # transaction advances it to `sending`. CAS abandonment
+                    # therefore proves this generation never called the broker.
+                    abandoned = ledger.transition_modify(
+                        broker_id=adapter.id, ticket=str(ticket),
+                        idempotency_key=stale_key, account_identity=owner,
+                        state="abandoned",
+                        detail={"reason": "stale reserved intent abandoned before sending"})
+                    if not abandoned:
+                        break
+                    recovery_generation += 1
+                    idempotency_key = f"{base_idempotency_key}-r{recovery_generation}"
+                    intent = ledger.reserve_modify(
+                        broker_id=adapter.id, ticket=str(ticket),
+                        idempotency_key=idempotency_key,
+                        account_identity=owner, detail=detail)
+                    continue
+                if intent.get("state") == "abandoned":
+                    recovery_generation += 1
+                    idempotency_key = f"{base_idempotency_key}-r{recovery_generation}"
+                    intent = ledger.reserve_modify(
+                        broker_id=adapter.id, ticket=str(ticket),
+                        idempotency_key=idempotency_key,
+                        account_identity=owner, detail=detail)
+                    continue
+                break
             if not intent.get("created"):
                 if intent.get("blocked"):
                     raise BrokerError("another position modify is unresolved; reconcile before retry")

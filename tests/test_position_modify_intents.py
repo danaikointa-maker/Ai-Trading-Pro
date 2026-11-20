@@ -7,6 +7,8 @@ import time
 from concurrent.futures import ThreadPoolExecutor
 from threading import Barrier
 import multiprocessing
+import hashlib
+import json
 
 from packages.shared_schemas.models import Direction, Health, Position, SymbolSpec, Tick
 from packages.persistence.db import Database
@@ -52,6 +54,15 @@ def _gateway_case(db: Database, *, account_type="demo", stops_level_points=0):
     adapter.ticker.return_value = Tick(t=time.time(), bid=2000, ask=2000.1,
                                        spread_points=10, last=2000)
     return adapter, ExecutionGateway(SimpleNamespace(execution={}), db)
+
+
+def _gateway_modify_key(owner, ticket="T-1", detail=None):
+    detail = detail or {"sl": 1995.0, "tp": None, "reason": "trailing",
+                        "before_sl": 1990.0, "before_tp": 2020.0,
+                        "symbol": "XAUUSD", "tick_size": 0.01}
+    source = json.dumps({"owner": owner, "ticket": str(ticket), "detail": detail},
+                        sort_keys=True, separators=(",", ":"), allow_nan=False)
+    return "pm-" + hashlib.sha256(source.encode("utf-8")).hexdigest(), detail
 
 
 def test_modify_intent_is_durable_idempotent_and_append_only(tmp_path):
@@ -238,6 +249,71 @@ def test_unknown_modify_intent_cannot_be_cleared_without_reconciliation(tmp_path
                                      account_identity=owner, detail={"sl": 1996.0})
 
         assert blocked["blocked"] is True and blocked["state"] == "unknown"
+    finally:
+        db.close()
+
+
+def test_stale_reserved_intent_is_abandoned_and_retried_once(tmp_path):
+    db = Database(tmp_path / "gateway-stale-reserved.db")
+    adapter, gateway = _gateway_case(db)
+    before = adapter.positions.return_value[0]
+    after = before.model_copy(update={"sl": 1995.0})
+    try:
+        owner = gateway._assert_account(adapter)
+        key, detail = _gateway_modify_key(owner)
+        log = PositionEventLog(db)
+        log.reserve_modify(broker_id="demo", ticket="T-1", idempotency_key=key,
+                           account_identity=owner, detail=detail)
+        db.execute("UPDATE position_modify_intents SET updated_at=? WHERE idempotency_key=?",
+                   (time.time() - 120, key))
+        adapter.positions.side_effect = [[before], [after]]
+        adapter.modify_position.return_value = True
+
+        result = gateway.modify(adapter, "T-1", sl=1995.0, reason="trailing")
+        assert result is True, [dict(row) for row in db.query(
+            "SELECT action,detail FROM audit ORDER BY id DESC LIMIT 2")]
+
+        adapter.modify_position.assert_called_once()
+        rows = db.query("SELECT idempotency_key,state FROM position_modify_intents ORDER BY created_at")
+        assert [row["state"] for row in rows] == ["abandoned", "confirmed"]
+        assert rows[1]["idempotency_key"] == key + "-r1"
+        events = log.for_ticket(broker_id="demo", ticket="T-1", account_identity=owner)
+        assert [event["status"] for event in events] == [
+            "reserved", "abandoned", "reserved", "sending", "accepted_unverified", "confirmed"]
+    finally:
+        db.close()
+
+
+def test_fresh_reserved_intent_stays_blocked_without_broker_send(tmp_path):
+    db = Database(tmp_path / "gateway-fresh-reserved.db")
+    adapter, gateway = _gateway_case(db)
+    try:
+        owner = gateway._assert_account(adapter)
+        key, detail = _gateway_modify_key(owner)
+        PositionEventLog(db).reserve_modify(
+            broker_id="demo", ticket="T-1", idempotency_key=key,
+            account_identity=owner, detail=detail)
+
+        assert gateway.modify(adapter, "T-1", sl=1995.0, reason="trailing") is False
+
+        adapter.modify_position.assert_not_called()
+        assert db.query_one("SELECT state FROM position_modify_intents")["state"] == "reserved"
+    finally:
+        db.close()
+
+
+def test_abandoned_reservation_cannot_advance_to_sending(tmp_path):
+    db = Database(tmp_path / "modify-abandon-race.db")
+    log = PositionEventLog(db)
+    owner = _owner(db)
+    try:
+        log.reserve_modify(broker_id="demo", ticket="T-1", idempotency_key="intent-1",
+                           account_identity=owner, detail={"sl": 1995.0})
+        assert log.transition_modify(broker_id="demo", ticket="T-1", idempotency_key="intent-1",
+                                     account_identity=owner, state="abandoned")
+        assert not log.transition_modify(broker_id="demo", ticket="T-1", idempotency_key="intent-1",
+                                         account_identity=owner, state="sending")
+        assert db.query_one("SELECT state FROM position_modify_intents")["state"] == "abandoned"
     finally:
         db.close()
 

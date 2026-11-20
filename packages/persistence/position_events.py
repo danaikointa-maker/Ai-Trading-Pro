@@ -53,22 +53,24 @@ class PositionEventLog:
         with self.db.cursor() as cur:
             cur.execute("BEGIN IMMEDIATE")
             existing = cur.execute(
-                "SELECT request_hash,state FROM position_modify_intents "
+                "SELECT request_hash,state,updated_at FROM position_modify_intents "
                 "WHERE broker_id=? AND account_fingerprint=? AND ticket=? AND idempotency_key=?",
                 (broker_id, fingerprint, ticket, idempotency_key)).fetchone()
             if existing:
                 if existing["request_hash"] != request_hash:
                     raise ValueError("modify idempotency key belongs to another request")
                 return {"created": False, "state": existing["state"],
+                        "age_seconds": max(0.0, now - float(existing["updated_at"])),
                         "account_fingerprint": fingerprint}
             unresolved = cur.execute(
-                "SELECT idempotency_key,state FROM position_modify_intents "
+                "SELECT idempotency_key,state,updated_at FROM position_modify_intents "
                 "WHERE broker_id=? AND account_fingerprint=? AND ticket=? "
                 "AND state IN ('reserved','sending','accepted_unverified','unknown')",
                 (broker_id, fingerprint, ticket)).fetchone()
             if unresolved:
                 return {"created": False, "blocked": True,
                         "state": unresolved["state"],
+                        "age_seconds": max(0.0, now - float(unresolved["updated_at"])),
                         "idempotency_key": unresolved["idempotency_key"],
                         "account_fingerprint": fingerprint}
             cur.execute(
@@ -94,12 +96,13 @@ class PositionEventLog:
                           detail: dict[str, Any] | None = None) -> bool:
         """Advance an intent projection and append immutable transition evidence."""
         allowed = {
-            "reserved": {"sending", "unknown", "rejected"},
+            "reserved": {"sending", "unknown", "rejected", "abandoned"},
             "sending": {"accepted_unverified", "unknown", "rejected", "confirmed"},
             "accepted_unverified": {"confirmed", "unknown"},
             "unknown": {"confirmed", "rejected"},
         }
-        if state not in {"sending", "accepted_unverified", "unknown", "rejected", "confirmed"}:
+        if state not in {"sending", "accepted_unverified", "unknown", "rejected",
+                         "confirmed", "abandoned"}:
             raise ValueError("modify intent state is invalid")
         if (not isinstance(account_identity, dict)
                 or account_identity.get("broker_id") != broker_id
