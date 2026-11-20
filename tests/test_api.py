@@ -391,6 +391,19 @@ def test_order_is_blocked_without_a_clean_gate(client, auth):
                    headers=auth)
 
 
+def test_active_adapter_order_rejects_ignored_managed_account_id(client, auth, runtime, monkeypatch):
+    calls = []
+    monkeypatch.setattr(runtime, "manual_trade",
+                        lambda *args, **kwargs: calls.append((args, kwargs)))
+
+    response = client.post("/api/trading/order", json={
+        "symbol": "XAUUSD", "direction": "up", "account_id": "selected-demo-account",
+    }, headers=auth)
+
+    assert response.status_code == 422
+    assert calls == []
+
+
 def test_broker_list_and_symbols(client, auth):
     brokers = client.get("/api/brokers", headers=auth).json()
     assert brokers["brokers"] and brokers["active"]
