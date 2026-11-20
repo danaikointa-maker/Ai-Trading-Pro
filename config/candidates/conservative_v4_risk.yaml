@@ -25,6 +25,7 @@ policy_proposals:
 
 initial_trade_plan:
   stop: structure_plus_atr
+  directional_tick_rounding: true
   atr_timeframe: M5
   atr_period: 14
   atr_multiplier: 1.5
