@@ -318,6 +318,39 @@ def test_abandoned_reservation_cannot_advance_to_sending(tmp_path):
         db.close()
 
 
+def test_sending_and_stale_recovery_race_has_one_atomic_winner(tmp_path):
+    path = tmp_path / "modify-send-abandon-race.db"
+    first_db = Database(path)
+    second_db = Database(path)
+    owner = _owner(first_db)
+    log = PositionEventLog(first_db)
+    log.reserve_modify(broker_id="demo", ticket="T-1", idempotency_key="intent-1",
+                       account_identity=owner, detail={"sl": 1995.0})
+    barrier = Barrier(2)
+
+    def transition(db, state):
+        barrier.wait(timeout=3)
+        return PositionEventLog(db).transition_modify(
+            broker_id="demo", ticket="T-1", idempotency_key="intent-1",
+            account_identity=owner, state=state)
+
+    try:
+        with ThreadPoolExecutor(max_workers=2) as pool:
+            sending, abandoning = list(pool.map(
+                lambda args: transition(*args),
+                [(first_db, "sending"), (second_db, "abandoned")]))
+
+        assert sum((sending, abandoning)) == 1
+        state = first_db.query_one(
+            "SELECT state FROM position_modify_intents WHERE idempotency_key='intent-1'")["state"]
+        assert state == ("sending" if sending else "abandoned")
+        events = log.for_ticket(broker_id="demo", ticket="T-1", account_identity=owner)
+        assert [event["status"] for event in events] == ["reserved", state]
+    finally:
+        first_db.close()
+        second_db.close()
+
+
 def test_gateway_does_not_retry_unknown_modify_intent(tmp_path):
     db = Database(tmp_path / "gateway-unknown.db")
     adapter, gateway = _gateway_case(db)
