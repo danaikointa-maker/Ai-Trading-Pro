@@ -1058,8 +1058,9 @@ class TradingRuntime:
             atr_points=max(1.0, ctx.snapshot.indicators.atr_points),
             equity=equity, spread_points=float(tick.spread_points),
             supports=ctx.snapshot.supports, resistances=ctx.snapshot.resistances,
-            swings=[{"kind": s.kind, "price": s.price}
+            swings=[{"kind": s.kind, "price": s.price, "idx": s.idx}
                     for s in ctx.snapshot.swings if s.confirmed],
+            m5_bar_count=len(ctx.frames["M5"]),
         ))
         if result.plan is None:
             return None, "; ".join(result.blockers)

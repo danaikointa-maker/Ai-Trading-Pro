@@ -52,6 +52,10 @@ class PlanInputs:
     closes_pct: list[float] | None = None
     # Candidate-only: legacy keeps nearest-tick rounding until profile migration.
     directional_tick_rounding: bool = False
+    sl_policy: str = "legacy"
+    sl_structure_buffer_atr: float = 0.35
+    swing_lookback_bars: int = 0
+    m5_bar_count: int = 0
 
 
 @dataclass
@@ -70,7 +74,8 @@ def build_plan_inputs(*, risk_cfg: dict[str, Any], effective: Any,
                       direction: Direction, entry: float, spec: SymbolSpec,
                       atr_points: float, equity: float, spread_points: float,
                       supports: list[Zone], resistances: list[Zone],
-                      swings: list[dict] | None = None) -> PlanInputs:
+                      swings: list[dict] | None = None,
+                      m5_bar_count: int = 0) -> PlanInputs:
     """Build the same planner inputs for automatic and manual entries.
 
     `effective` is the existing RiskSettings snapshot, so UI/runtime overrides
@@ -100,6 +105,12 @@ def build_plan_inputs(*, risk_cfg: dict[str, Any], effective: Any,
         zone_buffer_atr=float(adaptive.get("zone_buffer_atr", 0.35)),
         respect_zones=bool(adaptive.get("respect_zones", True)),
         closes_pct=list(ladder.get("closes_pct", [40, 30, 30])),
+        sl_policy=str(risk_cfg.get("plan_options", {}).get("sl_policy", "legacy")),
+        sl_structure_buffer_atr=float(
+            risk_cfg.get("plan_options", {}).get("sl_structure_buffer_atr", 0.35)),
+        swing_lookback_bars=int(
+            risk_cfg.get("plan_options", {}).get("swing_lookback_bars", 0)),
+        m5_bar_count=int(m5_bar_count),
         directional_tick_rounding=bool(
             risk_cfg.get("plan_options", {}).get("directional_tick_rounding", False)),
     )
@@ -156,24 +167,33 @@ class TradePlanner:
         ticks = math.ceil(units - 1e-10) if round_up else math.floor(units + 1e-10)
         return round(ticks * tick, spec.digits)
 
-    def _stop_from_structure(self, direction: Direction, entry: float, ctx: PlanInputs) -> tuple[float, str]:
+    def _stop_from_structure(self, direction: Direction, entry: float,
+                             ctx: PlanInputs) -> tuple[float, str]:
         """Nearest structural invalidation beyond entry, with an ATR buffer."""
-        buffer = ctx.atr_points * 0.35
+        buffer = ctx.spec.points_to_price(ctx.atr_points * ctx.sl_structure_buffer_atr)
         candidates: list[tuple[float, str]] = []
         if direction == Direction.up:
             for zone in ctx.supports:
                 if zone.low < entry:
-                    candidates.append((entry - (zone.low - buffer), f"support {zone.id} @ {zone.low:.2f}"))
+                    distance = entry - (zone.low - buffer)
+                    candidates.append((distance / ctx.spec.point,
+                                       f"support {zone.id} @ {zone.low:.2f}"))
             for swing in (ctx.swings or []):
                 if swing.get("kind") == "low" and swing["price"] < entry:
-                    candidates.append((entry - (swing["price"] - buffer), f"swing low @ {swing['price']:.2f}"))
+                    distance = entry - (swing["price"] - buffer)
+                    candidates.append((distance / ctx.spec.point,
+                                       f"swing low @ {swing['price']:.2f}"))
         else:
             for zone in ctx.resistances:
                 if zone.high > entry:
-                    candidates.append(((zone.high + buffer) - entry, f"resistance {zone.id} @ {zone.high:.2f}"))
+                    distance = (zone.high + buffer) - entry
+                    candidates.append((distance / ctx.spec.point,
+                                       f"resistance {zone.id} @ {zone.high:.2f}"))
             for swing in (ctx.swings or []):
                 if swing.get("kind") == "high" and swing["price"] > entry:
-                    candidates.append(((swing["price"] + buffer) - entry, f"swing high @ {swing['price']:.2f}"))
+                    distance = (swing["price"] + buffer) - entry
+                    candidates.append((distance / ctx.spec.point,
+                                       f"swing high @ {swing['price']:.2f}"))
 
         valid = [(pts, label) for pts, label in candidates if ctx.sl_min_points <= pts <= ctx.sl_max_points]
         if valid:
@@ -181,8 +201,31 @@ class TradePlanner:
             return pts, f"structural stop beyond {label}"
         return 0.0, ""
 
-    def _tp_ladder(self, direction: Direction, entry: float, ctx: PlanInputs) -> tuple[list[float], list[str]]:
+    def _candidate_structure_distance(self, direction: Direction, entry: float,
+                                      ctx: PlanInputs) -> tuple[float, str]:
+        """Use the most adverse confirmed swing in the configured closed-bar window."""
+        cutoff = (ctx.m5_bar_count - ctx.swing_lookback_bars
+                  if ctx.m5_bar_count > 0 and ctx.swing_lookback_bars > 0 else None)
+        if ctx.swing_lookback_bars > 0 and ctx.m5_bar_count <= 0:
+            return 0.0, "closed-M5 bar count is unavailable"
+        buffer = ctx.spec.points_to_price(ctx.atr_points * ctx.sl_structure_buffer_atr)
+        kind = "low" if direction == Direction.up else "high"
+        swings = [s for s in (ctx.swings or [])
+                  if s.get("kind") == kind and float(s.get("price", 0)) > 0
+                  and (cutoff is None or int(s.get("idx", -1)) >= cutoff)]
+        if not swings:
+            return 0.0, "no confirmed swing in configured closed-M5 lookback"
+        swing = min(swings, key=lambda row: float(row["price"])) if kind == "low" else max(
+            swings, key=lambda row: float(row["price"]))
+        price = float(swing["price"])
+        distance = (entry - (price - buffer) if direction == Direction.up
+                    else (price + buffer) - entry)
+        return max(0.0, distance / ctx.spec.point), f"M5 swing {kind} @ {price:.2f} + ATR buffer"
+
+    def _tp_ladder(self, direction: Direction, entry: float,
+                   ctx: PlanInputs) -> tuple[list[float], list[str], list[str]]:
         notes: list[str] = []
+        blockers: list[str] = []
         min_pts, max_pts = ctx.min_points, ctx.max_points
         base = ctx.atr_points * ctx.atr_target_multiplier
         if ctx.target_mode == "fixed" and ctx.fixed_points:
@@ -204,19 +247,25 @@ class TradePlanner:
             blocker = strongest_opposing_zone(ctx.resistances if direction == Direction.up else ctx.supports,
                                               entry, target_price, "up" if direction == Direction.up else "down")
             if blocker is not None and blocker.quality != ZoneQuality.low:
-                buffer = ctx.zone_buffer_atr * ctx.atr_points
+                buffer = ctx.spec.points_to_price(ctx.zone_buffer_atr * ctx.atr_points)
                 capped_price = (blocker.low - buffer) if direction == Direction.up else (blocker.high + buffer)
                 capped_pts = abs(capped_price - entry) / ctx.spec.point
                 if capped_pts < ladder[0]:
+                    if capped_pts < min_pts:
+                        blockers.append(
+                            f"opposing zone {blocker.id} leaves only {capped_pts:.0f} points before "
+                            f"the configured minimum target {min_pts:.0f}; reject instead of placing "
+                            "the target through the zone")
+                        return ladder, notes, blockers
                     notes.append(
-                        f"TP1 capped from {ladder[0]:.0f} to {max(min_pts, capped_pts):.0f} points by strong "
+                        f"TP1 capped from {ladder[0]:.0f} to {capped_pts:.0f} points by strong "
                         f"opposing zone {blocker.id} ({blocker.quality.value})")
-                    ladder[0] = max(min_pts, capped_pts)
+                    ladder[0] = capped_pts
                     ladder[1] = max(ladder[0] + 1, min(ladder[1], ladder[0] + (max_pts - ladder[0]) * 0.6))
                     ladder[2] = max(ladder[1] + 1, max_pts)
                 else:
                     notes.append(f"Respecting opposing zone {blocker.id} ({blocker.mid:.2f}) beyond TP1")
-        return ladder, notes
+        return ladder, notes, blockers
 
     # ------------------------------------------------------------------ plan
     def build(self, ctx: PlanInputs) -> PlanResult:
@@ -243,18 +292,56 @@ class TradePlanner:
         # Volatility floor: a stop inside normal noise is not a stop, it is a donation.
         vol_floor = max(ctx.atr_points * 0.75, ctx.spread_points * 4.0, ctx.sl_min_points)
         sl_points, sl_note = 0.0, ""
-        if self.stops.get("use_structure_stop", True):
-            sl_points, sl_note = self._stop_from_structure(direction, ctx.entry, ctx)
-            if sl_points > 0 and sl_points < vol_floor:
-                sl_note += (f" (widened to the {vol_floor:.0f}-point volatility floor: 0.75 ATR / 4x spread)")
-                sl_points = vol_floor
-        if sl_points <= 0:
-            sl_points = float(np.clip(ctx.atr_points * self.stops.get("sl_atr_multiplier", 1.0),
-                                      vol_floor, ctx.sl_max_points))
-            sl_note = f"ATR stop {self.stops.get('sl_atr_multiplier', 1.0)} x ATR"
-        sl_points = float(np.clip(sl_points, vol_floor, ctx.sl_max_points))
+        if ctx.sl_policy == "atr_structure":
+            if (not math.isfinite(ctx.atr_points) or ctx.atr_points <= 0
+                    or not math.isfinite(ctx.sl_max_points) or ctx.sl_max_points <= 0
+                    or ctx.swing_lookback_bars < 0 or ctx.m5_bar_count < 0
+                    or not math.isfinite(ctx.sl_atr_multiplier) or ctx.sl_atr_multiplier <= 0
+                    or not math.isfinite(ctx.sl_structure_buffer_atr)
+                    or ctx.sl_structure_buffer_atr < 0):
+                block("invalid_stop_policy", "ATR/structure stop parameters are invalid")
+                return PlanResult(plan=None, blockers=blockers,
+                                  blocker_codes=codes, notes=notes)
+            structure_points, structure_note = self._candidate_structure_distance(
+                direction, ctx.entry, ctx)
+            if ctx.swing_lookback_bars > 0 and structure_points <= 0:
+                block("structure_missing", structure_note)
+                return PlanResult(plan=None, blockers=blockers,
+                                  blocker_codes=codes, notes=notes)
+            atr_reference = ctx.atr_points * ctx.sl_atr_multiplier
+            sl_points = max(atr_reference, structure_points, vol_floor)
+            sl_note = (f"ATR+structure stop: max({ctx.sl_atr_multiplier:.2f} ATR, "
+                       f"{structure_points:.0f}-point structure, volatility floor); "
+                       f"{structure_note}")
+            if sl_points > ctx.sl_max_points:
+                block("stop_distance_max",
+                      f"required stop {sl_points:.0f} points exceeds configured maximum "
+                      f"{ctx.sl_max_points:.0f}; reject instead of narrowing protection")
+                return PlanResult(plan=None, blockers=blockers,
+                                  blocker_codes=codes, notes=notes + [sl_note])
+        elif ctx.sl_policy == "legacy":
+            if self.stops.get("use_structure_stop", True):
+                sl_points, sl_note = self._stop_from_structure(direction, ctx.entry, ctx)
+                if sl_points > 0 and sl_points < vol_floor:
+                    sl_note += (f" (widened to the {vol_floor:.0f}-point volatility floor: "
+                                "0.75 ATR / 4x spread)")
+                    sl_points = vol_floor
+            if sl_points <= 0:
+                multiplier = self.stops.get("sl_atr_multiplier", 1.0)
+                sl_points = float(np.clip(ctx.atr_points * multiplier,
+                                          vol_floor, ctx.sl_max_points))
+                sl_note = f"ATR stop {multiplier} x ATR"
+            sl_points = float(np.clip(sl_points, vol_floor, ctx.sl_max_points))
+        else:
+            block("invalid_stop_policy", f"unsupported stop policy {ctx.sl_policy!r}")
+            return PlanResult(plan=None, blockers=blockers,
+                              blocker_codes=codes, notes=notes)
         min_stop = float(spec.stops_level_points)
         if min_stop > 0 and sl_points < min_stop + 1:
+            if ctx.sl_policy == "atr_structure" and min_stop + 1 > ctx.sl_max_points:
+                block("broker_stop_distance", "broker stops level exceeds candidate maximum stop distance")
+                return PlanResult(plan=None, blockers=blockers,
+                                  blocker_codes=codes, notes=notes)
             sl_note += (f" (widened to the broker stops level of {min_stop:.0f} points)"
                         if sl_note else f"Broker stops level {min_stop:.0f} points")
             sl_points = min_stop + 1
@@ -262,8 +349,10 @@ class TradePlanner:
             spec, ctx.entry - sign * spec.points_to_price(sl_points), direction,
             is_stop=True, directional=ctx.directional_tick_rounding)
 
-        ladder, tp_notes = self._tp_ladder(direction, ctx.entry, ctx)
+        ladder, tp_notes, tp_blockers = self._tp_ladder(direction, ctx.entry, ctx)
         notes.extend(tp_notes)
+        for text in tp_blockers:
+            block("opposing_zone", text)
         closes = ctx.closes_pct or [40, 30, 30]
         closes = closes[:3] if len(closes) >= 3 else (closes + [100 / max(1, len(closes))] * 3)[:3]
         blended = float(sum(t * c for t, c in zip(ladder, closes)) / max(1e-9, sum(closes)))

@@ -25,12 +25,18 @@ policy_proposals:
 
 initial_trade_plan:
   stop: structure_plus_atr
-  directional_tick_rounding: true
   atr_timeframe: M5
   atr_period: 14
   atr_multiplier: 1.5
   target: single_2r
   partials_enabled: false
+  enforcement_status: candidate_only
+
+plan_options:
+  sl_policy: atr_structure
+  sl_structure_buffer_atr: 0.2
+  swing_lookback_bars: 10
+  directional_tick_rounding: true
   enforcement_status: candidate_only
 
 position_protection:
