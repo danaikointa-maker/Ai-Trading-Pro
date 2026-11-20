@@ -365,6 +365,31 @@ def test_gateway_does_not_retry_unknown_modify_intent(tmp_path):
         db.close()
 
 
+@pytest.mark.parametrize("broker_applied,expected_state", [(False, "unknown"), (True, "confirmed")])
+def test_gateway_timeout_is_reconciled_from_exact_readback_without_resend(
+        tmp_path, broker_applied, expected_state):
+    db = Database(tmp_path / f"gateway-timeout-{broker_applied}.db")
+    adapter, gateway = _gateway_case(db)
+    before = adapter.positions.return_value[0]
+    after = before.model_copy(update={"sl": 1995.0})
+    adapter.positions.side_effect = [[before], [after if broker_applied else before],
+                                     [after if broker_applied else before]]
+    adapter.modify_position.side_effect = TimeoutError("simulated lost broker acknowledgement")
+    try:
+        assert gateway.modify(adapter, "T-1", sl=1995.0, reason="trailing") is (
+            expected_state == "confirmed")
+        assert db.query_one("SELECT state FROM position_modify_intents")["state"] == expected_state
+
+        # A repeated request either observes the already confirmed exact state
+        # or remains fenced as ambiguous; neither path resends the adapter call.
+        assert gateway.modify(adapter, "T-1", sl=1995.0, reason="trailing") is (
+            expected_state == "confirmed")
+        adapter.modify_position.assert_called_once()
+        assert db.query_one("SELECT state FROM position_modify_intents")["state"] == expected_state
+    finally:
+        db.close()
+
+
 def test_gateway_rejects_live_account_before_modify_or_intent(tmp_path):
     db = Database(tmp_path / "gateway-live.db")
     adapter, gateway = _gateway_case(db, account_type="live")
