@@ -369,6 +369,14 @@ curl -s -X POST localhost:8000/api/brokers/mt5-bridge-demo/activate \
 และ V4 Demo order route ยังไม่พร้อม/ไม่เปิดใช้งาน. คำสั่ง Demo จะต้องผ่าน ExecutionGateway, identity/risk/freshness
 และ reconciliation gate หลังมี test evidence และอนุมัติการทดสอบ Demo แยกต่างหากเท่านั้น.
 
+### แยก MT5 market publisher จาก EA command bridge (V4 source only)
+
+V4 เพิ่ม `scripts/mt5_market_publisher.py` และ `POST /api/market/publish/mt5` สำหรับ quote/rates/specs ของ MT5 Demo เท่านั้น. Token แยกจาก `NO7_BRIDGE_TOKEN`; route นี้ไม่มี command/position schema และไม่แตะคิว EA. ฝั่ง API ใช้ `NO7_MT5_MARKET_PUBLISHER_ENABLED`, `NO7_MT5_MARKET_PUBLISHER_TOKEN`, `NO7_MT5_MARKET_EXPECTED_LOGIN`, `NO7_MT5_MARKET_EXPECTED_SERVER`, `NO7_MT5_MARKET_ACCOUNT_ID`; ฝั่ง PC ใช้ `NO7_MT5_MARKET_API_URL`, `NO7_MT5_MARKET_SYMBOL_MAP` (เช่น `XAUUSD=XAUUSD.s`) และ poll/rates intervals. Script ตรวจ Demo login/server ปัจจุบัน; ไม่รับรหัสผ่านและไม่สลับบัญชี.
+
+ยังไม่เปิด publisher จนกว่าจะตั้ง token แยกและ symbol allowlist ให้ตรงกับ broker. Script ปฏิเสธ bearer token ผ่าน HTTP ไปยัง host เครือข่ายทั่วไป; ใช้ HTTPS หรือ SSH loopback tunnel เท่านั้น. การตั้งค่ารุ่นนี้ผูก publisher identity เดียวต่อ runtime จึงไม่ใช่การรองรับหลายบัญชี. Python MT5 publisher ระบุเวลาเป็น UTC ไม่อ้างว่าเป็น broker-server clock. ค่าเปิดใช้งานเป็น false โดยปริยาย; publisher/MT5 package/API tunnel ยังไม่ได้ทดสอบกับ terminal จริงหรือ deploy ไป VM100.
+
+ตรวจ runtime แบบ read-only ก่อนเชื่อม publisher ได้ด้วย `python scripts/check_mt5_market_runtime.py --base-url http://127.0.0.1:18080`. สคริปต์อ่านเฉพาะ `/api/system/health` และ `/api/openapi.json`; ไม่ใช้ JWT/bridge token และไม่ส่งคำสั่ง. `ready: true` ต้องพบ route และ feed `mt5_demo_publisher` ที่สดพร้อมกัน. ผลตรวจ 2026-11-20 ของ `18000` และ `18080` คือ feed `simulate` และไม่มี publisher route.
+
 ## 12.4 แจ้งเตือนออกนอกเครื่อง (Telegram / LINE / webhook)
 
 in-app ทำงานเสมอ; ช่องทางภายนอกเป็น **opt-in** (ต้องมี token *และ* เปิดใช้)

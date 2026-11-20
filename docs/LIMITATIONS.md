@@ -278,6 +278,7 @@
 - EA จำกัดที่ symbol ที่ใส่ใน `InpSymbols`, M1 rates ที่ `InpRatesBars` และกรองเฉพาะโพซิชัน magic `70707`
   หรือคอมเมนต์ที่มี `no7` (โพซิชันของ EA ตัวอื่นจะไม่ถูกแตะ)
 - `positions()` คือ snapshot ล่าสุดจาก EA ไม่ใช่ streaming: อัตราการอัปเดต = poll interval (ปกติ 1s)
+- MT5 market publisher แบบ read-only แยกจาก EA command bridge มีใน V4 source เท่านั้น: disabled by default, รองรับ publisher identity เดียวต่อ runtime, ต้องตั้ง Demo identity/token/symbol allowlist และยังไม่ได้เชื่อมกับ VM100 หรือทดลองกับ terminal จริง. การแยก cache ป้องกันการอ่าน snapshot คนละ account key แต่ไม่ได้ทำให้ระบบล็อกอินหรือเทรดหลายบัญชีพร้อมกัน. เมื่อเปิดใช้ chart จะปฏิเสธ snapshot เก่า ไม่ fallback เป็น simulation; Python MT5 publisher ระบุเวลา UTC ไม่ใช่ broker-server clock.
 - ยังไม่มี hedging/netting handling พิเศษ, ไม่มี partial-fill ต่อคำสั่ง (โบรกเกอร์คืน volume ที่ fill มาทั้งก้อนในผลลัพธ์เดียว)
 - ไม่มีการยืนยัน two-way ว่า EA ใช้เวอร์ชันไหน: `terminal.build` แสดงใน status แต่เซิร์ฟเวอร์ไม่ได้บังคับเวอร์ชัน
 

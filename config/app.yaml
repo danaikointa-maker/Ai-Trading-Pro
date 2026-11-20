@@ -23,6 +23,16 @@ market_data:
   timeframes: [M1, M5, M15, H1, H4]
   history_bars: ${NO7_SIM_BARS:60000}
   staleness_seconds: 30                    # reject decisions on older data
+  # Separate read-only publisher credential. It cannot call the EA command queue.
+  # Leave disabled until a Demo identity and dedicated token are configured.
+  mt5_publisher:
+    enabled: ${NO7_MT5_MARKET_PUBLISHER_ENABLED:false}
+    account_id: ${NO7_MT5_MARKET_ACCOUNT_ID:mt5-demo}
+    token: ${NO7_MT5_MARKET_PUBLISHER_TOKEN:}
+    expected_login: ${NO7_MT5_MARKET_EXPECTED_LOGIN:}
+    expected_server: ${NO7_MT5_MARKET_EXPECTED_SERVER:}
+    symbols: [XAUUSD]                    # canonical chart symbol; PC map can target XAUUSD.s
+    max_snapshot_age_seconds: 15
   simulation:
     seed: ${NO7_SIM_SEED:7}
     speed_minutes_per_second: ${NO7_SIM_SPEED:6.0}
