@@ -8,10 +8,9 @@ Two invariants:
 """
 from __future__ import annotations
 
+import math
 from dataclasses import dataclass, field
 from typing import Any, Callable
-
-import math
 
 import numpy as np
 
@@ -51,6 +50,8 @@ class PlanInputs:
     zone_buffer_atr: float = 0.35
     respect_zones: bool = True
     closes_pct: list[float] | None = None
+    # Candidate-only: legacy keeps nearest-tick rounding until profile migration.
+    directional_tick_rounding: bool = False
 
 
 @dataclass
@@ -63,6 +64,45 @@ class PlanResult:
     # (rather than parsing the text later) is what stops the attribution report
     # from silently rotting when someone rewords a message.
     blocker_codes: list[str] = field(default_factory=list)
+
+
+def build_plan_inputs(*, risk_cfg: dict[str, Any], effective: Any,
+                      direction: Direction, entry: float, spec: SymbolSpec,
+                      atr_points: float, equity: float, spread_points: float,
+                      supports: list[Zone], resistances: list[Zone],
+                      swings: list[dict] | None = None) -> PlanInputs:
+    """Build the same planner inputs for automatic and manual entries.
+
+    `effective` is the existing RiskSettings snapshot, so UI/runtime overrides
+    retain their current precedence while planner policy comes from risk.yaml.
+    Candidate-only fields remain opt-in and absent defaults preserve legacy.
+    """
+    limits = effective.limits
+    stops = risk_cfg.get("stops", {})
+    targets = risk_cfg.get("targets", {})
+    adaptive = targets.get("adaptive", {})
+    ladder = targets.get("ladder", {})
+    return PlanInputs(
+        direction=direction, entry=entry, spec=spec,
+        atr_points=atr_points, equity=equity,
+        risk_pct=float(limits.risk_per_trade_pct),
+        spread_points=spread_points, supports=supports,
+        resistances=resistances, swings=swings or [],
+        target_mode=effective.targets_mode,
+        min_points=float(effective.min_points),
+        max_points=float(effective.max_points),
+        fixed_points=list(effective.fixed_points),
+        sl_atr_multiplier=float(effective.sl_atr_multiplier),
+        sl_min_points=float(stops.get("sl_min_points", 150)),
+        sl_max_points=float(stops.get("sl_max_points", 1200)),
+        min_rr_net=float(limits.min_reward_risk),
+        atr_target_multiplier=float(adaptive.get("atr_multiplier", 2.2)),
+        zone_buffer_atr=float(adaptive.get("zone_buffer_atr", 0.35)),
+        respect_zones=bool(adaptive.get("respect_zones", True)),
+        closes_pct=list(ladder.get("closes_pct", [40, 30, 30])),
+        directional_tick_rounding=bool(
+            risk_cfg.get("plan_options", {}).get("directional_tick_rounding", False)),
+    )
 
 
 def _split_lot(spec: SymbolSpec, lot: float, closes_pct: list[float]) -> list[float]:
@@ -103,6 +143,18 @@ class TradePlanner:
         commission_points = (spec.commission_per_lot_round_turn / spec.value_per_point_per_lot
                              if spec.value_per_point_per_lot else 0.0)
         return float(spread_points / 2.0 + commission_points)
+
+    @staticmethod
+    def _round_level(spec: SymbolSpec, price: float, direction: Direction,
+                     *, is_stop: bool, directional: bool) -> float:
+        """Normalize protective levels outward when the candidate flag is on."""
+        if not directional:
+            return spec.round_price(price)
+        tick = spec.tick_size or spec.point
+        units = price / tick
+        round_up = (direction == Direction.down) if is_stop else (direction == Direction.up)
+        ticks = math.ceil(units - 1e-10) if round_up else math.floor(units + 1e-10)
+        return round(ticks * tick, spec.digits)
 
     def _stop_from_structure(self, direction: Direction, entry: float, ctx: PlanInputs) -> tuple[float, str]:
         """Nearest structural invalidation beyond entry, with an ATR buffer."""
@@ -206,7 +258,9 @@ class TradePlanner:
             sl_note += (f" (widened to the broker stops level of {min_stop:.0f} points)"
                         if sl_note else f"Broker stops level {min_stop:.0f} points")
             sl_points = min_stop + 1
-        sl_price = spec.round_price(ctx.entry - sign * spec.points_to_price(sl_points))
+        sl_price = self._round_level(
+            spec, ctx.entry - sign * spec.points_to_price(sl_points), direction,
+            is_stop=True, directional=ctx.directional_tick_rounding)
 
         ladder, tp_notes = self._tp_ladder(direction, ctx.entry, ctx)
         notes.extend(tp_notes)
@@ -283,7 +337,12 @@ class TradePlanner:
             return PlanResult(plan=None, blockers=blockers, blocker_codes=codes,
                               notes=notes + [sl_note] * bool(sl_note))
 
-        tp_prices = [spec.round_price(ctx.entry + sign * spec.points_to_price(tp)) for tp in ladder]
+        tp_prices = [
+            self._round_level(
+                spec, ctx.entry + sign * spec.points_to_price(tp), direction,
+                is_stop=False, directional=ctx.directional_tick_rounding)
+            for tp in ladder
+        ]
         plan = TradePlan(
             direction=direction,
             entry=spec.round_price(ctx.entry),
