@@ -22,6 +22,7 @@ limits:
   min_reward_risk: 1.30             # net of spread + commission
   max_weekly_trades: 60
   data_staleness_seconds: 30
+  data_future_tolerance_seconds: 2  # tolerate small clock skew; larger future ticks fail closed
   news_lockout_enabled: true
   news_window_before_minutes: 30
   news_window_after_minutes: 15

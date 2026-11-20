@@ -7,6 +7,8 @@ from integrations.brokers import mt5_readonly
 
 class Terminal:
     ACCOUNT_TRADE_MODE_DEMO = 0
+    POSITION_TYPE_BUY = 0
+    POSITION_TYPE_SELL = 1
 
     def __init__(self, mode=0, connected=True):
         self.info = SimpleNamespace(login=123, server="Broker-Demo", trade_mode=mode,
@@ -32,6 +34,12 @@ class Terminal:
         self.calls.append("tick")
         return SimpleNamespace(bid=3000.0, ask=3000.5, time=100)
 
+    def positions_get(self):
+        self.calls.append("positions")
+        return [SimpleNamespace(ticket=88, symbol="XAUUSD.s", type=0, volume=0.1,
+                                price_open=2990.0, sl=2980.0, tp=3020.0,
+                                price_current=3000.0, profit=100.0, time=99)]
+
 
 def test_readonly_probe_missing_implementation():
     assert callable(getattr(mt5_readonly, "probe_demo", None))
@@ -53,6 +61,46 @@ def test_reads_demo_without_exposing_account_number():
     assert result["read_only"] is True
     assert result["tick"]["bid"] == 3000.0
     assert "login" not in result
+    assert terminal.calls[-1] == "shutdown"
+
+
+def test_reads_positions_sl_tp_from_the_verified_demo_terminal():
+    terminal = Terminal()
+    result = mt5_readonly.probe_demo(terminal, "terminal64.exe", 123, "Broker-Demo", "XAUUSD",
+                                     include_positions=True)
+    assert result["read_only"] is True
+    assert result["execution_enabled"] is False
+    assert result["positions"] == [{
+        "ticket": "88", "symbol": "XAUUSD.s", "direction": "up", "volume": 0.1,
+        "entry": 2990.0, "sl": 2980.0, "tp": 3020.0, "current_price": 3000.0,
+        "unrealized": 100.0, "open_time": 99, "broker_id": "mt5-read-only",
+    }]
+    assert terminal.calls.count("positions") == 1
+    assert terminal.calls[-1] == "shutdown"
+
+
+def test_unavailable_position_list_is_not_misreported_as_empty():
+    terminal = Terminal()
+    terminal.positions_get = lambda: None
+    with pytest.raises(mt5_readonly.ProbeError, match="could not read open positions"):
+        mt5_readonly.probe_demo(terminal, "terminal64.exe", 123, "Broker-Demo", "XAUUSD",
+                                include_positions=True)
+    assert terminal.calls[-1] == "shutdown"
+
+
+def test_account_switch_during_positions_read_blocks_snapshot():
+    terminal = Terminal()
+
+    def switched():
+        terminal.info.login = 999
+        return [SimpleNamespace(ticket=99, symbol="XAUUSD", type=0, volume=0.1,
+                                price_open=2990.0, sl=2980.0, tp=3020.0,
+                                price_current=3000.0, profit=100.0, time=99)]
+
+    terminal.positions_get = switched
+    with pytest.raises(mt5_readonly.ProbeError, match="identity"):
+        mt5_readonly.probe_demo(terminal, "terminal64.exe", 123, "Broker-Demo", "XAUUSD",
+                                include_positions=True)
     assert terminal.calls[-1] == "shutdown"
 
 

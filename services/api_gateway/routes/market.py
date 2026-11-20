@@ -31,9 +31,13 @@ def candles(symbol: str = "XAUUSD", timeframe: str = "M5", limit: int = Query(40
     except KeyError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
     spec = runtime.adapter.symbol_spec(symbol)
+    time_info = (runtime.adapter.timestamp_metadata()
+                 if hasattr(runtime.adapter, "timestamp_metadata")
+                 else {"basis": "utc", "display_basis": "utc",
+                       "server_utc_offset_seconds": 0})
     return {"symbol": symbol, "timeframe": timeframe, "spec": spec.model_dump(),
             "candles": [c.model_dump() for c in candles_from_df(df)],
-            "ticker": runtime.market.ticker(symbol).model_dump()}
+            "ticker": runtime.market.ticker(symbol).model_dump(), "time": time_info}
 
 
 @router.get("/ticker")

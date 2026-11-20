@@ -13,7 +13,7 @@ class ProbeError(RuntimeError):
 
 
 def probe_demo(terminal, path: str, expected_login: int, expected_server: str,
-               symbol: str) -> dict:
+               symbol: str, include_positions: bool = False) -> dict:
     """Attach to an already authenticated terminal; never login or send orders.
 
     Read-only describes this code path, not a terminal-wide permission sandbox.
@@ -45,11 +45,47 @@ def probe_demo(terminal, path: str, expected_login: int, expected_server: str,
         bid, ask = float(tick.bid), float(tick.ask)
         if not all(math.isfinite(v) and v > 0 for v in (bid, ask)) or ask < bid:
             raise ProbeError("Quote is invalid")
-        return {"read_only": True, "account_type": "demo", "server": info.server,
-                "currency": info.currency, "balance": float(info.balance),
-                "equity": float(info.equity), "symbol": symbol,
-                "tick": {"bid": bid, "ask": ask, "time": int(tick.time)},
-                "note": "Last available quote only; timestamp does not guarantee a fresh/open market"}
+        result = {"read_only": True, "execution_enabled": False,
+                  "account_type": "demo", "server": info.server, "currency": info.currency,
+                  "balance": float(info.balance), "equity": float(info.equity), "symbol": symbol,
+                  "tick": {"bid": bid, "ask": ask, "time": int(tick.time)},
+                  "note": "Last available quote only; timestamp does not guarantee a fresh/open market"}
+        if include_positions:
+            # None means MT5 could not read the position list; an empty tuple is
+            # a valid, authoritative response meaning there are no open positions.
+            raw_positions = terminal.positions_get()
+            if raw_positions is None:
+                raise ProbeError("MT5 could not read open positions; check terminal connection")
+            buy = getattr(terminal, "POSITION_TYPE_BUY", 0)
+            sell = getattr(terminal, "POSITION_TYPE_SELL", 1)
+            rows = []
+            for pos in raw_positions:
+                kind = getattr(pos, "type", None)
+                if kind not in (buy, sell):
+                    raise ProbeError("MT5 returned an unsupported position type")
+                direction = "up" if kind == buy else "down"
+                raw_sl, raw_tp = float(pos.sl), float(pos.tp)
+                values = {
+                    "volume": float(pos.volume), "entry": float(pos.price_open),
+                    # MT5 uses zero to mean no broker stop/target.
+                    "sl": raw_sl if raw_sl > 0 else None,
+                    "tp": raw_tp if raw_tp > 0 else None,
+                    "current_price": float(pos.price_current), "unrealized": float(pos.profit),
+                }
+                numeric_values = [v for v in values.values() if v is not None]
+                if (not all(math.isfinite(v) for v in numeric_values)
+                        or values["volume"] <= 0 or values["entry"] <= 0
+                        or values["current_price"] <= 0):
+                    raise ProbeError("MT5 returned invalid position values")
+                rows.append({
+                    "ticket": str(int(pos.ticket)), "symbol": str(pos.symbol),
+                    "direction": direction, **values, "open_time": int(pos.time),
+                    "broker_id": "mt5-read-only",
+                })
+            checked_account()  # Re-check identity after the broker read.
+            result["positions"] = rows
+            result["count"] = len(rows)
+        return result
     finally:
         terminal.shutdown()
 

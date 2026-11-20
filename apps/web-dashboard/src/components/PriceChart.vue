@@ -15,6 +15,7 @@
     <div class="pointer-events-none absolute left-3 top-12 flex flex-wrap items-center gap-1.5">
       <span class="chip chip-gold">{{ state.symbol }} · {{ state.timeframe }}</span>
       <span class="chip" :class="feedWarn ? 'chip-warn' : ''" :title="feedTitle">{{ feedLabel }}</span>
+      <span v-if="displayBasis === 'broker_server'" class="chip" title="แสดงเวลาโบรกเกอร์; timestamp ภายในระบบยังเป็น UTC">MT5 UTC{{ offsetLabel }}</span>
       <span v-if="state.live?.analysis?.regime" class="chip">{{ state.live.analysis.regime.regime.replace('_',' ') }}</span>
     </div>
     <div v-if="loading" class="absolute inset-x-0 bottom-0 top-10 grid place-items-center bg-ink-900/40 text-[12px] text-muted">loading chart…</div>
@@ -58,6 +59,19 @@ let ema200 = null
 let priceLines = []
 let lastCandle = null
 let resizeObs = null
+const displayOffsetSeconds = ref(0)
+const displayBasis = ref('utc')
+const offsetLabel = computed(() => {
+  const hours = displayOffsetSeconds.value / 3600
+  return `${hours >= 0 ? '+' : ''}${hours}`
+})
+
+function formatServerClock(timestamp) {
+  if (typeof timestamp !== 'number') return ''
+  return new Date((timestamp + displayOffsetSeconds.value) * 1000).toLocaleTimeString('en-GB', {
+    timeZone: 'UTC', hour: '2-digit', minute: '2-digit',
+  })
+}
 
 // UI preferences only: never write these switches into state.live or send an
 // API request. Engine, risk controls and persisted trade decisions are unchanged.
@@ -122,7 +136,10 @@ function buildChart() {
     },
     grid: { vertLines: { color: 'rgba(38,51,63,0.45)' }, horzLines: { color: 'rgba(38,51,63,0.45)' } },
     rightPriceScale: { borderColor: '#1a2331', scaleMargins: { top: 0.12, bottom: 0.12 } },
-    timeScale: { borderColor: '#1a2331', timeVisible: true, secondsVisible: false, rightOffset: 6 },
+    timeScale: {
+      borderColor: '#1a2331', timeVisible: true, secondsVisible: false, rightOffset: 6,
+      tickMarkFormatter: (time) => formatServerClock(time),
+    },
     crosshair: {
       mode: 0,
       vertLine: { color: 'rgba(245,181,65,0.5)', labelBackgroundColor: '#b97c12' },
@@ -157,8 +174,8 @@ function buildChart() {
 
 const lastBarText = computed(() => {
   if (!lastBar.value) return '—'
-  const d = new Date(lastBar.value * 1000)
-  return `${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}`
+  const d = new Date((lastBar.value + displayOffsetSeconds.value) * 1000)
+  return `${String(d.getUTCHours()).padStart(2, '0')}:${String(d.getUTCMinutes()).padStart(2, '0')}`
 })
 
 async function retry() {
@@ -176,6 +193,9 @@ async function load() {
       `/api/market/candles?symbol=${encodeURIComponent(state.symbol)}&timeframe=${state.timeframe}&limit=${state.range}`,
     )
     const raw = Array.isArray(data.candles) ? data.candles : []
+    displayBasis.value = data.time?.display_basis || 'utc'
+    displayOffsetSeconds.value = displayBasis.value === 'broker_server'
+      ? Number(data.time?.server_utc_offset_seconds || 0) : 0
     // lightweight-charts demands strictly ascending, unique timestamps.
     const seen = new Set()
     const clean = raw

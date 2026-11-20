@@ -33,14 +33,19 @@ def BridgeRelay(*args, **kwargs):
 
 
 def snapshot(symbol: str = "XAUUSD", bid: float = 2000.0, ask: float = 2000.25,
-             positions: list[dict] | None = None, rates: bool = True) -> dict:
-    now = int(time.time())
+             positions: list[dict] | None = None, rates: bool = True,
+             server_offset_seconds: int = 0) -> dict:
+    utc_now = time.time()
+    now = int(utc_now + server_offset_seconds)
     return {
-        "server_time": time.time(),
+        "time_basis": "broker_server",
+        "server_time": utc_now + server_offset_seconds,
+        "utc_time": utc_now,
         "account": {"login": "51234567", "balance": 10000.0, "equity": 10020.0, "margin": 0.0,
                     "free_margin": 10020.0, "currency": "USD", "leverage": 500,
                     "server": "Connext-Demo"},
-        "quotes": {symbol: {"t": time.time(), "bid": bid, "ask": ask, "last": (bid + ask) / 2}},
+        "quotes": {symbol: {"t": utc_now + server_offset_seconds, "bid": bid,
+                            "ask": ask, "last": (bid + ask) / 2}},
         "symbols": {symbol: {"digits": 2, "point": 0.01, "contract_size": 100}},
         "positions": positions if positions is not None else [{
             "ticket": "50001", "symbol": symbol, "direction": "buy", "volume": 0.1,
@@ -312,6 +317,47 @@ def test_snapshot_feeds_the_adapter(bridge):
     bars = adapter.candles("XAUUSD", "M1", 10)
     assert list(bars.columns) == ["t", "o", "h", "l", "c", "v"] and len(bars) == 5
     assert adapter.health().value == "connected"
+
+
+def test_broker_server_timestamps_are_normalized_to_utc(bridge):
+    adapter = bridge["adapter"]
+    before = time.time()
+    server_snapshot = snapshot(server_offset_seconds=7200)
+    bridge["relay"].poll(SID, snapshot=server_snapshot)
+
+    tick = adapter.ticker("XAUUSD")
+    bars = adapter.candles("XAUUSD", "M1", 10)
+    positions = adapter.positions()
+
+    assert abs(tick.t - before) < 2
+    assert abs(int(bars["t"].iloc[-1]) - (int(before) - 60)) < 2
+    assert abs(positions[0].open_time - (int(before) - 60)) < 2
+
+
+def test_broker_server_timestamp_without_utc_anchor_fails_closed(bridge):
+    malformed = snapshot()
+    malformed.pop("utc_time")
+    bridge["relay"].poll(SID, snapshot=malformed)
+    with pytest.raises(BrokerError, match="missing its UTC anchor"):
+        bridge["adapter"].ticker("XAUUSD")
+
+
+def test_broker_server_quote_without_timestamp_fails_closed(bridge):
+    malformed = snapshot()
+    malformed["quotes"]["XAUUSD"].pop("t")
+    bridge["relay"].poll(SID, snapshot=malformed)
+    with pytest.raises(BrokerError, match="missing its broker-server timestamp"):
+        bridge["adapter"].ticker("XAUUSD")
+
+
+def test_legacy_bridge_time_basis_is_not_claimed_as_utc_or_broker_local(bridge):
+    legacy = snapshot()
+    legacy.pop("time_basis")
+    legacy.pop("utc_time")
+    bridge["relay"].poll(SID, snapshot=legacy)
+    assert bridge["adapter"].timestamp_metadata() == {
+        "basis": "unknown", "display_basis": "unknown", "server_utc_offset_seconds": None,
+    }
 
 
 def test_positions_are_replaced_not_merged(bridge):

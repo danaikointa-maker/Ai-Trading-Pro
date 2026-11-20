@@ -35,7 +35,9 @@ python3 -m uvicorn services.api_gateway.app:app --host 0.0.0.0 --port 8000
 
 diagnostic นี้แนบกับ terminal ที่เปิดและ login ไว้อยู่แล้ว, ตรวจว่า account เป็น Demo และ login/server ตรงกัน, อ่าน quote แล้วปิดเฉพาะ IPC connection; ไม่ส่งคำสั่งและไม่เชื่อม account เข้า trading runtime
 
-Broker Manager บันทึก Demo/Live เป็นคนละ managed-account record และเข้ารหัส credential รายบัญชีผ่าน vault; ปุ่ม **Validate Demo** เรียก one-shot subprocess แบบ read-only เพื่อตรวจ terminal ที่เปิด/login ไว้แล้วว่าตรง login/server/type และอ่าน quote โดยไม่ส่งคำสั่ง. ขั้นนี้ไม่ใช้หรือยืนยัน password ที่เก็บใน vault และไม่ใช่ MT5 worker ถาวร
+หน้า **Brokers** บันทึก Demo/Live เป็นคนละ managed-account record และเข้ารหัส credential รายบัญชีผ่าน vault. ปุ่ม **เชื่อม/ตรวจ MT5 อ่านอย่างเดียว** เรียก one-shot subprocess เพื่อตรวจ Demo terminal ที่เปิด/login ไว้แล้วว่าตรง login/server/type และอ่าน quote; ไม่ส่งคำสั่ง และไม่ใช่ worker ถาวร. หลังสถานะขึ้น `ready_read_only` ให้เปิด Dashboard/Trades เลือกบัญชีใน Positions แล้วกด **ดึงข้อมูล MT5**. API จะยืนยัน account identity ซ้ำก่อน/หลังอ่านและคืน position, volume, entry, SL/TP, ราคาปัจจุบันและ P&L ที่ terminal รายงาน. การอ่านล้มเหลวจะไม่แสดงรายการว่างแทนความผิดพลาด และข้อมูลจาก linked account แยกจาก runtime/simulator
+
+การดึง position เป็น snapshot ตามการกด ไม่ใช่สตรีมต่อเนื่อง; กด refresh เพื่ออ่านค่าล่าสุด. ปุ่มปิดไม้ของ runtime จะไม่แสดงขณะเลือกบัญชี linked read-only. ตอนนี้รองรับเฉพาะ MT5 Demo ที่ link/verify แล้ว; ไม่มี order/modify call ในเส้นทางนี้
 
 แม้สถานะขึ้น `ready_read_only` ก็ยังไม่มี order execution ต่อ managed account; ต้องทำ persistent account worker, credential lifecycle และ Demo order acceptance ก่อนใช้งานเทรดจริง. Live connection ยังคงปิดไว้
 
@@ -360,6 +362,12 @@ curl -s -X POST localhost:8000/api/brokers/mt5-bridge-demo/activate \
   ต้องย้ายตาราง `bridge_*` ตามไปด้วย (ที่เหลือของแอปย้ายตามอยู่แล้ว)
 - คำสั่งที่ EA ไม่ ack จะหมดอายุ (`command_ttl_seconds` 30s / `ack_grace_seconds` 20s) และ **ไม่ส่งซ้ำ**
 - ต้องเปิด Algo Trading ในเทอร์มินัล ไม่งั้น EA ไม่ execute (ฝั่งเซิร์ฟเวอร์จะเห็นแค่ `expired`)
+
+**สถานะ V4 (2026-11-20):** source EA ส่ง `time_basis: broker_server`, `server_time` และ `utc_time`
+เพื่อให้ adapter แปลงเวลาเข้า UTC; ต้อง compile และทดสอบ capture บน Demo ใหม่ก่อนใช้ข้อมูลนั้นอนุมัติสัญญาณ.
+อย่าใช้ขั้นตอน activate/เปิด Algo Trading ข้างบนกับ runtime ปัจจุบันโดยอัตโนมัติ: VM100 ยังไม่ตรงกับ source
+และ V4 Demo order route ยังไม่พร้อม/ไม่เปิดใช้งาน. คำสั่ง Demo จะต้องผ่าน ExecutionGateway, identity/risk/freshness
+และ reconciliation gate หลังมี test evidence และอนุมัติการทดสอบ Demo แยกต่างหากเท่านั้น.
 
 ## 12.4 แจ้งเตือนออกนอกเครื่อง (Telegram / LINE / webhook)
 

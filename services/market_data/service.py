@@ -110,23 +110,33 @@ class MarketDataService:
             return {"ok": False, "health": health, "staleness_seconds": None,
                     "reason": f"ticker unavailable: {exc}", "spread_points": None}
         now = self.now()
-        staleness = max(0.0, now - float(tick.t))
-        limit = float(self.settings.risk_cfg().get("limits", {}).get("data_staleness_seconds", 30))
+        tick_time = float(tick.t)
+        age_seconds = now - tick_time
+        risk_limits = self.settings.risk_cfg().get("limits", {})
+        limit = float(risk_limits.get("data_staleness_seconds", 30))
+        future_tolerance = float(risk_limits.get("data_future_tolerance_seconds", 2))
+        future_by = max(0.0, -age_seconds)
+        future_invalid = future_by > future_tolerance
+        staleness = max(0.0, age_seconds)
         df = self.candles(symbol, timeframe, 10, broker_id)
         gaps = 0
         if len(df) > 2:
             diffs = df["t"].diff().iloc[1:]
             gaps = int((diffs > 90).sum()) if timeframe == "M1" else 0
-        ok = health in ("connected", "degraded") and staleness <= limit
+        ok = health in ("connected", "degraded") and not future_invalid and staleness <= limit
         reason = ""
         if health not in ("connected", "degraded"):
             reason = f"broker health is {health}"
+        elif future_invalid:
+            reason = (f"tick timestamp is in the future ({future_by:.1f}s > "
+                      f"{future_tolerance:.0f}s clock-skew tolerance)")
         elif staleness > limit:
             reason = f"price feed is stale ({staleness:.1f}s > {limit:.0f}s)"
         return {
             "ok": ok,
             "health": health,
             "staleness_seconds": round(staleness, 2),
+            "future_seconds": round(future_by, 2) if future_by else 0.0,
             "spread_points": tick.spread_points,
             "gaps_last_10": gaps,
             "reason": reason,

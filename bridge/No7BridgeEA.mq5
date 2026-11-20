@@ -536,8 +536,12 @@ string BuildSnapshot()
      }
    rates += "}";
 
-   return StringFormat("{\"server_time\":%I64d,%s,%s,%s,%s,%s,%s}",
-                       (long)TimeTradeServer(), account, quotes, specs, positions, rates,
+   // MT5 chart/rate timestamps and tick.time use broker-server time. Carry a
+   // same-snapshot UTC anchor so the API can normalize them before freshness,
+   // signal-expiry and browser rendering checks. TimeTradeServer is an estimate
+   // based on the terminal PC clock; the receiver still validates snapshot age.
+   return StringFormat("{\"time_basis\":\"broker_server\",\"server_time\":%I64d,\"utc_time\":%I64d,%s,%s,%s,%s,%s,%s}",
+                       (long)TimeTradeServer(), (long)TimeGMT(), account, quotes, specs, positions, rates,
                        "\"terminal\":{\"build\":" + IntegerToString(TerminalInfoInteger(TERMINAL_BUILD)) + "}");
   }
 
