@@ -16,9 +16,9 @@ The active PC and VM checkouts are dirty `integration/unified-tradeai` copies, n
 
 ## Follow-up read-only probe
 
-A later PC probe of `http://127.0.0.1:18000` and `:18080` returned Vue/Vite application HTML. `GET /api/health` returned HTTP 404 on both, and `/openapi.json` also returned HTML. Listener inspection found `18000` owned by `node` and `18080` owned by `ssh`; no local listener was found on `8000`. Process IDs are transient and intentionally omitted.
+A later PC probe first used the wrong paths (`/api/health`, `/openapi.json`), which returned 404/frontend HTML. Listener inspection found `18000` owned by `node` and `18080` owned by `ssh`; no local listener was found on `8000`. The active SSH command maps `127.0.0.1:18080` to `127.0.0.1:8000` on `danai@192.168.1.10`.
 
-A direct read-only SSH inspection then confirmed VM100's `integration/unified-tradeai` Uvicorn process on `127.0.0.1:8000`. Its actual health path is `/api/system/health` (not `/api/health`) and reports `status=ok`, `feed_mode=simulate`. The schema path is `/api/openapi.json`; it does not contain `POST /api/market/publish/mt5`. Thus the API is reachable on VM100, but the current local `18080` forward is presenting frontend HTML instead of exposing the API path used by the health check. No authenticated API call, configuration change, or trading mutation was attempted. Fix/verify the API tunnel mapping and deploy the reviewed isolated market route before Demo acceptance.
+Using the actual paths, read-only GET requests to `/api/system/health` and `/api/openapi.json` both succeeded on ports `18000` and `18080`. Both health responses report `status=ok`, `feed_mode=simulate`; both schemas expose 88 paths and do not contain `/api/market/publish/mt5`. Direct SSH confirmed VM100's `integration/unified-tradeai` Uvicorn process on `127.0.0.1:8000`, with the same health and schema results. Therefore the API tunnel works; the runtime itself is still the older simulated-feed API without the isolated publisher route. No authenticated API call, configuration change, or trading mutation was attempted. Review/reconcile the dirty VM runtime and deploy the reviewed isolated market route before Demo data acceptance.
 
 ## Why the old publisher was refused
 
