@@ -340,8 +340,9 @@ class StrategyEngine:
                 atr_points=atr_points, equity=equity,
                 spread_points=float(tick.spread_points),
                 supports=snap.supports, resistances=snap.resistances,
-                swings=[{"kind": s.kind, "price": s.price}
+                swings=[{"kind": s.kind, "price": s.price, "idx": s.idx}
                         for s in snap.swings if s.confirmed],
+                m5_bar_count=len(ctx.frames["M5"]),
             )
             result = self.planner.build(plan_inputs)
             blockers.extend(result.blockers)

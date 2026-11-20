@@ -6,7 +6,15 @@ import math
 import pytest
 import yaml
 
-from packages.shared_schemas.models import Direction, RiskSettings, SymbolSpec
+from packages.shared_schemas.models import (
+    Direction,
+    RiskSettings,
+    SymbolSpec,
+    Zone,
+    ZoneKind,
+    ZoneQuality,
+    ZoneStatus,
+)
 from services.risk_engine.planner import (
     PlanInputs,
     TradePlanner,
@@ -27,7 +35,7 @@ PLANNER = TradePlanner(yaml.safe_load(open("config/risk.yaml", encoding="utf-8")
 def test_v4_candidate_rounds_sl_and_tp_outward(direction, sl_round, tp_round):
     sign = 1 if direction == Direction.up else -1
     result = PLANNER.build(PlanInputs(
-        direction=direction, entry=2000.02, spec=SPEC,
+        direction=direction, entry=2000.0, spec=SPEC,
         atr_points=100.0, equity=10_000.0, risk_pct=0.5,
         spread_points=1.0, supports=[], resistances=[], swings=[],
         target_mode="fixed", fixed_points=[500, 750, 1000],
@@ -43,13 +51,13 @@ def test_v4_candidate_rounds_sl_and_tp_outward(direction, sl_round, tp_round):
                for price in (plan.tp1, plan.tp2, plan.tp3))
     assert (plan.sl - plan.entry) * sign < 0
     assert (plan.tp1 - plan.entry) * sign > 0
-    sl_raw = 2000.02 - sign * plan.sl_points * SPEC.point
+    sl_raw = 2000.0 - sign * plan.sl_points * SPEC.point
     sl_ticks = sl_raw / SPEC.tick_size
     expected_sl = (math.ceil(sl_ticks - 1e-10) if sl_round == "up"
                    else math.floor(sl_ticks + 1e-10)) * SPEC.tick_size
     assert plan.sl == pytest.approx(round(expected_sl, SPEC.digits))
     for target, points in zip((plan.tp1, plan.tp2, plan.tp3), plan.tp_points):
-        raw = 2000.02 + sign * points * SPEC.point
+        raw = 2000.0 + sign * points * SPEC.point
         ticks = raw / SPEC.tick_size
         expected_ticks = (math.ceil(ticks - 1e-10) if tp_round == "up"
                           else math.floor(ticks + 1e-10))
@@ -87,3 +95,124 @@ def test_shared_builder_uses_effective_legacy_settings_for_both_entry_modes():
     assert inputs.atr_target_multiplier == 2.2
     assert inputs.closes_pct == [40, 30, 30]
     assert inputs.directional_tick_rounding is False
+
+
+@pytest.mark.parametrize(("direction", "kind", "swing_price"), [
+    (Direction.up, "low", 1997.5),
+    (Direction.down, "high", 2002.5),
+])
+def test_atr_structure_candidate_uses_wider_recent_m5_swing(direction, kind, swing_price):
+    result = PLANNER.build(PlanInputs(
+        direction=direction, entry=2000.0, spec=SPEC,
+        atr_points=100.0, equity=10_000.0, risk_pct=0.5,
+        spread_points=1.0, supports=[], resistances=[],
+        swings=[{"kind": kind, "price": 1900.0 if kind == "low" else 2100.0,
+                 "idx": 89},
+                {"kind": kind, "price": swing_price, "idx": 95}],
+        sl_policy="atr_structure", sl_atr_multiplier=1.5,
+        sl_structure_buffer_atr=0.2, swing_lookback_bars=10,
+        m5_bar_count=100, sl_min_points=10, sl_max_points=1000,
+        target_mode="fixed", fixed_points=[500, 750, 1000],
+        min_points=500, max_points=1000, min_rr_net=0.1,
+        respect_zones=False, closes_pct=[40, 30, 30],
+        directional_tick_rounding=True,
+    ))
+
+    assert result.plan is not None, result.blockers
+    # 250 points swing distance + 20 points (0.2 ATR) exceeds 1.5 ATR.
+    assert result.plan.sl_points == pytest.approx(270)
+
+
+def test_atr_structure_candidate_rejects_required_stop_above_maximum():
+    result = PLANNER.build(PlanInputs(
+        direction=Direction.up, entry=2000.0, spec=SPEC,
+        atr_points=100.0, equity=10_000.0, risk_pct=0.5,
+        spread_points=1.0, supports=[], resistances=[],
+        swings=[{"kind": "low", "price": 1980.0, "idx": 95}],
+        sl_policy="atr_structure", sl_atr_multiplier=1.5,
+        sl_structure_buffer_atr=0.2, swing_lookback_bars=10,
+        m5_bar_count=100, sl_min_points=10, sl_max_points=1000,
+        min_rr_net=0.1,
+    ))
+
+    assert result.plan is None
+    assert "stop_distance_max" in result.blocker_codes
+
+
+@pytest.mark.parametrize("direction", [Direction.up, Direction.down])
+def test_candidate_structure_buffer_converts_atr_points_to_price(direction):
+    kind = "low" if direction == Direction.up else "high"
+    swing_price = 1998.0 if direction == Direction.up else 2002.0
+    points, _ = PLANNER._stop_from_structure(direction, 2000.0, PlanInputs(
+        direction=direction, entry=2000.0, spec=SPEC, atr_points=100,
+        equity=10_000, risk_pct=0.5, spread_points=1,
+        supports=[], resistances=[], swings=[{"kind": kind, "price": swing_price}],
+        sl_min_points=1, sl_max_points=1000,
+    ))
+    # 100 points * 0.35 ATR = 35 points = $0.35, not $35.
+    assert points == pytest.approx(235)
+
+
+def test_atr_structure_candidate_rejects_missing_atr_data():
+    result = PLANNER.build(PlanInputs(
+        direction=Direction.up, entry=2000.0, spec=SPEC,
+        atr_points=0.0, equity=10_000.0, risk_pct=0.5,
+        spread_points=1.0, supports=[], resistances=[],
+        sl_policy="atr_structure", sl_atr_multiplier=1.5,
+        sl_structure_buffer_atr=0.2, swing_lookback_bars=10,
+        m5_bar_count=100, sl_min_points=10, sl_max_points=1000,
+    ))
+
+    assert result.plan is None
+    assert "invalid_stop_policy" in result.blocker_codes
+
+
+def test_atr_structure_candidate_rejects_missing_closed_m5_structure():
+    result = PLANNER.build(PlanInputs(
+        direction=Direction.up, entry=2000.0, spec=SPEC,
+        atr_points=100.0, equity=10_000.0, risk_pct=0.5,
+        spread_points=1.0, supports=[], resistances=[], swings=[],
+        sl_policy="atr_structure", sl_atr_multiplier=1.5,
+        sl_structure_buffer_atr=0.2, swing_lookback_bars=10,
+        m5_bar_count=100, sl_min_points=10, sl_max_points=1000,
+    ))
+
+    assert result.plan is None
+    assert "structure_missing" in result.blocker_codes
+
+
+def test_zone_buffer_is_converted_from_points_to_price():
+    zone = Zone(id="R1", kind=ZoneKind.resistance, low=2004.5, high=2005.1,
+                mid=2004.8, strength=0.9, quality=ZoneQuality.high,
+                status=ZoneStatus.confirmed)
+    inputs = PlanInputs(
+        direction=Direction.up, entry=2000.0, spec=SPEC,
+        atr_points=100, equity=10_000, risk_pct=0.5, spread_points=1,
+        supports=[], resistances=[zone], atr_target_multiplier=5,
+        zone_buffer_atr=0.35, respect_zones=True,
+        min_points=300, max_points=1000, fixed_points=[500, 750, 1000],
+        target_mode="fixed",
+    )
+
+    ladder, notes, blockers = PLANNER._tp_ladder(Direction.up, 2000.0, inputs)
+
+    assert blockers == []
+    assert ladder[0] == pytest.approx(415)
+    assert any("TP1 capped" in note for note in notes)
+
+
+def test_obstructed_target_below_minimum_is_rejected():
+    zone = Zone(id="R1", kind=ZoneKind.resistance, low=2004.5, high=2005.1,
+                mid=2004.8, strength=0.9, quality=ZoneQuality.high,
+                status=ZoneStatus.confirmed)
+    inputs = PlanInputs(
+        direction=Direction.up, entry=2000.0, spec=SPEC,
+        atr_points=100, equity=10_000, risk_pct=0.5, spread_points=1,
+        supports=[], resistances=[zone], zone_buffer_atr=0.35,
+        respect_zones=True, min_points=500, max_points=1000,
+        fixed_points=[500, 750, 1000], target_mode="fixed",
+    )
+
+    _, _, blockers = PLANNER._tp_ladder(Direction.up, 2000.0, inputs)
+
+    assert blockers and "configured minimum target" in blockers[0]

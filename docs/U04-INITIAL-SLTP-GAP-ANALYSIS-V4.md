@@ -5,7 +5,9 @@
 **PARTIAL / NOT ACCEPTED.** Existing `TradePlanner` remains the single planning
 source; no second SL/TP engine was created. An opt-in `PlanInputs` flag now
 supports outward tick normalization for SL/TP. It defaults to `false`, so
-legacy plan output is unchanged. The candidate profile is not read by runtime.
+legacy tick rounding is unchanged. An opt-in ATR+structure stop policy is also
+available to direct planner callers; the candidate profile remains unloaded
+from runtime settings.
 
 ## Existing behavior
 
@@ -26,14 +28,12 @@ legacy plan output is unchanged. The candidate profile is not read by runtime.
 
 ## Gaps against the V4 candidate
 
-1. Structure stop selection currently chooses the *nearest* valid structural
-   candidate and widens it to a volatility floor. The candidate asks for enough
-   room to satisfy both the ATR reference and structure distance; encode this
-   explicitly behind a versioned candidate profile, never by silently changing
-   the legacy result.
-2. Structural buffer is hard-coded to 0.35 ATR in `_stop_from_structure`, while
-   the earlier proposed dynamic profile specifies 0.20 ATR. This needs a named
-   input and defaults that preserve legacy behavior.
+1. **DONE for candidate mode:** `sl_policy: atr_structure` uses the wider of
+   ATR reference and most adverse confirmed swing in the configured closed-M5
+   lookback. Candidate values are 1.5 ATR, 0.20 ATR buffer and 10 bars. Legacy
+   mode retains its 0.35 ATR buffer and nearest structural candidate.
+2. **DONE for candidate mode:** missing M5 lookback data or a missing confirmed
+   swing now blocks the candidate plan instead of silently falling back to ATR.
 3. `SymbolSpec.round_price` rounds to the nearest tick. A candidate-only
    normalization option now rounds BUY SL down / TP up and SELL SL up / TP down.
    Runtime callers still use the legacy nearest-tick behavior until a profile
@@ -49,13 +49,18 @@ legacy plan output is unchanged. The candidate profile is not read by runtime.
    partials off, ATR(14) from a closed M5 bar and 10-bar swing provenance.
    `AnalysisService` already passes closed M5 frames for structure, but these
    exact inputs need explicit tests before they can be called verified.
+7. The audit found ATR buffers treated as raw price units and structural
+   distances compared as prices to point thresholds. Both now convert between
+   points and price using `SymbolSpec`. A high-quality opposing zone that leaves
+   less than the configured minimum target now blocks planning instead of
+   placing TP through the zone.
 
 ## Test evidence
 
 `pytest tests/test_invariants.py tests/test_spec_safety.py
 tests/test_v4_risk_candidate.py tests/test_v4_plan_candidate.py
 tests/test_risk_engine.py tests/test_risk_state_failure.py
-tests/test_smart_entry_continuation.py -q` — **80 passed**.
+tests/test_smart_entry_continuation.py -q` — **89 passed**.
 These protect current sizing, side-correct geometry, broker tick grid, RR,
 partial-volume feasibility, legacy Risk Engine vetoes and candidate isolation.
 They do not establish broker Demo acceptance or validate an SL/TP order.
@@ -69,8 +74,10 @@ Candidate-only tick-normalization tests cover BUY and SELL geometry with a
 2. **DONE:** directional tick rounding is optional and covered for BUY/SELL;
    runtime remains on nearest rounding.
 3. **DONE:** Auto and Manual construct inputs through the shared helper.
-4. Add candidate ATR+structure / single-2R policy tests, min-lot and cost cases.
-5. Verify `order_check`, margin, stops/freeze levels and post-fill SL/TP only
+4. **DONE:** Candidate ATR+structure sizing, closed-M5 lookback, max-stop
+   rejection and point/price conversion tests.
+5. Add candidate single-2R / partial-off semantics and min-lot/cost cases.
+6. Verify `order_check`, margin, stops/freeze levels and post-fill SL/TP only
    through the existing ExecutionGateway and an explicitly approved Demo.
 
 No LIVE order, broker action, profile activation or migration occurred. U04 is
