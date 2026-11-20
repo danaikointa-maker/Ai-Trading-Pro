@@ -94,6 +94,7 @@
 - ยังไม่ได้ทดสอบ order flow กับโบรกเกอร์จริง (filling mode, stops level, freeze level,
   partial fill, requote) — โค้ดมี verify-after-send และ idempotency แล้ว แต่ยังไม่ผ่านสนามจริง
 - Reconcile มีอยู่แต่ยังไม่ได้ทดสอบกับ position ที่ถูกแก้จากมือในเทอร์มินัล
+- Source บน V4 เพิ่ม durable/idempotent SL modify intent, broker quote/spec preflight และ readback reconciliation ใน gateway เดิมแล้ว แต่ยังไม่ได้ deploy ไป runtime และยังไม่มี MT5 Demo acceptance; ห้ามตีความว่า terminal ที่กำลังใช้จะทำงานตาม source ใหม่นี้
 
 ## 5. ระบบโดยรวม
 

@@ -6,6 +6,8 @@ is represented as ``None`` and must be reconciled by a human, never guessed.
 from __future__ import annotations
 
 import json
+import hashlib
+import math
 import sqlite3
 import time
 import uuid
@@ -17,6 +19,209 @@ from packages.persistence.db import Database
 class PositionEventLog:
     def __init__(self, db: Database):
         self.db = db
+
+    @staticmethod
+    def _account_fingerprint(account_identity: dict[str, str]) -> str:
+        required = ("broker_id", "login", "server", "currency", "workspace_id")
+        if (not isinstance(account_identity, dict)
+                or any(not isinstance(account_identity.get(key), str)
+                       or not account_identity[key].strip()
+                       for key in required)):
+            raise ValueError("modify intent account identity is incomplete")
+        canonical = json.dumps({key: account_identity[key] for key in required},
+                               sort_keys=True, separators=(",", ":"))
+        return hashlib.sha256(canonical.encode("utf-8")).hexdigest()
+
+    def reserve_modify(self, *, broker_id: str, ticket: str, idempotency_key: str,
+                       account_identity: dict[str, str], detail: dict[str, Any]) -> dict[str, Any]:
+        """Durably claim one account/ticket modify before broker I/O.
+
+        Any unresolved intent fences later changes to the same position. The
+        caller must reconcile it; an ambiguous request is never retried here.
+        """
+        if (not all(isinstance(value, str) and value.strip() and value == value.strip()
+                    for value in (broker_id, ticket, idempotency_key))
+                or not isinstance(account_identity, dict)
+                or account_identity.get("broker_id") != broker_id
+                or account_identity.get("workspace_id") != self.db.workspace_id
+                or not isinstance(detail, dict)):
+            raise ValueError("modify intent identity or payload is invalid")
+        fingerprint = self._account_fingerprint(account_identity)
+        serialized_detail = json.dumps(detail, sort_keys=True, allow_nan=False)
+        request_hash = hashlib.sha256(serialized_detail.encode("utf-8")).hexdigest()
+        now = time.time()
+        with self.db.cursor() as cur:
+            cur.execute("BEGIN IMMEDIATE")
+            existing = cur.execute(
+                "SELECT request_hash,state FROM position_modify_intents "
+                "WHERE broker_id=? AND account_fingerprint=? AND ticket=? AND idempotency_key=?",
+                (broker_id, fingerprint, ticket, idempotency_key)).fetchone()
+            if existing:
+                if existing["request_hash"] != request_hash:
+                    raise ValueError("modify idempotency key belongs to another request")
+                return {"created": False, "state": existing["state"],
+                        "account_fingerprint": fingerprint}
+            unresolved = cur.execute(
+                "SELECT idempotency_key,state FROM position_modify_intents "
+                "WHERE broker_id=? AND account_fingerprint=? AND ticket=? "
+                "AND state IN ('reserved','sending','accepted_unverified','unknown')",
+                (broker_id, fingerprint, ticket)).fetchone()
+            if unresolved:
+                return {"created": False, "blocked": True,
+                        "state": unresolved["state"],
+                        "idempotency_key": unresolved["idempotency_key"],
+                        "account_fingerprint": fingerprint}
+            cur.execute(
+                "INSERT INTO position_modify_intents"
+                "(broker_id,account_fingerprint,ticket,idempotency_key,request_hash,request_payload,state,created_at,updated_at) "
+                "VALUES(?,?,?,?,?,?,'reserved',?,?)",
+                (broker_id, fingerprint, ticket, idempotency_key, request_hash,
+                 serialized_detail, now, now))
+            event_id = "PE-" + uuid.uuid4().hex
+            payload = {"schema_version": 1, "account_identity": account_identity,
+                       "detail": {**detail, "idempotency_key": idempotency_key},
+                       "order_attribution": "unresolved"}
+            cur.execute(
+                "INSERT INTO position_events"
+                "(event_id,order_id,broker_id,ticket,actor,kind,status,created_at,payload) "
+                "VALUES(?,NULL,?,?,?,'modify','reserved',?,?)",
+                (event_id, broker_id, ticket, "position-manager",
+                 now, json.dumps(payload, sort_keys=True, allow_nan=False)))
+        return {"created": True, "state": "reserved", "account_fingerprint": fingerprint}
+
+    def transition_modify(self, *, broker_id: str, ticket: str, idempotency_key: str,
+                          account_identity: dict[str, str], state: str,
+                          detail: dict[str, Any] | None = None) -> bool:
+        """Advance an intent projection and append immutable transition evidence."""
+        allowed = {
+            "reserved": {"sending", "unknown", "rejected"},
+            "sending": {"accepted_unverified", "unknown", "rejected", "confirmed"},
+            "accepted_unverified": {"confirmed", "unknown"},
+            "unknown": {"confirmed", "rejected"},
+        }
+        if state not in {"sending", "accepted_unverified", "unknown", "rejected", "confirmed"}:
+            raise ValueError("modify intent state is invalid")
+        if (not isinstance(account_identity, dict)
+                or account_identity.get("broker_id") != broker_id
+                or account_identity.get("workspace_id") != self.db.workspace_id):
+            raise ValueError("modify intent account scope is invalid")
+        fingerprint = self._account_fingerprint(account_identity)
+        now = time.time()
+        safe_detail = detail or {}
+        with self.db.cursor() as cur:
+            cur.execute("BEGIN IMMEDIATE")
+            row = cur.execute(
+                "SELECT state FROM position_modify_intents WHERE broker_id=? "
+                "AND account_fingerprint=? AND ticket=? AND idempotency_key=?",
+                (broker_id, fingerprint, ticket, idempotency_key)).fetchone()
+            if row is None:
+                raise ValueError("modify intent does not exist")
+            current = str(row["state"])
+            if state not in allowed.get(current, set()):
+                return False
+            cur.execute(
+                "UPDATE position_modify_intents SET state=?,updated_at=? WHERE broker_id=? "
+                "AND account_fingerprint=? AND ticket=? AND idempotency_key=?",
+                (state, now, broker_id, fingerprint, ticket, idempotency_key))
+            event_id = "PE-" + uuid.uuid4().hex
+            payload = {"schema_version": 1, "account_identity": account_identity,
+                       "detail": {**safe_detail, "idempotency_key": idempotency_key},
+                       "order_attribution": "unresolved"}
+            cur.execute(
+                "INSERT INTO position_events"
+                "(event_id,order_id,broker_id,ticket,actor,kind,status,created_at,payload) "
+                "VALUES(?,NULL,?,?,?,'modify',?,?,?)",
+                (event_id, broker_id, ticket, "position-manager", state, now,
+                 json.dumps(payload, sort_keys=True, allow_nan=False)))
+        return True
+
+    def reconcile_modify_intents(self, *, broker_id: str, account_identity: dict[str, str],
+                                 positions: list[Any], tick_size_by_symbol: dict[str, float]) -> list[str]:
+        """Confirm unresolved intents only when a fresh exact position matches."""
+        if (not isinstance(account_identity, dict)
+                or account_identity.get("broker_id") != broker_id
+                or account_identity.get("workspace_id") != self.db.workspace_id):
+            raise ValueError("modify reconciliation account scope is invalid")
+        fingerprint = self._account_fingerprint(account_identity)
+        by_ticket = {str(pos.ticket): pos for pos in positions
+                     if getattr(pos, "broker_id", None) == broker_id}
+        rows = self.db.query(
+            "SELECT ticket,idempotency_key,state,request_payload FROM position_modify_intents "
+            "WHERE broker_id=? AND account_fingerprint=? "
+            "AND state IN ('sending','accepted_unverified','unknown')",
+            (broker_id, fingerprint))
+        confirmed: list[str] = []
+        for row in rows:
+            pos = by_ticket.get(str(row["ticket"]))
+            if pos is None:
+                continue
+            try:
+                request = json.loads(row["request_payload"])
+                sl = request["sl"]
+                tp = request.get("tp")
+                before_tp = request.get("before_tp")
+                tolerance = float(tick_size_by_symbol.get(pos.symbol, 0.0)) * 1e-6
+                sl_match = (type(sl) in (int, float) and tolerance > 0
+                            and abs(float(pos.sl) - float(sl)) <= tolerance)
+                tp_target = before_tp if tp is None else tp
+                tp_match = (type(tp_target) in (int, float)
+                            and abs(float(pos.tp) - float(tp_target)) <= tolerance)
+                if not (sl_match and tp_match):
+                    continue
+            except (ValueError, TypeError, KeyError, AttributeError):
+                continue
+            changed = self.transition_modify(
+                broker_id=broker_id, ticket=str(row["ticket"]),
+                idempotency_key=str(row["idempotency_key"]),
+                account_identity=account_identity, state="confirmed",
+                detail={"broker_sl": pos.sl, "broker_tp": pos.tp,
+                        "confirmation_source": "fresh_broker_position_reconciliation"})
+            if changed:
+                confirmed.append(str(row["ticket"]))
+        return confirmed
+
+    def confirmed_modify_matches_in_transaction(self, cur: sqlite3.Cursor, *,
+                                               broker_id: str, ticket: str,
+                                               account_identity: dict[str, str],
+                                               before: dict[str, Any],
+                                               observed: dict[str, Any]) -> bool:
+        """Check whether only SL/TP changed to the latest confirmed intent."""
+        if (not isinstance(account_identity, dict)
+                or account_identity.get("broker_id") != broker_id
+                or account_identity.get("workspace_id") != self.db.workspace_id):
+            return False
+        fingerprint = self._account_fingerprint(account_identity)
+        row = cur.execute(
+            "SELECT state,request_payload FROM position_modify_intents "
+            "WHERE broker_id=? AND account_fingerprint=? AND ticket=? "
+            "ORDER BY created_at DESC LIMIT 1", (broker_id, fingerprint, ticket)).fetchone()
+        if row is None or row["state"] != "confirmed":
+            return False
+        try:
+            request = json.loads(row["request_payload"])
+            changed = {key for key in before if before.get(key) != observed.get(key)}
+            if (not changed or not changed.issubset({"sl", "tp"})
+                    or request.get("symbol") != observed.get("symbol")
+                    or before.get("sl") != request.get("before_sl")
+                    or before.get("tp") != request.get("before_tp")):
+                return False
+            tick_size = float(request.get("tick_size", 0.0))
+            tolerance = tick_size * 1e-6
+            if tolerance <= 0 or not math.isfinite(tolerance):
+                return False
+            expected_tp = request.get("before_tp") if request.get("tp") is None else request.get("tp")
+            return (abs(float(observed["sl"]) - float(request["sl"])) <= tolerance
+                    and abs(float(observed["tp"]) - float(expected_tp)) <= tolerance)
+        except (ValueError, TypeError, KeyError, AttributeError):
+            return False
+
+    def confirmed_modify_matches(self, *, broker_id: str, ticket: str,
+                                  account_identity: dict[str, str],
+                                  before: dict[str, Any], observed: dict[str, Any]) -> bool:
+        with self.db.cursor() as cur:
+            return self.confirmed_modify_matches_in_transaction(
+                cur, broker_id=broker_id, ticket=ticket,
+                account_identity=account_identity, before=before, observed=observed)
 
     def linked_order(self, broker_id: str, ticket: str, account_identity: dict) -> str | None:
         if (account_identity.get("broker_id") != broker_id
