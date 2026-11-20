@@ -1,0 +1,42 @@
+# DESIGN-ONLY candidate for U03. This file is not read by Settings or RiskEngine.
+# Do not copy into config/risk.yaml without reviewed migration and acceptance.
+candidate:
+  id: conservative_v4_candidate
+  schema_version: 1
+  activation: forbidden
+  based_on: legacy_v1
+
+# Values that map to existing RiskLimits fields. They remain inactive.
+runtime_compatible_limits:
+  risk_per_trade_pct: 0.5
+  max_daily_loss_pct: 2.0
+  max_weekly_loss_pct: 4.0
+  max_drawdown_pct: 8.0
+  max_open_trades: 1
+  max_open_per_symbol: 1
+  min_reward_risk: 1.5
+
+# Policy proposals not enforced by the current RiskLimits/RiskEngine contract.
+policy_proposals:
+  aggregate_open_risk_pct: 1.0
+  max_trades_per_day: 5
+  xauusd_positions_max: 1
+  enforcement_status: unsupported_by_current_runtime
+
+initial_trade_plan:
+  stop: structure_plus_atr
+  atr_timeframe: M5
+  atr_period: 14
+  atr_multiplier: 1.5
+  target: single_2r
+  partials_enabled: false
+  enforcement_status: candidate_only
+
+position_protection:
+  automatic_modification_enabled: false
+  enforcement_status: candidate_only
+
+migration:
+  automatic: false
+  preserve_legacy_profile: true
+  rollback: remove_candidate_file; config/risk.yaml remains unchanged
