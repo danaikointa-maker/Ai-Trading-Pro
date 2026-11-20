@@ -62,7 +62,8 @@ class PositionManager:
                 continue
 
             # --- 2. partial closes at the ladder levels
-            if plan_data and self._partial_enabled():
+            if (plan_data and self._partial_enabled()
+                    and plan_data.target_mode != "single_2r"):
                 partial = self._partial_action(pos, plan_data, spec, sign)
                 if partial:
                     actions.append(partial)

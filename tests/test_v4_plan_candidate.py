@@ -216,3 +216,50 @@ def test_obstructed_target_below_minimum_is_rejected():
     _, _, blockers = PLANNER._tp_ladder(Direction.up, 2000.0, inputs)
 
     assert blockers and "configured minimum target" in blockers[0]
+
+
+@pytest.mark.parametrize(("direction", "kind", "swing_price"), [
+    (Direction.up, "low", 1997.5),
+    (Direction.down, "high", 2002.5),
+])
+def test_single_target_candidate_is_2r_and_has_no_partial_ladder(
+        direction, kind, swing_price):
+    result = PLANNER.build(PlanInputs(
+        direction=direction, entry=2000.0, spec=SPEC,
+        atr_points=100, equity=10_000, risk_pct=0.5, spread_points=1,
+        supports=[], resistances=[], swings=[{"kind": kind, "price": swing_price, "idx": 95}],
+        sl_policy="atr_structure", sl_atr_multiplier=1.5,
+        sl_structure_buffer_atr=0.2, swing_lookback_bars=10, m5_bar_count=100,
+        sl_min_points=10, sl_max_points=1000, min_points=500,
+        max_points=1000, min_rr_net=1.5, target_mode="fixed",
+        fixed_points=[500, 750, 1000], respect_zones=False,
+        directional_tick_rounding=True, single_target_r=2.0,
+    ))
+
+    assert result.plan is not None, result.blockers
+    plan = result.plan
+    assert plan.target_mode == "single_2r"
+    assert plan.tp_points == [540, 540, 540]
+    assert len(plan.partials) == 1
+    assert plan.partials[0].close_pct == 100
+    assert plan.partials[0].price == plan.tp1
+    assert plan.reward_risk_net >= 1.5
+
+
+def test_single_2r_target_rejects_opposing_zone_before_target():
+    zone = Zone(id="R1", kind=ZoneKind.resistance, low=2003.8, high=2004.4,
+                mid=2004.1, strength=0.9, quality=ZoneQuality.high,
+                status=ZoneStatus.confirmed)
+    result = PLANNER.build(PlanInputs(
+        direction=Direction.up, entry=2000.0, spec=SPEC,
+        atr_points=100, equity=10_000, risk_pct=0.5, spread_points=1,
+        supports=[], resistances=[zone], swings=[{"kind": "low", "price": 1997.5,
+                                                   "idx": 95}],
+        sl_policy="atr_structure", sl_atr_multiplier=1.5,
+        sl_structure_buffer_atr=0.2, swing_lookback_bars=10, m5_bar_count=100,
+        sl_min_points=10, sl_max_points=1000, min_points=500,
+        max_points=1000, min_rr_net=1.5, single_target_r=2.0,
+    ))
+
+    assert result.plan is None
+    assert "opposing_zone" in result.blocker_codes
