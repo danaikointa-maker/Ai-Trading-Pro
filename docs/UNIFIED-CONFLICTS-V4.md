@@ -20,6 +20,8 @@ Updated: 2026-11-19. These are comparisons based on repository content, NOT inst
 | Position modification | `manager.py` can generate BE and trailing actions | new ProtectionEngine | single candidate reducer and one existing execution gateway, avoid two commands |
 | MATH | old docs describe point/lot and legacy partials | newer risk/BE maths | tech math doc reflects active code; new math in plan until implemented |
 | Reality | simulation default; demo not fully validated | prompts say auto/open immediately | not considered operational; Demo explicit permission only |
+| Windows MT5 host | V4 source snapshot names VM200 | User later specified the development Windows PC as the current MT5 installation/execution host | Treat the development PC as current Windows MT5 host; do not operate VM200 unless separately reauthorized. Verify local terminal identity and outbound PC→VM100 bridge before execution acceptance. |
+| VM100 runtime | V4 expects `/opt/no7-ai-trading-pro` | Read-only SSH audit on 2026-11-21 found `ai-server`, but that path was absent and no No7/uvicorn service or listener on 8000/18081 was found | No runtime deployment is evidenced. Keep staging/production status NOT TESTED until an isolated staging service is present and verified. |
 
 ## Document ownership and disposition
 - `docs/UNIFIED-MASTER-PLAN-V4.md`: canonical planned behavior, phase order and module ownership.
