@@ -42,6 +42,11 @@ def publish_mt5_market(body: MT5MarketSnapshot,
         raise HTTPException(status_code=503, detail="MT5 market publisher is disabled")
     if not token or not hmac.compare_digest(token, expected):
         raise HTTPException(status_code=401, detail="invalid market publisher credential")
+    if body.time_basis != "utc":
+        raise HTTPException(
+            status_code=422,
+            detail="MT5 publisher requires UTC timestamps; broker-server time needs an independently verified offset",
+        )
     try:
         return runtime.market.publish_mt5_snapshot(body.model_dump())
     except (KeyError, TypeError, ValueError) as exc:
