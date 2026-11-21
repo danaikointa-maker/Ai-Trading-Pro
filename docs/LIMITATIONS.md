@@ -37,7 +37,7 @@
   ยังไม่ compile EA หรือยืนยัน capture สดหลังเปลี่ยน และ DST/offset ในอดีตยังไม่ผ่าน acceptance.
 - PC market publisher แยก endpoint `/api/market/publish/mt5` และ token จาก EA command bridge;
   ส่งเฉพาะ quotes/rates/specs ของ Demo, รับ timestamp basis `utc` และปฏิเสธ tick เก่ากว่า 1–15 วินาที
-  (default 10s). Route ปิดโดยค่าเริ่มต้น. V4 focused tests/build ผ่าน แต่ preflight พบ staging stale
+  (default 10s) พร้อมแจ้งเหตุผลต่อ symbol เมื่อไม่ส่ง quote. Route ปิดโดยค่าเริ่มต้น. V4 focused tests/build ผ่าน แต่ preflight พบ staging stale
   (`fresh=false`) และยังใช้ source คนละ branch; runtime acceptance จึงยังไม่ผ่าน.
 - ใน V4 branch นี้ยังไม่มี API อ่าน positions รายบัญชี MT5; `tests/test_mt5_readonly.py`
   ยืนยัน adapter-level behavior เท่านั้น ไม่ใช่ UI/API หรือ broker round-trip.

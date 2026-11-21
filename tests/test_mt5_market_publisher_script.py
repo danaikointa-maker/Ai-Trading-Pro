@@ -7,7 +7,9 @@ from types import ModuleType, SimpleNamespace
 import pytest
 
 import scripts.mt5_market_publisher as publisher
-from scripts.mt5_market_publisher import TIMEFRAMES, _rates, _symbol_map, _validate_endpoint
+from scripts.mt5_market_publisher import (
+    TIMEFRAMES, _quote_freshness, _rates, _symbol_map, _validate_endpoint,
+)
 
 
 def test_symbol_map_supports_canonical_broker_suffix_mapping():
@@ -62,9 +64,31 @@ def test_rates_reads_only_requested_frames_and_normalizes_mt5_fields():
     assert set(TIMEFRAMES) >= {"M1", "M5"}
 
 
+@pytest.mark.parametrize(("info", "tick", "now", "max_age", "reason"), [
+    (None, None, 100.0, 10.0, "symbol info unavailable"),
+    (object(), None, 100.0, 10.0, "no tick"),
+    (object(), SimpleNamespace(bid=0, ask=1, time=100), 100.0, 10.0,
+     "invalid bid/ask"),
+    (object(), SimpleNamespace(bid=1, ask=1.1, time=100), 101.0, 10.0, None),
+    (object(), SimpleNamespace(bid=1, ask=1.1, time=40), 100.0, 10.0,
+     "stale tick (60.0s old; limit 10s)"),
+    (object(), SimpleNamespace(bid=1, ask=1.1, time=102), 100.0, 10.0,
+     "future tick (-2.0s)"),
+    (object(), SimpleNamespace(bid=1, ask=1.1, time=float("nan")), 100.0, 10.0,
+     "invalid tick timestamp"),
+])
+def test_quote_freshness_explains_withheld_quotes(info, tick, now, max_age, reason):
+    tick_time, skip_reason = _quote_freshness(info, tick, now, max_age)
+    assert skip_reason == reason
+    if reason is None:
+        assert tick_time == 100.0
+    else:
+        assert tick_time is None
+
+
 @pytest.mark.parametrize(("tick_age_seconds", "expect_publish"), [(0, True), (60, False)])
 def test_readonly_publisher_only_emits_fresh_utc_demo_quotes(
-        monkeypatch, tick_age_seconds, expect_publish):
+        monkeypatch, capsys, tick_age_seconds, expect_publish):
     now = time.time()
     calls = []
     mt5 = ModuleType("MetaTrader5")
@@ -128,6 +152,9 @@ def test_readonly_publisher_only_emits_fresh_utc_demo_quotes(
 
     if not expect_publish:
         assert calls == ["shutdown"]
+        output = capsys.readouterr().out
+        assert "No fresh MT5 quote" in output
+        assert "XAUUSD: stale tick (60.0s old; limit 10s)" in output
         return
 
     endpoint, body, headers = calls[0]

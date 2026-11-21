@@ -6,6 +6,7 @@ it will not log in, switch accounts, or enable Algo Trading.
 """
 from __future__ import annotations
 
+import math
 import os
 import sys
 import time
@@ -71,6 +72,37 @@ def _rates(mt5: Any, symbol: str, count: int,
     return result
 
 
+def _quote_freshness(info: Any, tick: Any, now: float,
+                     max_age: float) -> tuple[float | None, str | None]:
+    """Return UTC tick time, or a safe reason why the quote must be withheld."""
+    if info is None:
+        return None, "symbol info unavailable"
+    if tick is None:
+        return None, "no tick"
+    try:
+        bid, ask = float(tick.bid), float(tick.ask)
+    except (AttributeError, TypeError, ValueError):
+        return None, "invalid bid/ask"
+    if not math.isfinite(bid) or not math.isfinite(ask) or bid <= 0 or ask < bid:
+        return None, "invalid bid/ask"
+
+    try:
+        tick_time_msc = float(getattr(tick, "time_msc", 0) or 0)
+        tick_time = (tick_time_msc / 1000.0 if tick_time_msc > 0
+                     else float(tick.time))
+    except (AttributeError, TypeError, ValueError):
+        return None, "invalid tick timestamp"
+    if not math.isfinite(tick_time) or tick_time <= 0:
+        return None, "invalid tick timestamp"
+
+    age = now - tick_time
+    if age < 0:
+        return None, f"future tick ({age:.1f}s)"
+    if age > max_age:
+        return None, f"stale tick ({age:.1f}s old; limit {max_age:g}s)"
+    return tick_time, None
+
+
 def run() -> int:
     import MetaTrader5 as mt5  # optional Windows-only dependency
 
@@ -112,19 +144,16 @@ def run() -> int:
             while True:
                 now = time.time()
                 quotes = {}
+                skipped: dict[str, str] = {}
                 refresh_rates = now - last_rates >= rates_seconds
                 for canonical, broker_symbol in symbols.items():
                     info, tick = mt5.symbol_info(broker_symbol), mt5.symbol_info_tick(broker_symbol)
-                    if info is None or tick is None or tick.bid <= 0 or tick.ask < tick.bid:
-                        continue
-                    tick_time_msc = float(getattr(tick, "time_msc", 0) or 0)
-                    tick_time = (tick_time_msc / 1000.0 if tick_time_msc > 0
-                                 else float(tick.time))
-                    tick_age = now - tick_time
                     # MetaTrader's Python integration returns tick/bar timestamps in UTC.
                     # Do not infer a timezone offset from a tick: that would turn a stale
                     # tick into an apparently current quote when the market is quiet/closed.
-                    if not 0 <= tick_age <= max_tick_age:
+                    tick_time, skip_reason = _quote_freshness(info, tick, now, max_tick_age)
+                    if skip_reason:
+                        skipped[canonical] = skip_reason
                         continue
                     quotes[canonical] = {"bid": float(tick.bid), "ask": float(tick.ask),
                                          "last": float(tick.last or 0), "t": tick_time}
@@ -170,8 +199,11 @@ def run() -> int:
                               flush=True)
                         next_status = now + 30
                 elif now >= next_status:
-                    print("No fresh MT5 quote; publisher is withholding the snapshot",
-                          flush=True)
+                    details = "; ".join(f"{symbol}: {reason}"
+                                        for symbol, reason in skipped.items())
+                    suffix = f" Reasons: {details}." if details else ""
+                    print("No fresh MT5 quote; publisher is withholding the snapshot "
+                          f"(max age {max_tick_age:g}s).{suffix}", flush=True)
                     next_status = now + 30
                 time.sleep(poll_seconds)
     finally:

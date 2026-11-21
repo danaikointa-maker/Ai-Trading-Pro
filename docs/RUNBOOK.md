@@ -375,6 +375,8 @@ V4 เพิ่ม `scripts/mt5_market_publisher.py` และ `POST /api/market
 
 **V4 staging preflight (2026-11-21):** ใช้ `python scripts/check_mt5_market_runtime.py --base-url http://127.0.0.1:18181` เมื่อ SSH loopback tunnel ชี้ไป VM100 staging port `18081`. สคริปต์อ่านเฉพาะ `/api/system/health` และ `/api/openapi.json`; ไม่ใช้ JWT/bridge token และไม่ส่งคำสั่ง. `ready: true` ต้องพบ route และ feed `mt5_demo_publisher` ที่สดพร้อมกัน. ผลจริงรอบนี้ `health_api=true`, `publisher_route=true`, `publisher_fresh=false`, `ready=false`; VM100 18081 ยังเป็น branch เก่าและยังไม่ได้ deploy V4. อย่าใช้ port นี้แทน development port 8000.
 
+เมื่อ publisher แจ้ง `No fresh MT5 quote` จะระบุสาเหตุแยกตาม canonical symbol เช่น `no tick`, `invalid bid/ask`, `future tick` หรืออายุ tick ที่เกิน limit. ตรวจว่า terminal ยังเชื่อมต่อ, ชื่อ symbol ตรงกับ Market Watch และมี tick ใหม่; ตลาดปิดหรือ PC clock คลาดเคลื่อนทำให้ quote ถูกปฏิเสธได้. ห้ามเพิ่ม max age เพื่อให้ tick เก่าผ่าน. ข้อความวินิจฉัยใหม่นี้อยู่ใน V4 worktree; ต้องรัน `scripts/mt5_market_publisher.py` จาก branch V4 จึงจะเห็นรายละเอียด.
+
 ## 12.4 แจ้งเตือนออกนอกเครื่อง (Telegram / LINE / webhook)
 
 in-app ทำงานเสมอ; ช่องทางภายนอกเป็น **opt-in** (ต้องมี token *และ* เปิดใช้)
