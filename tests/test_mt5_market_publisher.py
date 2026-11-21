@@ -12,7 +12,7 @@ def _configure(runtime, monkeypatch):
     monkeypatch.setattr(runtime.market, "db", None)
 
 
-def _payload(*, captured_at=None, login="123456", time_basis="broker_server"):
+def _payload(*, captured_at=None, login="123456", time_basis="utc"):
     now = time.time()
     utc = now if captured_at is None else captured_at
     server = utc + 7200 if time_basis == "broker_server" else utc
@@ -58,6 +58,17 @@ def test_mt5_market_publisher_fails_closed_without_demo_identity(client, runtime
     response = client.post("/api/market/publish/mt5", json=_payload(),
                            headers={"Authorization": "Bearer separate-market-data-token"})
     assert response.status_code == 503
+
+
+def test_mt5_market_publisher_rejects_unverified_broker_server_timestamps(
+        client, runtime, monkeypatch):
+    _configure(runtime, monkeypatch)
+    response = client.post(
+        "/api/market/publish/mt5", json=_payload(time_basis="broker_server"),
+        headers={"Authorization": "Bearer separate-market-data-token"},
+    )
+    assert response.status_code == 422
+    assert "independently verified offset" in response.json()["detail"]
 
 
 def test_market_publisher_cache_is_scoped_to_account_and_demo_identity(tmp_path):
