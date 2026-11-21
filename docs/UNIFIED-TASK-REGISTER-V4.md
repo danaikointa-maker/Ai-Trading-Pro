@@ -117,6 +117,14 @@ Status and next block:
 - This confirms API reachability only. Despite broker-health labels in the response, feed provenance remains simulation; no fresh MT5 data or publisher route is evidenced. No POST, account toggle, service restart, config change, or trade request was made.
 - Result: U01 remains BLOCKED / PARTIAL. Preserve the dirty VM checkout and continue reviewed source reconciliation before any separately authorized rollout or Demo data acceptance.
 
+## Five-task verification batch — 2026-11-21 (local candidate/regression only)
+- U01 — GET-only VM100/PC health, OpenAPI and SSH source-state recheck recorded above. PASS for reachability; FAIL for live-feed readiness (`simulate`, publisher route absent, VM source tree dirty). No mutation attempted.
+- U02 — `pytest tests/test_signal_confirmation_v4.py -q`: **10 passed**. Unit/state-machine evidence only; Paper replay, broker point semantics and Demo remain NOT TESTED.
+- U03 — `pytest tests/test_v4_risk_candidate.py tests/test_risk_engine.py -q`: **15 passed**. Candidate remains unloaded and legacy config unchanged; Paper A/B and Demo remain NOT TESTED.
+- U04 — `pytest tests/test_invariants.py tests/test_spec_safety.py tests/test_v4_plan_candidate.py tests/test_risk_state_failure.py tests/test_smart_entry_continuation.py tests/test_v4_single_target_manager.py -q`: **83 passed**. Broker margin/stops/freeze and post-fill accepted levels remain NOT TESTED.
+- U08 — `pytest tests/test_points_math.py -q`: **6 passed**. No calculator code changed; account-specific spec, FX display, and Paper/MT5 comparison remain NOT TESTED.
+- All four local commands used the project Python environment; no profile activation, account change, broker action, order, or deployment occurred. These results do not change any task to DONE/accepted.
+
 ## U06 candidate reduction — 2026-11-20
 - Before: `PositionManager.evaluate()` could append both BE and trailing `modify` actions for one ticket in a single evaluation. The existing gateway still owns all broker mutations; this change only makes its existing policy output deterministic and singular.
 - Changed `services/risk_engine/manager.py` and `tests/test_v4_single_target_manager.py`. BUY/SELL tests prove the tighter valid candidate wins; other cases prove stops do not widen and missing SL fails closed. No new engine, API, schema, config profile, or active config default was added.
