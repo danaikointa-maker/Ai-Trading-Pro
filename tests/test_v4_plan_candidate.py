@@ -65,6 +65,39 @@ def test_v4_candidate_rounds_sl_and_tp_outward(direction, sl_round, tp_round):
                                              SPEC.digits))
 
 
+def test_candidate_rejects_minimum_lot_that_exceeds_risk_budget():
+    result = PLANNER.build(PlanInputs(
+        direction=Direction.up, entry=2000.0, spec=SPEC,
+        atr_points=100.0, equity=100.0, risk_pct=0.5,
+        spread_points=1.0, supports=[], resistances=[], swings=[],
+        target_mode="fixed", fixed_points=[500, 750, 1000],
+        min_points=500, max_points=1000, sl_atr_multiplier=1.5,
+        sl_min_points=10, sl_max_points=1200, min_rr_net=0.1,
+        respect_zones=False, closes_pct=[100, 0, 0],
+        directional_tick_rounding=True,
+    ))
+
+    assert result.plan is None
+    assert "risk_budget_min_lot" in result.blocker_codes
+
+
+@pytest.mark.parametrize(("equity", "risk_pct"), [(0.0, 0.5), (100.0, 0.0), (float("nan"), 0.5)])
+def test_candidate_rejects_invalid_risk_budget_before_lot_rounding(equity, risk_pct):
+    result = PLANNER.build(PlanInputs(
+        direction=Direction.up, entry=2000.0, spec=SPEC,
+        atr_points=100.0, equity=equity, risk_pct=risk_pct,
+        spread_points=1.0, supports=[], resistances=[], swings=[],
+        target_mode="fixed", fixed_points=[500, 750, 1000],
+        min_points=500, max_points=1000, sl_atr_multiplier=1.5,
+        sl_min_points=10, sl_max_points=1200, min_rr_net=0.1,
+        respect_zones=False, closes_pct=[100, 0, 0],
+        directional_tick_rounding=True,
+    ))
+
+    assert result.plan is None
+    assert "invalid_risk_budget" in result.blocker_codes
+
+
 def test_legacy_plan_input_keeps_nearest_tick_behavior():
     legacy = PLANNER._round_level(
         SPEC, 2000.02, Direction.up, is_stop=True, directional=False)

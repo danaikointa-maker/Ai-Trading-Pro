@@ -194,7 +194,7 @@ H080 reload ใช้ approval ของ payload และ DB ร่วมกั
 | GET | `/api/risk/settings` | limits + targets + stops + full_auto requirements |
 | PUT | `/api/risk/settings` | `{limits:{...}}` patch (audit ทุกครั้ง) |
 | POST | `/api/risk/kill-switch` \| `DELETE` | เปิด/ปิดด้วยมือ |
-| GET | `/api/risk/calculator?symbol=&points=&lot=` | เหมือน market calculator |
+| GET | `/api/risk/calculator?symbol=&points=&lot=&balance=&risk_pct=&sl_points=` | active runtime adapter spec; optional read-only lot projection returns `0`/`blocked` if the minimum lot exceeds risk; net deducts commission only, spread is separate, excludes swap/slippage; not selected-account scoped and never sends an order |
 
 ## Brokers & backtest
 

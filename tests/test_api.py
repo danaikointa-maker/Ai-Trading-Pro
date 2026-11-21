@@ -366,8 +366,24 @@ def test_points_calculator_uses_current_runtime_spec_and_discloses_scope(client,
     assert body["result"]["net_profit"] == round(
         body["result"]["gross_profit"] - body["result"]["commission"], 2)
     assert body["result"]["spread_cost"] > 0
+    assert body["result"]["net_profit"] > body["result"]["gross_profit"] - body["result"]["spread_cost"]
     assert "not an account-specific terminal link" in body["disclaimer"]
     assert "spread_cost is reported separately and is not deducted" in body["disclaimer"]
+
+
+def test_risk_calculator_blocks_minimum_lot_over_budget(client, auth):
+    response = client.get(
+        "/api/risk/calculator?symbol=XAUUSD&points=500&lot=0.01&balance=100&risk_pct=0.5&sl_points=350",
+        headers=auth,
+    )
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["lot_for_risk"] == 0.0
+    assert body["lot_for_risk_status"] == "blocked"
+    assert "No broker-valid lot" in body["lot_for_risk_reason"]
+    assert "minimum would exceed the risk budget" in body["disclaimer"]
+    assert "actual point" not in body["disclaimer"].lower()
 
 
 def test_risk_settings_round_trip(client, auth):

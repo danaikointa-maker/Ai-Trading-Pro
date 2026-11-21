@@ -290,6 +290,10 @@ class TradePlanner:
                   f"invalid/incomplete symbol spec or no FX rate to value {spec.profit_currency} "
                   f"P&L in {spec.account_currency}; size this symbol on the broker terminal instead")
             return PlanResult(plan=None, blockers=blockers, blocker_codes=codes, notes=notes)
+        if (not math.isfinite(ctx.equity) or not math.isfinite(ctx.risk_pct)
+                or ctx.equity <= 0 or ctx.risk_pct <= 0):
+            block("invalid_risk_budget", "equity and risk percentage must be finite and greater than zero")
+            return PlanResult(plan=None, blockers=blockers, blocker_codes=codes, notes=notes)
         sign = 1 if direction == Direction.up else -1
         costs = self.cost_points(spec, ctx.spread_points)
 
@@ -401,13 +405,18 @@ class TradePlanner:
         loss_per_lot = sl_points * spec.value_per_point_per_lot
         risk_amount = ctx.equity * ctx.risk_pct / 100.0
         raw_lot = risk_amount / loss_per_lot if loss_per_lot > 0 else 0.0
-        lot = spec.normalize_lot(raw_lot)
-        if lot < spec.min_lot - 1e-9:
+        if not math.isfinite(risk_amount) or not math.isfinite(raw_lot) or risk_amount <= 0:
+            lot = 0.0
+            block("invalid_risk_budget", "computed risk budget or lot size is invalid")
+        elif raw_lot < spec.min_lot - 1e-9:
+            lot = 0.0
             block("risk_budget_min_lot",
                   f"risk budget ${risk_amount:.2f} cannot fund the {spec.min_lot} minimum lot at a "
                   f"{sl_points:.0f}-point stop")
-        elif not spec.lot_is_valid(lot):
-            block("lot_step", f"computed lot {lot} violates lot step {spec.lot_step}")
+        else:
+            lot = spec.normalize_lot(raw_lot)
+            if not spec.lot_is_valid(lot):
+                block("lot_step", f"computed lot {lot} violates lot step {spec.lot_step}")
         actual_risk = lot * loss_per_lot
 
         # The blended figure assumes the whole ladder fills; TP1 has to work on
@@ -507,10 +516,22 @@ class TradePlanner:
 
     @staticmethod
     def lot_for_risk(spec: SymbolSpec, equity: float, risk_pct: float, sl_points: float) -> float:
+        values = (equity, risk_pct, sl_points, spec.value_per_point_per_lot)
+        if not all(math.isfinite(value) for value in values) or equity <= 0 or risk_pct <= 0 or sl_points <= 0:
+            return 0.0
         loss_per_lot = sl_points * spec.value_per_point_per_lot
         if loss_per_lot <= 0:
             return 0.0
-        return spec.normalize_lot(equity * risk_pct / 100.0 / loss_per_lot)
+        risk_amount = equity * risk_pct / 100.0
+        raw_lot = risk_amount / loss_per_lot
+        if not math.isfinite(risk_amount) or not math.isfinite(raw_lot) or risk_amount <= 0:
+            return 0.0
+        if raw_lot < spec.min_lot - 1e-9:
+            return 0.0
+        lot = spec.normalize_lot(raw_lot)
+        if not spec.lot_is_valid(lot) or lot * loss_per_lot > risk_amount + 1e-9:
+            return 0.0
+        return lot
 
 
 def points_calculator(spec: SymbolSpec, points: float, lot: float) -> dict[str, float]:
