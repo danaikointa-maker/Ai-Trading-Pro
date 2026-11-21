@@ -110,6 +110,11 @@ Status and next block:
 - Gaps: calculator endpoint accepts no broker/account identity, so it cannot promise the selected linked MT5 account's symbol spec; current UI defaults to the global symbol and displays only price move, gross profit, point value and typical spread cost. API also returns commission/net estimates that UI omits. The UI disclaimer says costs are excluded although response includes a commission deduction in `net_profit`; swap/slippage and account-currency/FX provenance are not surfaced. Only a Points tool exists; the planned set of 16 tools is not implemented.
 - Dependencies: keep implementation behind U01's verified source/account-spec provenance; do not label a simulated/global spec as the selected broker's live contract. No runtime, account, or execution behavior changed in this audit. U08 remains PLANNED; Paper/MT5 comparison and browser acceptance NOT TESTED.
 
+## U01 runtime recheck — 2026-11-21 (GET-only)
+- Read `GET /api/system/health` on PC ports `18000` and `18080`: both returned `status=ok`, `feed_mode=simulate`; port `18080` reports runtime `running`. Read `GET /api/openapi.json` on `18080`: 88 paths and no `/api/market/publish/mt5` path.
+- This confirms API reachability only. Despite broker-health labels in the response, feed provenance remains simulation; no fresh MT5 data or publisher route is evidenced. No POST, account toggle, service restart, config change, or trade request was made.
+- Result: U01 remains BLOCKED / PARTIAL. Preserve the dirty VM checkout and continue reviewed source reconciliation before any separately authorized rollout or Demo data acceptance.
+
 ## U06 candidate reduction — 2026-11-20
 - Before: `PositionManager.evaluate()` could append both BE and trailing `modify` actions for one ticket in a single evaluation. The existing gateway still owns all broker mutations; this change only makes its existing policy output deterministic and singular.
 - Changed `services/risk_engine/manager.py` and `tests/test_v4_single_target_manager.py`. BUY/SELL tests prove the tighter valid candidate wins; other cases prove stops do not widen and missing SL fails closed. No new engine, API, schema, config profile, or active config default was added.
