@@ -46,7 +46,7 @@ Snapshot เก่าที่ไม่มี `time_basis` คงสัญญา
 
 ### Isolated MT5 market publisher (V4 source; not deployed)
 
-`POST /api/market/publish/mt5` เป็น data plane แบบ read-only แยกจาก EA bridge. รับเฉพาะ Demo identity, timestamp anchors, quotes, OHLCV rates และ symbol specs; schema ปฏิเสธฟิลด์ตำแหน่งบนสุดอย่าง positions/orders/commands. ใช้ `NO7_MT5_MARKET_PUBLISHER_TOKEN` ที่แยกจาก `NO7_BRIDGE_TOKEN`. เมื่อเปิดใช้ chart จะใช้เฉพาะ snapshot สด และปฏิเสธข้อมูลเก่าแทนการ fallback เป็น simulation. ปิดเป็นค่าเริ่มต้น. การตั้งค่าปัจจุบันรองรับ publisher identity เดียวต่อ runtime; การแยก cache ไม่ได้หมายความว่าระบบรองรับหลายบัญชีหรือเทรดหลายบัญชีพร้อมกัน. ส่ง token ผ่าน HTTPS หรือ SSH loopback tunnel เท่านั้น; ห้ามส่ง bearer token บน plaintext LAN HTTP.
+`POST /api/market/publish/mt5` เป็น data plane แบบ read-only แยกจาก EA bridge. รับเฉพาะ Demo identity, UTC timestamps, quotes, OHLCV rates และ symbol specs; schema ปฏิเสธฟิลด์ตำแหน่งบนสุดอย่าง positions/orders/commands. ใช้ `NO7_MT5_MARKET_PUBLISHER_TOKEN` ที่แยกจาก `NO7_BRIDGE_TOKEN`. Python publisher รับเฉพาะ `time_basis: "utc"`; broker-server timestamps ที่ยังไม่มี UTC conversion จะถูกปฏิเสธ. Tick เก่าเกิน `NO7_MT5_MARKET_MAX_TICK_AGE_SECONDS` (1–15 วินาที, default 10) จะไม่ถูกส่งและ freshness gate จะ fail closed. เมื่อเปิดใช้ chart จะใช้เฉพาะ snapshot สด และปฏิเสธข้อมูลเก่าแทนการ fallback เป็น simulation. ปิดเป็นค่าเริ่มต้น. การตั้งค่าปัจจุบันรองรับ publisher identity เดียวต่อ runtime; การแยก cache ไม่ได้หมายความว่าระบบรองรับหลายบัญชีหรือเทรดหลายบัญชีพร้อมกัน. ส่ง token ผ่าน HTTPS หรือ SSH loopback tunnel เท่านั้น; ห้ามส่ง bearer token บน plaintext LAN HTTP.
 
 ## PWA (manifest / service worker / offline)
 
