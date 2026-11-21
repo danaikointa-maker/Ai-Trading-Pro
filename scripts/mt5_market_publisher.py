@@ -114,8 +114,11 @@ def run() -> int:
                     info, tick = mt5.symbol_info(broker_symbol), mt5.symbol_info_tick(broker_symbol)
                     if info is None or tick is None or tick.bid <= 0 or tick.ask < tick.bid:
                         continue
+                    tick_time_msc = float(getattr(tick, "time_msc", 0) or 0)
+                    tick_time = (tick_time_msc / 1000.0 if tick_time_msc > 0
+                                 else float(tick.time))
                     quotes[canonical] = {"bid": float(tick.bid), "ask": float(tick.ask),
-                                         "last": float(tick.last or 0), "t": float(tick.time)}
+                                         "last": float(tick.last or 0), "t": tick_time}
                     cached_specs[canonical] = {
                         "symbol": canonical, "description": str(info.description or broker_symbol),
                         "digits": int(info.digits), "point": float(info.point),
@@ -138,11 +141,18 @@ def run() -> int:
                     last_rates = now
                 if quotes:
                     utc_now = time.time()
+                    # MT5 tick.time and CopyRates timestamps are broker-server
+                    # epoch values. Labeling them UTC makes the API compare them
+                    # to a UTC anchor and reject a legitimate UTC+/- timezone
+                    # quote as invalid. Keep the original MT5 timestamps and send
+                    # their server-clock anchor so the market service can convert
+                    # quotes and rates to UTC using the measured offset.
+                    server_now = max(float(row["t"]) for row in quotes.values())
                     payload = {
                         "identity": {"login": str(account.login), "server": account.server,
                                      "trade_mode": "demo", "connected": True},
-                        "captured_at": utc_now, "time_basis": "utc",
-                        "server_time": utc_now, "utc_time": utc_now,
+                        "captured_at": utc_now, "time_basis": "broker_server",
+                        "server_time": server_now, "utc_time": utc_now,
                         "quotes": quotes,
                         "rates": cached_rates if refresh_rates else {},
                         "specs": cached_specs if refresh_rates else {},

@@ -63,7 +63,8 @@ def test_rates_reads_only_requested_frames_and_normalizes_mt5_fields():
 
 
 def test_readonly_publisher_loop_emits_demo_market_snapshot_only(monkeypatch):
-    now = int(time.time())
+    now = time.time()
+    server_offset = 7200
     calls = []
     mt5 = ModuleType("MetaTrader5")
     mt5.ACCOUNT_TRADE_MODE_DEMO = 0
@@ -80,9 +81,10 @@ def test_readonly_publisher_loop_emits_demo_market_snapshot_only(monkeypatch):
         trade_contract_size=100, volume_min=0.01, volume_max=50, volume_step=0.01,
         trade_stops_level=0, trade_freeze_level=0, currency_profit="USD")
     mt5.symbol_info_tick = lambda _symbol: SimpleNamespace(
-        bid=2300.0, ask=2300.2, last=2300.1, time=now)
+        bid=2300.0, ask=2300.2, last=2300.1, time=int(now + server_offset),
+        time_msc=int((now + server_offset) * 1000))
     mt5.copy_rates_from_pos = lambda symbol, timeframe, start, count: [{
-        "time": now - 60, "open": 2299.0, "high": 2301.0, "low": 2298.0,
+        "time": int(now + server_offset) - 60, "open": 2299.0, "high": 2301.0, "low": 2298.0,
         "close": 2300.0, "tick_volume": 12,
     }]
     mt5.shutdown = lambda: calls.append("shutdown")
@@ -128,7 +130,11 @@ def test_readonly_publisher_loop_emits_demo_market_snapshot_only(monkeypatch):
     assert headers == {"Authorization": "Bearer separate-data-token"}
     assert body["identity"] == {"login": "123456", "server": "Connext-Demo",
                                 "trade_mode": "demo", "connected": True}
-    assert body["time_basis"] == "utc" and body["server_time"] == body["utc_time"]
+    assert body["time_basis"] == "broker_server"
+    assert body["server_time"] == body["quotes"]["XAUUSD"]["t"]
+    assert round(body["server_time"] - body["utc_time"]) == server_offset
+    assert body["captured_at"] == body["utc_time"]
+    assert body["rates"]["XAUUSD"]["M1"][0]["t"] == int(now + server_offset) - 60
     assert body["quotes"]["XAUUSD"]["bid"] == 2300.0
     assert body["rates"]["XAUUSD"]["M1"][0]["c"] == 2300.0
     assert body["specs"]["XAUUSD"]["symbol"] == "XAUUSD"
