@@ -1,5 +1,5 @@
 # No7 AI Trading Pro — Conflict and Document Disposition Register V4
-Updated: 2026-11-19. These are comparisons based on repository content, NOT installed runtime verification.
+Updated: 2026-11-21. These are comparisons based on repository content plus the dated U00/U01 runtime evidence; not a general production certification.
 
 | Area | Existing source/config | Competing proposed instruction | Disposition |
 |---|---|---|---|
@@ -21,7 +21,8 @@ Updated: 2026-11-19. These are comparisons based on repository content, NOT inst
 | MATH | old docs describe point/lot and legacy partials | newer risk/BE maths | tech math doc reflects active code; new math in plan until implemented |
 | Reality | simulation default; demo not fully validated | prompts say auto/open immediately | not considered operational; Demo explicit permission only |
 | Windows MT5 host | V4 source snapshot names VM200 | User later specified the development Windows PC as the current MT5 installation/execution host | Treat the development PC as current Windows MT5 host; do not operate VM200 unless separately reauthorized. Verify local terminal identity and outbound PC→VM100 bridge before execution acceptance. |
-| VM100 runtime | V4 expects `/opt/no7-ai-trading-pro` | Read-only SSH audit on 2026-11-21 found no checkout at `/opt`; actual listeners are port 8000 development/simulated and port 18081 staging on `feature/u02-100pt-confirmation` (`06642a0`), with staging feed stale | Existing processes bind loopback only. Do not touch 8000. Align only isolated port 18081 to V4, then verify fresh data; no current V4 runtime acceptance is evidenced. |
+| VM100 runtime | V4 expects `/opt/no7-ai-trading-pro` | Read-only SSH audit on 2026-11-21 found no checkout at `/opt`; actual listeners are port 8000 development/simulated and port 18081 staging on `feature/u02-100pt-confirmation` (`06642a0`), with staging feed stale. Stage has durable `position_modify_intents` persistence/helpers absent from V4 target `0171e9e`. | Never touch 8000. Do not replace/restart 18081 with the whole V4 checkout until U05 parity is audited and restored. The existing publisher route accepts the V4 UTC schema; freshness still requires a PC-local data-only publisher and verified Demo identity. |
+| Durable position modify | VM100 stage `06642a0` has `position_modify_intents` reservation/reconciliation; V4 `0171e9e` does not | V4 U05 says inspect existing modify path and retain single writer | Treat this as a safety regression risk, not an intentional migration. Audit source and persistence before staging replacement; do not silently drop unresolved modify evidence. |
 
 ## Document ownership and disposition
 - `docs/UNIFIED-MASTER-PLAN-V4.md`: canonical planned behavior, phase order and module ownership.
