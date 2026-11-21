@@ -20,6 +20,9 @@
         <button v-else class="btn py-1 text-[10px]" :disabled="!positionsAvailable || !positions.length || !permissions.canTrade" :title="permissions.reason" @click="closeAll">Close all</button>
       </div>
     </div>
+    <p v-if="selectedAccountId" class="border-t border-ink-700/60 px-3 py-2 text-[10px] leading-relaxed text-amber-200/90">
+      บัญชี MT5 ที่เลือกมีผลเฉพาะรายการไม้ในตารางนี้ · ยอด Equity และ Risk Engine ส่วนอื่นยังเป็นข้อมูล Runtime / simulator
+    </p>
     <div class="overflow-x-auto">
       <table class="table-base">
         <thead>

@@ -132,6 +132,7 @@ Status and next block:
 - U10 — notification/outbox/channel/background/readiness notification suite: **64 passed**. This is automated dedupe/retry behavior evidence; end-to-end delivery to external providers NOT TESTED.
 - U12 — explainer API tests `test_explain_answers_in_thai_and_never_trades` and `test_explain_ignores_an_order_instruction`: **2 passed**. Source review confirms the local AI client only probes `/api/tags` and calls `/api/generate`; it has no broker/execution tools. Production LLM endpoint behavior NOT TESTED.
 - U13 — API calculator disclaimer and API reference corrected; route regression plus the U05 fail-closed route regression: **2 passed**. `git diff --check` and Vue production build passed. Account-scoped calculator data is still missing; no order, broker mutation, profile activation, or deployment occurred.
+- U09 follow-up: Positions now shows an inline source boundary whenever a linked MT5 account is selected: only the positions table is from that account; page Equity/Risk Engine data remains Runtime/simulator. The existing smoke test asserts this disclosure so UI does not imply that account selection switches unrelated data panels.
 
 ## U06 candidate reduction — 2026-11-20
 - Before: `PositionManager.evaluate()` could append both BE and trailing `modify` actions for one ticket in a single evaluation. The existing gateway still owns all broker mutations; this change only makes its existing policy output deterministic and singular.
