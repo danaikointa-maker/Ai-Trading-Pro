@@ -93,7 +93,15 @@ def calculator(symbol: str = "XAUUSD", points: float = 750, lot: float = 0.01,
     spec = runtime.adapter.symbol_spec(symbol)
     out = {"points": points_calculator(spec, points, lot), "spec": spec.model_dump()}
     if balance is not None and risk_pct is not None and sl_points:
-        out["lot_for_risk"] = runtime.planner.lot_for_risk(spec, balance, risk_pct, sl_points)
-    out["disclaimer"] = ("Uses the symbol's actual point / tick size / contract size from the connected "
-                         "account. Excludes spread, commission and swap.")
+        lot_for_risk = runtime.planner.lot_for_risk(spec, balance, risk_pct, sl_points)
+        out["lot_for_risk"] = lot_for_risk
+        out["lot_for_risk_status"] = "available" if lot_for_risk > 0 else "blocked"
+        if lot_for_risk <= 0:
+            out["lot_for_risk_reason"] = "No broker-valid lot fits the risk budget and supplied inputs."
+    out["disclaimer"] = (
+        "Uses the active runtime adapter's symbol specification, not an account-specific terminal link. "
+        "Net estimate deducts commission only; spread cost is separate and not deducted. Swap/slippage are "
+        "excluded. Lot sizing returns no lot when the broker minimum would exceed the risk budget. "
+        "This is a read-only estimate, not an order."
+    )
     return out

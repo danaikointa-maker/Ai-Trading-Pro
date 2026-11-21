@@ -111,6 +111,12 @@ volume profile, VWAP, EMA, equal highs/lows, round number, reaction history
 5. ถ้าไม่ได้ยืนยัน → mark `unverified` และหยุด ไม่ส่งซ้ำอัตโนมัติ
 6. Reconcile ระหว่าง DB กับโบรกเกอร์เป็นรอบ → รายงาน missing/unknown
 
+Position SL modifications reuse the same `ExecutionGateway`: Demo/Paper only,
+one durable unresolved intent per account+ticket, fresh quote and broker symbol
+constraints, monotonic stop movement, and exact broker position readback before
+reporting confirmation. An unknown outcome remains fenced until reconciliation;
+this V4 source change is not a VM deployment or MT5 Demo acceptance.
+
 ## 8. Accuracy & honesty
 
 - Directional accuracy, precision, Brier vs baseline, P10–P90 coverage ต่อ horizon

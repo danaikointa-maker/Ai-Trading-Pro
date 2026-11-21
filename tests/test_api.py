@@ -24,6 +24,37 @@ def test_private_endpoints_require_auth(client):
     assert client.get("/api/trading/deals").status_code == 401
 
 
+def test_linked_mt5_positions_endpoint_is_scoped_and_read_only(client, auth, runtime, monkeypatch):
+    from services.api_gateway.routes import broker_accounts as broker_account_routes
+    from services.api_gateway.accounts import create_broker_account
+    from services.api_gateway.credential_vault import CredentialVault
+
+    user = client.get("/api/auth/me", headers=auth).json()["user"]
+    tenant_id = user["tenant_id"]
+    vault_key = CredentialVault.generate_key()
+    monkeypatch.setenv("NO7_CREDENTIAL_VAULT_KEY", vault_key)
+    account = create_broker_account(
+        runtime.db, CredentialVault(vault_key), tenant_id=tenant_id,
+        owner_email=user["email"], provider="mt5", label="Positions contract Demo",
+        server="Connext-Demo", account_type="demo", login="77889901",
+        password="never-return-this", created_by=user["email"], terminal_path="C:/MT5/terminal64.exe",
+    )
+    runtime.db.execute("UPDATE broker_accounts SET connection_status='ready_read_only' WHERE id=?",
+                       (account["id"],))
+    monkeypatch.setattr(broker_account_routes, "read_demo_positions", lambda *_args: {
+        "account_id": account["id"], "read_only": True, "execution_enabled": False,
+        "fetched_at": 1_700_000_000.0, "positions": [{"ticket": "9001", "sl": 2970.0, "tp": 3040.0}],
+    })
+
+    response = client.get(f"/api/broker-accounts/{account['id']}/positions", headers=auth)
+    assert response.status_code == 200, response.text
+    assert response.json()["positions"][0]["sl"] == 2970.0
+    assert response.json()["positions"][0]["tp"] == 3040.0
+    assert response.json()["execution_enabled"] is False
+    assert "never-return-this" not in response.text
+    runtime.db.execute("DELETE FROM broker_accounts WHERE id=?", (account["id"],))
+
+
 def test_deal_history_endpoint_lists_account_scoped_evidence(client, auth, runtime):
     from services.execution_gateway.history import DealLedger
 
@@ -234,6 +265,17 @@ def test_ticker_endpoint_retains_quote_when_market_is_closed(client, auth, runti
     assert response.json() == {"tick": tick.model_dump(), "stale": True, "source": "persisted"}
 
 
+def test_market_candles_expose_broker_clock_for_chart_display(client, auth, runtime, monkeypatch):
+    monkeypatch.setattr(runtime.adapter, "timestamp_metadata", lambda: {
+        "basis": "utc", "display_basis": "broker_server", "server_utc_offset_seconds": 7200,
+    }, raising=False)
+    response = client.get("/api/market/candles?symbol=XAUUSD&timeframe=M1&limit=20", headers=auth)
+    assert response.status_code == 200, response.text
+    assert response.json()["time"] == {
+        "basis": "utc", "display_basis": "broker_server", "server_utc_offset_seconds": 7200,
+    }
+
+
 def test_health_is_public(client):
     res = client.get("/api/system/health")
     assert res.status_code == 200
@@ -315,13 +357,33 @@ def test_zones_endpoint_separates_statuses(client, auth):
     assert len(body["supports"]) >= 3 and len(body["resistances"]) >= 3
 
 
-def test_points_calculator_uses_live_spec(client, auth):
+def test_points_calculator_uses_current_runtime_spec_and_discloses_scope(client, auth):
     res = client.get("/api/market/calculator?symbol=XAUUSD&points=500&lot=0.01", headers=auth)
     assert res.status_code == 200
     body = res.json()
     assert body["spec"]["point"] == 0.01
     assert body["result"]["price_move"] == 5.0
-    assert "excludes" in body["disclaimer"].lower() or "Excludes" in body["disclaimer"]
+    assert body["result"]["net_profit"] == round(
+        body["result"]["gross_profit"] - body["result"]["commission"], 2)
+    assert body["result"]["spread_cost"] > 0
+    assert body["result"]["net_profit"] > body["result"]["gross_profit"] - body["result"]["spread_cost"]
+    assert "not an account-specific terminal link" in body["disclaimer"]
+    assert "spread_cost is reported separately and is not deducted" in body["disclaimer"]
+
+
+def test_risk_calculator_blocks_minimum_lot_over_budget(client, auth):
+    response = client.get(
+        "/api/risk/calculator?symbol=XAUUSD&points=500&lot=0.01&balance=100&risk_pct=0.5&sl_points=350",
+        headers=auth,
+    )
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["lot_for_risk"] == 0.0
+    assert body["lot_for_risk_status"] == "blocked"
+    assert "No broker-valid lot" in body["lot_for_risk_reason"]
+    assert "minimum would exceed the risk budget" in body["disclaimer"]
+    assert "actual point" not in body["disclaimer"].lower()
 
 
 def test_risk_settings_round_trip(client, auth):
@@ -347,6 +409,19 @@ def test_order_is_blocked_without_a_clean_gate(client, auth):
         client.put("/api/risk/settings",
                    json={"limits": {"news_lockout_enabled": settings["settings"]["limits"]["news_lockout_enabled"]}},
                    headers=auth)
+
+
+def test_active_adapter_order_rejects_ignored_managed_account_id(client, auth, runtime, monkeypatch):
+    calls = []
+    monkeypatch.setattr(runtime, "manual_trade",
+                        lambda *args, **kwargs: calls.append((args, kwargs)))
+
+    response = client.post("/api/trading/order", json={
+        "symbol": "XAUUSD", "direction": "up", "account_id": "selected-demo-account",
+    }, headers=auth)
+
+    assert response.status_code == 422
+    assert calls == []
 
 
 def test_broker_list_and_symbols(client, auth):

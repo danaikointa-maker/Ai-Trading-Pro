@@ -29,6 +29,17 @@
   ตัวเลขทุกตัวในภาพรวมจึงเป็นตัวอย่าง ไม่ใช่ราคาตลาดจริง
 - เมื่อตั้ง `NO7_FEED_MODE=mt5` จะอ่านราคาจากเทอร์มินัลจริง แต่ยังไม่ได้ทดสอบกับ Connext
   ในสภาพตลาดจริง (ต้องมี Windows + terminal + บัญชี Demo)
+- **Freshness ของเวลา MT5 ยังไม่ผ่านการรับรอง**: การอ่าน Connext-Demo แบบ read-only บน PC
+  พบ timestamp ของ `XAUUSD.s` ล้ำหน้าเวลาพีซีประมาณ 7,200 วินาที (หลักฐาน 2026-11-20).
+  `MarketDataService` ปฏิเสธ tick ที่ล้ำหน้าเกิน `data_future_tolerance_seconds` (ค่าเริ่ม 2 วินาที)
+  EA/adapter ใน source V4 ปัจจุบันส่ง time basis และ UTC anchor แล้ว normalize ด้วย offset
+  ของ snapshot (unit test จำลอง +7,200 วินาที; MetaEditor compile 0 errors/0 warnings).
+  direct read-only MT5 Demo probe บน PC พบ `XAUUSD.s` tick epoch ล้ำหน้า PC UTC 7,200 วินาที;
+  ยังไม่ได้ยืนยัน snapshot จาก EA ที่เพิ่ง compile; offset/DST ในอดีตยังไม่รับรอง และ VM100 ยังรัน source/runtime
+  คนละชุด จึงยังห้ามถือว่า feed ผ่าน freshness สำหรับการยืนยันสัญญาณหรือเปิดคำสั่ง.
+- หน้า Brokers สามารถตรวจและดึง open positions จาก MT5 Demo แบบ on-demand read-only หลัง account
+  เป็น `ready_read_only`; response เป็น snapshot ไม่ใช่สตรีม และยังต้องยืนยันบน Windows/Connext จริง.
+  Live account และคำสั่งเปิด/แก้/ปิดไม้ไม่อยู่ในเส้นทาง positions นี้
 - **ยังไม่มี tick data จริง** สำหรับ backtest → ใช้ M1 ที่ resample เป็น M5/M15/H1/H4
   การจำลองการชน SL/TP ภายในแท่งจึงต้องเดา (เลือก stop ก่อน target แบบ conservative)
 
@@ -83,6 +94,7 @@
 - ยังไม่ได้ทดสอบ order flow กับโบรกเกอร์จริง (filling mode, stops level, freeze level,
   partial fill, requote) — โค้ดมี verify-after-send และ idempotency แล้ว แต่ยังไม่ผ่านสนามจริง
 - Reconcile มีอยู่แต่ยังไม่ได้ทดสอบกับ position ที่ถูกแก้จากมือในเทอร์มินัล
+- Source บน V4 เพิ่ม durable/idempotent SL modify intent, broker quote/spec preflight และ readback reconciliation ใน gateway เดิมแล้ว แต่ยังไม่ได้ deploy ไป runtime และยังไม่มี MT5 Demo acceptance; ห้ามตีความว่า terminal ที่กำลังใช้จะทำงานตาม source ใหม่นี้
 
 ## 5. ระบบโดยรวม
 
@@ -267,6 +279,7 @@
 - EA จำกัดที่ symbol ที่ใส่ใน `InpSymbols`, M1 rates ที่ `InpRatesBars` และกรองเฉพาะโพซิชัน magic `70707`
   หรือคอมเมนต์ที่มี `no7` (โพซิชันของ EA ตัวอื่นจะไม่ถูกแตะ)
 - `positions()` คือ snapshot ล่าสุดจาก EA ไม่ใช่ streaming: อัตราการอัปเดต = poll interval (ปกติ 1s)
+- MT5 market publisher แบบ read-only แยกจาก EA command bridge มีใน V4 source เท่านั้น: disabled by default, รองรับ publisher identity เดียวต่อ runtime, ต้องตั้ง Demo identity/token/symbol allowlist และยังไม่ได้เชื่อมกับ VM100 หรือทดลองกับ terminal จริง. การแยก cache ป้องกันการอ่าน snapshot คนละ account key แต่ไม่ได้ทำให้ระบบล็อกอินหรือเทรดหลายบัญชีพร้อมกัน. เมื่อเปิดใช้ chart จะปฏิเสธ snapshot เก่า ไม่ fallback เป็น simulation; Python MT5 publisher ระบุเวลา UTC ไม่ใช่ broker-server clock.
 - ยังไม่มี hedging/netting handling พิเศษ, ไม่มี partial-fill ต่อคำสั่ง (โบรกเกอร์คืน volume ที่ fill มาทั้งก้อนในผลลัพธ์เดียว)
 - ไม่มีการยืนยัน two-way ว่า EA ใช้เวอร์ชันไหน: `terminal.build` แสดงใน status แต่เซิร์ฟเวอร์ไม่ได้บังคับเวอร์ชัน
 

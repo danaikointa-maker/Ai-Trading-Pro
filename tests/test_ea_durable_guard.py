@@ -1,7 +1,6 @@
 """Source-contract checks only; MetaEditor compile and terminal crash tests are separate gates."""
 from pathlib import Path
 
-
 SOURCE = Path(__file__).resolve().parents[1] / 'bridge' / 'No7BridgeEA.mq5'
 
 
@@ -36,6 +35,19 @@ def test_ea_short_write_and_read_errors_fail_closed():
     assert 'written != expected_bytes' in source
     assert 'if(GetLastError() != 0)' in source
     assert 'g_executed_outcomes[index]' in source
+
+
+def test_ea_checks_demo_order_before_sending():
+    source = SOURCE.read_text(encoding='utf-8')
+    order = source.split('string DoOrder(', 1)[1].split('string DoClose(', 1)[0]
+    preflight = order.index('OrderCheck(request, check)')
+    send = order.index('OrderSend(request, result)')
+    assert preflight < send
+    assert 'check.retcode != 0' in order
+    assert 'pre-trade check failed; no order sent' in order
+    guard = 'if(InpReadOnly || !DemoIdentityValid())'
+    assert order.index(guard) < preflight
+    assert order.index(guard, preflight) < send
 
 
 def test_ea_close_receipt_uses_result_volume_and_distinguishes_partial():

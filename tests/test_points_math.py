@@ -47,6 +47,16 @@ def test_lot_respects_broker_step_and_never_exceeds_risk():
     assert risk_taken <= 1_000 * 0.005 + 1e-9
 
 
+def test_lot_for_risk_returns_no_lot_when_minimum_exceeds_budget():
+    lot = TradePlanner.lot_for_risk(GOLD, equity=100, risk_pct=0.5, sl_points=350)
+    assert lot == 0.0
+
+
+@pytest.mark.parametrize(("equity", "risk_pct"), [(0, 0.5), (100, 0), (float("nan"), 0.5)])
+def test_lot_for_risk_rejects_invalid_budget_inputs(equity, risk_pct):
+    assert TradePlanner.lot_for_risk(GOLD, equity=equity, risk_pct=risk_pct, sl_points=350) == 0.0
+
+
 def test_lot_grows_with_equity_not_lottery_sizes():
     small = TradePlanner.lot_for_risk(GOLD, 10_000, 0.5, 400)
     big = TradePlanner.lot_for_risk(GOLD, 20_000, 0.5, 400)

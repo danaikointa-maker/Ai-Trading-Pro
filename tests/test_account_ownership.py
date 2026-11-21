@@ -1,5 +1,6 @@
 """Persisted broker alias must never silently move to another account."""
 import json
+import time
 from types import SimpleNamespace
 from unittest.mock import Mock
 
@@ -7,7 +8,7 @@ import pytest
 
 from integrations.brokers.base import BrokerError
 from packages.persistence.db import Database
-from packages.shared_schemas.models import Health, OrderRequest
+from packages.shared_schemas.models import Health, OrderRequest, Position, SymbolSpec, Tick
 from services.execution_gateway.gateway import ExecutionGateway
 
 
@@ -17,7 +18,8 @@ def owned(tmp_path):
     broker = Mock()
     broker.id = "demo"
     broker.adapter_type = "mt5"
-    broker.account_info.return_value = SimpleNamespace(broker_id="demo", login="123", server="Demo", currency="USD")
+    broker.account_info.return_value = SimpleNamespace(broker_id="demo", login="123", server="Demo",
+                                                        currency="USD", account_type="demo")
     broker.health.return_value = Health.connected
     broker.order_send.side_effect = BrokerError("unknown outcome")
     broker.positions.return_value = []
@@ -208,6 +210,15 @@ def test_account_switch_during_broker_io_cannot_certify_success(owned, operation
         return read
 
     if operation == "modify":
+        broker.positions.side_effect = [[Position(
+            ticket="ticket-1", broker_id="demo", symbol=request.symbol,
+            direction=Direction.up, volume=request.volume, entry=2000,
+            sl=1890, tp=2020, open_time=1, current_price=2000, points=0)]]
+        broker.symbol_spec.return_value = SymbolSpec(
+            symbol=request.symbol, source="broker", spec_complete=True,
+            stops_level_points=0, freeze_level_points=0)
+        broker.ticker.return_value = Tick(t=time.time(), bid=2000, ask=2000.1,
+                                          spread_points=10, last=2000)
         broker.modify_position.side_effect = switched(True)
         assert gateway.modify(broker, "ticket-1", sl=1900) is False
         broker.modify_position.assert_called_once()

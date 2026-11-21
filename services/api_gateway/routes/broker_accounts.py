@@ -10,7 +10,7 @@ from services.api_gateway.accounts import (AccountError, assign_broker_account, 
                                            unassign_broker_account)
 from services.api_gateway.credential_vault import CredentialVault, VaultError
 from services.api_gateway.deps import Runtime, current_user, require_admin
-from services.api_gateway.demo_validation import validate_demo_account
+from services.api_gateway.demo_validation import read_demo_positions, validate_demo_account
 from services.api_gateway.state import TradingRuntime
 
 router = APIRouter(prefix="/api/broker-accounts", tags=["broker-accounts"])
@@ -101,5 +101,20 @@ def validate_demo(account_id: str, runtime: TradingRuntime = Runtime,
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     runtime.db.audit(user["email"], "broker_account.demo.validate",
                      {"account_id": account_id, "symbol": result.get("symbol"),
+                      "read_only": True, "execution_enabled": False})
+    return result
+
+
+@router.get("/{account_id}/positions")
+def demo_positions(account_id: str, runtime: TradingRuntime = Runtime,
+                   user=Depends(current_user)):
+    try:
+        result = read_demo_positions(runtime.db, user["tenant_id"], account_id, user)
+    except AccountError as exc:
+        message = str(exc)
+        status = 404 if message == "broker account does not exist" else 403 if "not allowed" in message else 409
+        raise HTTPException(status_code=status, detail=message) from exc
+    runtime.db.audit(user["email"], "broker_account.demo.positions.read",
+                     {"account_id": account_id, "count": len(result["positions"]),
                       "read_only": True, "execution_enabled": False})
     return result

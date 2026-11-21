@@ -63,6 +63,19 @@ CREATE TABLE IF NOT EXISTS position_events (
 CREATE INDEX IF NOT EXISTS idx_position_events_ticket
     ON position_events(broker_id, ticket, created_at);
 
+-- Mutable current-state projection for idempotent position modifications.
+-- Each transition is also preserved in append-only position_events.
+CREATE TABLE IF NOT EXISTS position_modify_intents (
+    broker_id TEXT NOT NULL, account_fingerprint TEXT NOT NULL, ticket TEXT NOT NULL,
+    idempotency_key TEXT NOT NULL, request_hash TEXT NOT NULL,
+    request_payload TEXT NOT NULL DEFAULT '{}', state TEXT NOT NULL,
+    created_at REAL NOT NULL, updated_at REAL NOT NULL,
+    PRIMARY KEY (broker_id, account_fingerprint, ticket, idempotency_key)
+);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_position_modify_one_unresolved
+    ON position_modify_intents(broker_id, account_fingerprint, ticket)
+    WHERE state IN ('reserved','sending','accepted_unverified','unknown');
+
 -- Closed M5 bars observed while a broker position is open. The stored source
 -- distinguishes an analytical live/replay observation from broker tick proof.
 CREATE TABLE IF NOT EXISTS position_candles (
@@ -265,6 +278,9 @@ class Database:
         "broker_accounts": {
             "terminal_path": "TEXT NOT NULL DEFAULT ''",
             "validation_symbol": "TEXT NOT NULL DEFAULT 'XAUUSD'",
+        },
+        "position_modify_intents": {
+            "request_payload": "TEXT NOT NULL DEFAULT '{}'",
         },
     }
 

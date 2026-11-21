@@ -62,38 +62,16 @@ class PositionManager:
                 continue
 
             # --- 2. partial closes at the ladder levels
-            if plan_data and self._partial_enabled():
+            if (plan_data and self._partial_enabled()
+                    and plan_data.target_mode != "single_2r"):
                 partial = self._partial_action(pos, plan_data, spec, sign)
                 if partial:
                     actions.append(partial)
 
-            # --- 3. break-even
-            if self.be.get("enabled", True) and not pos.breakeven_done:
-                trigger = float(self.be.get("trigger_points", 250))
-                if pos.points >= trigger:
-                    lock = sign * spec.points_to_price(float(self.be.get("lock_points", 30)))
-                    candidate = spec.round_price(pos.entry + lock)
-                    if (sign > 0 and candidate > pos.sl) or (sign < 0 and (pos.sl == 0 or candidate < pos.sl)):
-                        actions.append(PositionAction(
-                            kind="modify", ticket=pos.ticket, new_sl=candidate,
-                            reason="break_even",
-                            note=f"+{pos.points:.0f} pts reached; stop to break-even +{self.be.get('lock_points')} pts",
-                        ))
-
-            # --- 4. trailing
-            if self.trailing.get("enabled", True) and pos.points >= float(self.trailing.get("start_after_points", 500)):
-                distance = (float(self.trailing.get("atr_multiplier", 1.0)) * atr_points
-                            if self.trailing.get("mode", "atr") == "atr" else float(self.trailing.get("distance_points", 300)))
-                distance = max(distance, spec.spread_typical_points * 3)
-                candidate = spec.round_price(pos.current_price - sign * spec.points_to_price(distance))
-                step = spec.points_to_price(float(self.trailing.get("step_points", 50)))
-                improvement = (candidate - pos.sl) * sign
-                if improvement >= step and ((sign > 0 and candidate > pos.sl) or
-                                            (sign < 0 and (pos.sl == 0 or candidate < pos.sl))):
-                    actions.append(PositionAction(
-                        kind="modify", ticket=pos.ticket, new_sl=candidate, reason="trailing_stop",
-                        note=f"trail {distance:.0f} pts behind price, locking {pos.points - distance:+.0f} pts",
-                    ))
+            # --- 3. break-even + trailing: reduce to one monotonic SL intent.
+            protection = self._protection_action(pos, spec, sign, atr_points)
+            if protection:
+                actions.append(protection)
 
             # --- 5. time exit
             if self.time_exit.get("enabled", True):
@@ -106,6 +84,46 @@ class PositionManager:
                         note=f"{minutes:.0f} min open with only {pos.points:+.0f} pts — closing",
                     ))
         return actions
+
+    def _protection_action(self, pos: Position, spec: SymbolSpec, sign: int,
+                           atr_points: float) -> PositionAction | None:
+        """Choose one strict-improvement BE/trailing candidate for this position.
+
+        The execution gateway remains the only modifier. Do not emit two requests
+        when both policies trigger in the same evaluation, and fail closed when
+        the broker's current stop is missing/unknown.
+        """
+        if pos.sl <= 0:
+            return None
+
+        candidates: list[tuple[float, str, str]] = []
+        if self.be.get("enabled", True) and not pos.breakeven_done:
+            trigger = float(self.be.get("trigger_points", 250))
+            if pos.points >= trigger:
+                lock = sign * spec.points_to_price(float(self.be.get("lock_points", 30)))
+                candidate = spec.round_price(pos.entry + lock)
+                if (candidate - pos.sl) * sign > 0 and (pos.current_price - candidate) * sign > 0:
+                    candidates.append((candidate, "break_even",
+                                       f"+{pos.points:.0f} pts reached; stop to break-even +{self.be.get('lock_points')} pts"))
+
+        if self.trailing.get("enabled", True) and pos.points >= float(self.trailing.get("start_after_points", 500)):
+            distance = (float(self.trailing.get("atr_multiplier", 1.0)) * atr_points
+                        if self.trailing.get("mode", "atr") == "atr"
+                        else float(self.trailing.get("distance_points", 300)))
+            distance = max(distance, spec.spread_typical_points * 3)
+            candidate = spec.round_price(pos.current_price - sign * spec.points_to_price(distance))
+            step = spec.points_to_price(float(self.trailing.get("step_points", 50)))
+            if ((candidate - pos.sl) * sign >= step
+                    and (pos.current_price - candidate) * sign > 0):
+                candidates.append((candidate, "trailing_stop",
+                                   f"trail {distance:.0f} pts behind price, locking {pos.points - distance:+.0f} pts"))
+
+        if not candidates:
+            return None
+        # BUY: higher is safer; SELL: lower is safer. A tie is deterministic.
+        candidate, reason, note = max(candidates, key=lambda item: sign * item[0])
+        return PositionAction(kind="modify", ticket=pos.ticket, new_sl=candidate,
+                              reason=reason, note=note)
 
     # ------------------------------------------------------------- internals
     def _partial_enabled(self) -> bool:

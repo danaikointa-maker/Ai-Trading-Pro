@@ -38,6 +38,16 @@ Base: `http://127.0.0.1:8000` · interactive docs: `/api/docs` · OpenAPI: `/api
   (คำสั่งเดียวถูกส่งให้ EA ครั้งเดียวแม้สอง worker ตอบพร้อมกัน)
 - EA แจ้ง `rates` เอง; ถ้าไม่มี rates → `candles()` error ไม่ synthesize
 
+### MT5 timestamp contract (bridge EA)
+
+Snapshot ใหม่จาก `No7BridgeEA.mq5` ประกาศ `time_basis: "broker_server"` พร้อม `server_time` และ `utc_time` จาก snapshot เดียวกัน เพราะ tick และ `CopyRates` ใช้เวลาโบรกเกอร์. `BridgeBroker` ตรวจ offset จากสองค่านี้ (ไม่ hard-code +1/+2 ชั่วโมง) แล้วแปลง tick, M1 rates และเวลาเปิด position เป็น UTC ก่อนส่งเข้า data-quality, signal-expiry และ API ภายใน. Snapshot ที่ประกาศ basis นี้แต่ไม่มี anchor, offset เกิน ±14 ชั่วโมง หรือ UTC anchor ไม่อยู่ในช่วงเวลาที่ยอมรับจะถูกปฏิเสธ.
+
+Snapshot เก่าที่ไม่มี `time_basis` คงสัญญาเดิมเพื่อ backward compatibility; ห้ามใช้หลักฐานเก่านี้รับรองว่าเวลาตรงกับ MT5. `GET /api/market/candles` คืน `time: {basis, display_basis, server_utc_offset_seconds}`; chart ใช้ offset แสดงเวลาโบรกเกอร์ ส่วน candle/tick ที่ส่งเข้า engine ยังคงเป็น UTC. การ map ใช้ offset ปัจจุบัน จึงยังต้องทดสอบ broker DST/การเปลี่ยน offset กับ terminal จริงก่อนรับรอง history ที่คร่อมการเปลี่ยน DST. `TimeTradeServer()` เป็นเวลาประมาณจาก terminal PC; ความสดของ snapshot และ future-tick gate ยังคงบังคับใช้แยกกัน.
+
+### Isolated MT5 market publisher (V4 source; not deployed)
+
+`POST /api/market/publish/mt5` เป็น data plane แบบ read-only แยกจาก EA bridge. รับเฉพาะ Demo identity, timestamp anchors, quotes, OHLCV rates และ symbol specs; schema ปฏิเสธฟิลด์ตำแหน่งบนสุดอย่าง positions/orders/commands. ใช้ `NO7_MT5_MARKET_PUBLISHER_TOKEN` ที่แยกจาก `NO7_BRIDGE_TOKEN`. เมื่อเปิดใช้ chart จะใช้เฉพาะ snapshot สด และปฏิเสธข้อมูลเก่าแทนการ fallback เป็น simulation. ปิดเป็นค่าเริ่มต้น. การตั้งค่าปัจจุบันรองรับ publisher identity เดียวต่อ runtime; การแยก cache ไม่ได้หมายความว่าระบบรองรับหลายบัญชีหรือเทรดหลายบัญชีพร้อมกัน. ส่ง token ผ่าน HTTPS หรือ SSH loopback tunnel เท่านั้น; ห้ามส่ง bearer token บน plaintext LAN HTTP.
+
 ## PWA (manifest / service worker / offline)
 
 | path | หมายเหตุ |
@@ -138,8 +148,9 @@ CORS เป็น **allowlist**: ค่าเริ่มต้นไม่ใ�
 |---|---|---|
 | GET | `/api/market/candles?symbol=&timeframe=&limit=` | `limit ≥ 20` |
 | GET | `/api/market/ticker?symbol=` | last/bid/ask/spread |
+| POST | `/api/market/publish/mt5` | dedicated `Bearer` market-publisher token; Demo quotes/rates/specs only, separate from EA bridge poll/command queue |
 | GET | `/api/market/specs?symbol=` | digits/point/tick/contract/lot step/stops level |
-| GET | `/api/market/calculator?symbol=&points=&lot=` | points → profit (ไม่รวม spread/commission/swap/slippage) |
+| GET | `/api/market/calculator?symbol=&points=&lot=` | gross/net-after-commission estimate; spread cost is separate and not deducted; excludes swap/slippage; uses current runtime market spec, not an account-specific terminal link |
 | GET | `/api/analysis/{symbol}` | snapshot เต็ม (trend, structure, zones, indicators, regime) |
 | GET | `/api/analysis/{symbol}/zones` | supports/resistances พร้อม evidence |
 
@@ -183,12 +194,15 @@ H080 reload ใช้ approval ของ payload และ DB ร่วมกั
 | GET | `/api/risk/settings` | limits + targets + stops + full_auto requirements |
 | PUT | `/api/risk/settings` | `{limits:{...}}` patch (audit ทุกครั้ง) |
 | POST | `/api/risk/kill-switch` \| `DELETE` | เปิด/ปิดด้วยมือ |
-| GET | `/api/risk/calculator?symbol=&points=&lot=` | เหมือน market calculator |
+| GET | `/api/risk/calculator?symbol=&points=&lot=&balance=&risk_pct=&sl_points=` | active runtime adapter spec; optional read-only lot projection returns `0`/`blocked` if the minimum lot exceeds risk; net deducts commission only, spread is separate, excludes swap/slippage; not selected-account scoped and never sends an order |
 
 ## Brokers & backtest
 
 | Method | Path | Notes |
 |---|---|---|
+| GET | `/api/broker-accounts` | managed accounts visible to the authenticated user; credentials are never returned |
+| POST | `/api/broker-accounts/{id}/validate-demo` | one-shot, read-only identity/quote check for an already logged-in Demo terminal |
+| GET | `/api/broker-accounts/{id}/positions` | fresh on-demand Demo snapshot (`positions`, including broker SL/TP, account id and fetched time); only accounts linked as `ready_read_only`; account-scoped, read-only and `execution_enabled:false`; 404/403/409 on missing/access/link-state errors |
 | GET | `/api/brokers` | รายการ + active + health + account |
 | POST | `/api/brokers/{id}/activate` | สลับโบรกเกอร์ |
 | GET | `/api/brokers/{id}/symbols` | spec จริงต่อบัญชี (`source: broker|declared`) |

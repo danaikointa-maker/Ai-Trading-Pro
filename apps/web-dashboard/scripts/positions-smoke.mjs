@@ -22,6 +22,8 @@ try {
     assert.match(feedback.message, reply?.ok === true ? /ตอบรับ/ : reply?.ok === false ? /ปฏิเสธ/ : /ไม่ทราบผล/)
   }
   const tableSource = readFileSync(new URL('../src/components/PositionsTable.vue', import.meta.url), 'utf8')
+  assert.match(tableSource, /มีผลเฉพาะรายการไม้ในตารางนี้/)
+  assert.match(tableSource, /Risk Engine ส่วนอื่นยังเป็นข้อมูล Runtime \/ simulator/)
   assert.match(tableSource, /closeFeedback\(res\)/)
   assert.match(tableSource, /closeFeedback\(err\.detail\)/)
   assert.doesNotMatch(tableSource, /ปิดไม้ .*แล้ว/)

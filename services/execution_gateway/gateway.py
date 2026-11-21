@@ -13,6 +13,7 @@ database, or ambiguous broker history still needs separate operator reconciliati
 from __future__ import annotations
 
 import json
+import hashlib
 import math
 import time
 import uuid
@@ -34,6 +35,16 @@ from packages.shared_schemas.models import (
 from packages.shared_schemas.settings import Settings
 
 POSITION_EVIDENCE_FIELDS = ("symbol", "direction", "volume", "entry", "sl", "tp", "open_time")
+
+
+def adapter_modify_max_quote_age(settings: Any) -> float:
+    execution = getattr(settings, "execution", {})
+    value = execution.get("position_modify_max_quote_age_seconds", 10.0) if isinstance(execution, dict) else 10.0
+    try:
+        age = float(value)
+    except (TypeError, ValueError):
+        return 10.0
+    return age if math.isfinite(age) and 0 < age <= 60 else 10.0
 
 
 def _position_evidence(pos: Position | None) -> dict[str, Any] | None:
@@ -354,24 +365,177 @@ class ExecutionGateway:
     # ------------------------------------------------------------ management
     def modify(self, adapter: BrokerAdapter, ticket: str, sl: float | None = None,
                tp: float | None = None, reason: str = "") -> bool:
+        """Modify a DEMO/Paper position once, then require broker readback.
+
+        A queued/accepted response alone never confirms protection. An
+        unresolved intent fences this account+ticket until reconciliation.
+        """
+        intent: dict[str, Any] | None = None
+        owner: dict[str, str] | None = None
         try:
-            identity = self._assert_account(adapter)
-            ledger = PositionEventLog(self.db)
-            detail = {"sl": sl, "tp": tp, "reason": reason}
-            ledger.append(broker_id=adapter.id, ticket=ticket, actor="position-manager",
-                          kind="modify", status="requested", account_identity=identity, detail=detail)
-            ok = adapter.modify_position(ticket, sl=sl, tp=tp)
+            owner = self._assert_account(adapter)
+            info = adapter.account_info()
+            if str(info.account_type).lower() != "demo":
+                raise BrokerError("position modification is restricted to DEMO/Paper accounts")
+            relay = getattr(adapter, "relay", None)
+            if (getattr(adapter, "adapter_type", "") == "bridge"
+                    and getattr(relay, "read_only", True)):
+                raise BrokerError("MT5 bridge is read-only; modify blocked before intent reservation")
+            if adapter.health() != Health.connected:
+                raise BrokerError("broker is not connected; modify blocked")
+
+            positions = adapter.positions()
             self._assert_account(adapter)
-            ledger.append(broker_id=adapter.id, ticket=ticket, actor="position-manager",
-                          kind="modify", status="accepted_unverified" if ok else "unknown",
-                          account_identity=identity, detail=detail)
+            matches = [pos for pos in positions if str(pos.ticket) == str(ticket)
+                       and pos.broker_id == adapter.id]
+            if len(matches) != 1:
+                raise BrokerError("position identity is missing or ambiguous")
+            position = matches[0]
+            if sl is None or type(sl) not in (int, float) or not math.isfinite(sl) or sl <= 0:
+                raise BrokerError("a finite protective stop is required")
+            if position.sl <= 0:
+                raise BrokerError("current broker stop is missing; manual reconciliation required")
+            spec = adapter.symbol_spec(position.symbol)
+            paper = getattr(adapter, "adapter_type", "") == "simulated_mt5"
+            if (not spec.spec_complete or (spec.source != "broker" and not paper)
+                    or not math.isfinite(spec.point) or spec.point <= 0
+                    or not math.isfinite(spec.tick_size) or spec.tick_size <= 0
+                    or any(not math.isfinite(value) or value < 0 for value in
+                           (spec.stops_level_points, spec.freeze_level_points))):
+                raise BrokerError("fresh broker symbol constraints are unavailable")
+            tick = adapter.ticker(position.symbol)
+            max_age = float(adapter_modify_max_quote_age(self.settings))
+            if (not math.isfinite(tick.t) or time.time() - tick.t > max_age
+                    or tick.t - time.time() > 2 or not math.isfinite(tick.bid)
+                    or not math.isfinite(tick.ask) or tick.bid <= 0 or tick.ask < tick.bid):
+                raise BrokerError("fresh bid/ask unavailable; modify blocked")
+
+            sign = 1 if position.direction == Direction.up else -1
+            normalized_sl = spec.round_price(float(sl))
+            if abs(normalized_sl - float(sl)) > spec.tick_size * 1e-6:
+                raise BrokerError("requested stop is not normalized to broker tick size")
+            if (normalized_sl - position.sl) * sign <= 0:
+                # Already satisfied is a safe no-op; do not attempt an equal or
+                # riskier broker change.
+                if abs(normalized_sl - position.sl) <= spec.tick_size * 1e-6:
+                    PositionEventLog(self.db).reconcile_modify_intents(
+                        broker_id=adapter.id, account_identity=owner,
+                        positions=positions, tick_size_by_symbol={position.symbol: spec.tick_size})
+                    return True
+                raise BrokerError("requested stop would widen existing protection")
+            quote = tick.bid if sign > 0 else tick.ask
+            distance = (quote - normalized_sl) * sign
+            if distance <= 0:
+                raise BrokerError("requested stop must remain beyond the executable close quote")
+            if (spec.stops_level_points > 0
+                    and distance < spec.stops_level_points * spec.point):
+                raise BrokerError("requested stop violates broker stops level")
+            if (spec.freeze_level_points > 0
+                    and distance <= spec.freeze_level_points * spec.point):
+                raise BrokerError("requested stop violates broker stops/freeze distance")
+
+            detail = {"sl": normalized_sl, "tp": tp, "reason": reason,
+                      "before_sl": position.sl, "before_tp": position.tp,
+                      "symbol": position.symbol, "tick_size": spec.tick_size}
+            key_source = json.dumps({"owner": owner, "ticket": str(ticket),
+                                     "detail": detail}, sort_keys=True,
+                                    separators=(",", ":"), allow_nan=False)
+            idempotency_key = "pm-" + hashlib.sha256(key_source.encode("utf-8")).hexdigest()
+            ledger = PositionEventLog(self.db)
+            intent = ledger.reserve_modify(broker_id=adapter.id, ticket=str(ticket),
+                                           idempotency_key=idempotency_key,
+                                           account_identity=owner, detail=detail)
+            base_idempotency_key = idempotency_key
+            recovery_generation = 0
+            while not intent.get("created") and recovery_generation < 5:
+                if intent.get("state") == "reserved":
+                    if float(intent.get("age_seconds", 0.0)) < 30.0:
+                        break
+                    stale_key = str(intent.get("idempotency_key", idempotency_key))
+                    # A reservation cannot reach the adapter until the same
+                    # transaction advances it to `sending`. CAS abandonment
+                    # therefore proves this generation never called the broker.
+                    abandoned = ledger.transition_modify(
+                        broker_id=adapter.id, ticket=str(ticket),
+                        idempotency_key=stale_key, account_identity=owner,
+                        state="abandoned",
+                        detail={"reason": "stale reserved intent abandoned before sending"})
+                    if not abandoned:
+                        break
+                    recovery_generation += 1
+                    idempotency_key = f"{base_idempotency_key}-r{recovery_generation}"
+                    intent = ledger.reserve_modify(
+                        broker_id=adapter.id, ticket=str(ticket),
+                        idempotency_key=idempotency_key,
+                        account_identity=owner, detail=detail)
+                    continue
+                if intent.get("state") == "abandoned":
+                    recovery_generation += 1
+                    idempotency_key = f"{base_idempotency_key}-r{recovery_generation}"
+                    intent = ledger.reserve_modify(
+                        broker_id=adapter.id, ticket=str(ticket),
+                        idempotency_key=idempotency_key,
+                        account_identity=owner, detail=detail)
+                    continue
+                break
+            if not intent.get("created"):
+                if intent.get("blocked"):
+                    raise BrokerError("another position modify is unresolved; reconcile before retry")
+                if intent.get("state") == "confirmed":
+                    latest = [pos for pos in adapter.positions()
+                              if str(pos.ticket) == str(ticket) and pos.broker_id == adapter.id]
+                    return (len(latest) == 1
+                            and abs(latest[0].sl - normalized_sl) <= spec.tick_size * 1e-6
+                            and abs(latest[0].tp - position.tp) <= spec.tick_size * 1e-6)
+                raise BrokerError("duplicate modify intent is unresolved; reconcile before retry")
+            if not ledger.transition_modify(broker_id=adapter.id, ticket=str(ticket),
+                                            idempotency_key=idempotency_key,
+                                            account_identity=owner, state="sending"):
+                raise BrokerError("could not advance durable modify intent; no command sent")
+
+            try:
+                ok = adapter.modify_position(str(ticket), sl=normalized_sl, tp=tp)
+            except Exception as exc:  # an exception may follow a broker-side change
+                ok = False
+                send_error = str(exc)
+            else:
+                send_error = ""
+            self._assert_account(adapter)
+            if ok:
+                ledger.transition_modify(broker_id=adapter.id, ticket=str(ticket),
+                                          idempotency_key=idempotency_key,
+                                          account_identity=owner,
+                                          state="accepted_unverified")
+            verified_positions = adapter.positions()
+            self._assert_account(adapter)
+            verified = [pos for pos in verified_positions
+                        if str(pos.ticket) == str(ticket) and pos.broker_id == adapter.id]
+            expected_tp = position.tp if tp is None else tp
+            confirmed = (len(verified) == 1
+                         and abs(verified[0].sl - normalized_sl) <= spec.tick_size * 1e-6
+                         and abs(verified[0].tp - expected_tp) <= spec.tick_size * 1e-6)
+            ledger.transition_modify(broker_id=adapter.id, ticket=str(ticket),
+                                     idempotency_key=idempotency_key,
+                                     account_identity=owner,
+                                     state="confirmed" if confirmed else "unknown",
+                                     detail={"broker_sl": verified[0].sl if len(verified) == 1 else None,
+                                             "broker_tp": verified[0].tp if len(verified) == 1 else None,
+                                             "adapter_ack": bool(ok), "error": send_error})
             self.db.audit("position-manager", "position.modify",
-                          {"ticket": ticket, "sl": sl, "tp": tp, "ok": ok, "reason": reason})
-            return ok
-        except BrokerError as exc:
-            # The request already exists in append-only evidence; a transport
-            # exception cannot prove that the broker rejected it.
-            self.db.audit("position-manager", "position.modify_failed", {"ticket": ticket, "error": str(exc)})
+                          {"ticket": ticket, "sl": normalized_sl, "tp": tp,
+                           "ack": bool(ok), "confirmed": confirmed, "reason": reason})
+            return confirmed
+        except Exception as exc:  # noqa: BLE001 - fail closed; ambiguity is not rejection
+            if intent and intent.get("created") and owner:
+                try:
+                    PositionEventLog(self.db).transition_modify(
+                        broker_id=adapter.id, ticket=str(ticket),
+                        idempotency_key=idempotency_key,
+                        account_identity=owner, state="unknown", detail={"error": str(exc)})
+                except Exception:
+                    pass  # The reserved intent itself remains a durable fence.
+            self.db.audit("position-manager", "position.modify_failed",
+                          {"ticket": ticket, "error": str(exc)})
             return False
 
     def close(self, adapter: BrokerAdapter, ticket: str, volume: float | None = None,
@@ -470,10 +634,29 @@ class ExecutionGateway:
                 raise BrokerError("ambiguous position identity; manual reconciliation required")
             if any(ticket in all_stored and all_stored[ticket].broker_id != adapter.id for ticket in live):
                 raise BrokerError("cross-account ticket collision; isolated storage required")
+            tick_sizes: dict[str, float] = {}
+            paper = getattr(adapter, "adapter_type", "") == "simulated_mt5"
+            for position in positions:
+                try:
+                    spec = adapter.symbol_spec(position.symbol)
+                    if spec.spec_complete and (spec.source == "broker" or paper):
+                        tick_sizes[position.symbol] = spec.tick_size
+                except Exception:
+                    continue
+            PositionEventLog(self.db).reconcile_modify_intents(
+                broker_id=adapter.id, account_identity=identity,
+                positions=positions, tick_size_by_symbol=tick_sizes)
             missing_at_broker = sorted(set(stored) - set(live))
             unknown_locally = sorted(set(live) - set(stored))
             changed_at_broker = sorted(ticket for ticket in set(live) & set(stored)
                                        if _position_evidence(live[ticket]) != _position_evidence(stored[ticket]))
+            for ticket in list(changed_at_broker):
+                before = _position_evidence(stored[ticket])
+                broker = _position_evidence(live[ticket])
+                if PositionEventLog(self.db).confirmed_modify_matches(
+                        broker_id=adapter.id, ticket=ticket,
+                        account_identity=identity, before=before, observed=broker):
+                    changed_at_broker.remove(ticket)
             events = PositionEventLog(self.db)
             new_observations: list[str] = []
             observation_transitions: list[dict[str, str]] = []
@@ -612,6 +795,7 @@ class ExecutionGateway:
                     raise BrokerError("cross-account ticket collision; isolated storage required")
             if retain_unverified:
                 ledger = PositionEventLog(self.db)
+                verified_modify_tickets: set[str] = set()
                 prior_scope = {ticket: pos for ticket, pos in stored.items()
                                if pos.broker_id == broker_id}
                 incoming = {pos.ticket: pos for pos in positions}
@@ -625,6 +809,17 @@ class ExecutionGateway:
                     changed = ([key for key in POSITION_EVIDENCE_FIELDS if before and observed
                                 and before[key] != observed[key]]
                                if before and observed else ["presence"])
+                    expected_modify = bool(
+                        before and observed
+                        and set(changed).issubset({"sl", "tp"})
+                        and ledger.confirmed_modify_matches_in_transaction(
+                            cur, broker_id=broker_id, ticket=ticket,
+                            account_identity=account_identity,
+                            before=before, observed=observed))
+                    if expected_modify:
+                        verified_modify_tickets.add(ticket)
+                        status = "baseline_restored"
+                        changed = []
                     event_id = ledger.observe_broker_in_transaction(
                         cur, broker_id=broker_id, ticket=ticket,
                         account_identity=account_identity, status=status,
@@ -635,7 +830,8 @@ class ExecutionGateway:
                                                    "status": status})
             for pos in positions:
                 if (retain_unverified and pos.ticket in stored
-                        and _position_evidence(stored[pos.ticket]) != _position_evidence(pos)):
+                        and _position_evidence(stored[pos.ticket]) != _position_evidence(pos)
+                        and pos.ticket not in verified_modify_tickets):
                     continue  # An unexplained change cannot rewrite the baseline.
                 cur.execute(
                     "INSERT OR REPLACE INTO open_positions(ticket, payload, updated_at) VALUES(?,?,?)",

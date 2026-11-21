@@ -72,15 +72,54 @@ def validate(database: Path, workspace_id: str, tenant_id: str,
         db.close()
 
 
+def read_positions(database: Path, workspace_id: str, tenant_id: str,
+                   account_id: str) -> dict:
+    """Read a fresh positions snapshot from an already-linked Demo terminal.
+
+    This worker never logs in, changes terminal state, or sends/modifies orders.
+    The account identity and connection are checked again around the MT5 read.
+    """
+    if sys.platform != "win32":
+        raise ProbeError("MT5 positions require the Windows host that owns the terminal")
+    db = Database(database, workspace_id=workspace_id)
+    try:
+        row = db.query_one("SELECT * FROM broker_accounts WHERE id = ? AND tenant_id = ?",
+                           (account_id, tenant_id))
+        if (row is None or row["account_type"] != "demo" or row["provider"] != "mt5"
+                or row["connection_status"] != "ready_read_only"):
+            raise ProbeError("Link and verify this MT5 Demo account as read-only first")
+        terminal_path = Path(row["terminal_path"])
+        if (terminal_path.name.lower() != "terminal64.exe" or not terminal_path.is_file()
+                or not terminal_is_running(terminal_path)):
+            raise ProbeError("The linked MT5 terminal is not running; no position snapshot was read")
+        credentials = CredentialVault().decrypt(account_id, row["credentials_ciphertext"])
+        if not credentials["login"].isdigit():
+            raise ProbeError("Stored MT5 login is invalid")
+        try:
+            import MetaTrader5 as terminal
+        except ImportError as exc:
+            raise ProbeError("Install requirements-mt5.txt in this environment") from exc
+        result = probe_demo(terminal, str(terminal_path), int(credentials["login"]),
+                            row["server"], row["validation_symbol"], include_positions=True)
+        result.update({"account_id": account_id, "connection_status": "ready_read_only",
+                       "execution_enabled": False, "fetched_at": time.time()})
+        return result
+    finally:
+        db.close()
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--account-id", required=True)
     parser.add_argument("--tenant-id", required=True)
     parser.add_argument("--database", required=True, type=Path)
     parser.add_argument("--workspace-id", required=True)
+    parser.add_argument("--positions", action="store_true",
+                        help="read positions from an already verified Demo terminal")
     args = parser.parse_args()
     try:
-        result = validate(args.database, args.workspace_id, args.tenant_id, args.account_id)
+        worker = read_positions if args.positions else validate
+        result = worker(args.database, args.workspace_id, args.tenant_id, args.account_id)
     except ProbeError as exc:
         print(f"BLOCKED: {exc}")
         return 1

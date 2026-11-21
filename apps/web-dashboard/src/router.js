@@ -1,5 +1,6 @@
 import { createRouter, createWebHistory } from 'vue-router'
 import { getToken } from './lib/api'
+import { loadIdentity, state } from './lib/store'
 
 const routes = [
   { path: '/login', name: 'login', component: () => import('./views/Login.vue'), meta: { public: true, title: 'Sign in' } },
@@ -32,9 +33,13 @@ router.onError((error, to) => {
   window.location.assign((to && to.fullPath) || '/')
 })
 
-router.beforeEach((to) => {
+router.beforeEach(async (to) => {
   document.title = `${to.meta.title || 'No7'} · No7 AI Trading Pro`
   if (!to.meta.public && !getToken()) return { name: 'login', query: { next: to.fullPath } }
+  if (getToken() && !state.user) await loadIdentity()
+  if (state.user?.platform_role === 'super_admin' && to.name !== 'system') {
+    return { name: 'system' }
+  }
   if (to.name === 'login' && getToken()) return { name: 'dashboard' }
   return true
 })

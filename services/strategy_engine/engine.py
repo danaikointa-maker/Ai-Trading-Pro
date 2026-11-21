@@ -34,7 +34,7 @@ from packages.strategy_rules.trend import alignment_score
 from packages.strategy_rules.zones import zone_contains
 from services.ai_forecast.predictor import ForecastPredictor
 from services.risk_engine.engine import RiskEngine, RiskGate
-from services.risk_engine.planner import PlanInputs, TradePlanner
+from services.risk_engine.planner import TradePlanner, build_plan_inputs
 from services.strategy_engine.analysis import AnalysisContext
 
 
@@ -334,29 +334,15 @@ class StrategyEngine:
             # keeping this inside the `if` crashed the exact path where entry
             # conditions are satisfied (UnboundLocalError -> no signal ever sent).
             risk_settings = self.risk.settings_view()
-            plan_inputs = PlanInputs(
-                direction=direction,
-                entry=entry_price,
-                spec=spec,
-                atr_points=atr_points,
-                equity=equity,
-                risk_pct=self.risk.limits().risk_per_trade_pct,
+            plan_inputs = build_plan_inputs(
+                risk_cfg=self.risk_cfg, effective=risk_settings,
+                direction=direction, entry=entry_price, spec=spec,
+                atr_points=atr_points, equity=equity,
                 spread_points=float(tick.spread_points),
-                supports=snap.supports,
-                resistances=snap.resistances,
-                swings=[{"kind": s.kind, "price": s.price} for s in snap.swings if s.confirmed],
-                target_mode=risk_settings.targets_mode,
-                min_points=risk_settings.min_points,
-                max_points=risk_settings.max_points,
-                fixed_points=risk_settings.fixed_points,
-                sl_atr_multiplier=float(self.risk_cfg.get("stops", {}).get("sl_atr_multiplier", 1.0)),
-                sl_min_points=float(self.risk_cfg.get("stops", {}).get("sl_min_points", 150)),
-                sl_max_points=float(self.risk_cfg.get("stops", {}).get("sl_max_points", 1200)),
-                min_rr_net=self.risk.limits().min_reward_risk,
-                atr_target_multiplier=float(self.risk_cfg.get("targets", {}).get("adaptive", {}).get("atr_multiplier", 2.2)),
-                zone_buffer_atr=float(self.risk_cfg.get("targets", {}).get("adaptive", {}).get("zone_buffer_atr", 0.35)),
-                respect_zones=bool(self.risk_cfg.get("targets", {}).get("adaptive", {}).get("respect_zones", True)),
-                closes_pct=list(self.risk_cfg.get("targets", {}).get("ladder", {}).get("closes_pct", [40, 30, 30])),
+                supports=snap.supports, resistances=snap.resistances,
+                swings=[{"kind": s.kind, "price": s.price, "idx": s.idx}
+                        for s in snap.swings if s.confirmed],
+                m5_bar_count=len(ctx.frames["M5"]),
             )
             result = self.planner.build(plan_inputs)
             blockers.extend(result.blockers)

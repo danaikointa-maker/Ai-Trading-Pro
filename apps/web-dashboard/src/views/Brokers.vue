@@ -72,10 +72,10 @@
                   <span class="chip chip-down ml-1">orders off</span>
                 </td>
                 <td class="text-right">
-                  <button v-if="account.account_type === 'demo' && account.can_control && account.terminal_path_configured && account.connection_status !== 'ready_read_only'"
+                  <button v-if="account.account_type === 'demo' && account.can_control && account.terminal_path_configured"
                           class="btn mr-1 py-0.5 text-[9px]" :disabled="validatingAccountId === account.id"
                           @click="validateDemoAccount(account)">
-                    {{ validatingAccountId === account.id ? 'Checking…' : 'Validate Demo' }}
+                    {{ validatingAccountId === account.id ? 'กำลังตรวจ…' : 'เชื่อม/ตรวจ MT5 อ่านอย่างเดียว' }}
                   </button>
                   <span v-else-if="account.account_type === 'demo' && account.can_control && !account.terminal_path_configured"
                         class="text-[9px] text-muted">Set terminal path to validate</span>

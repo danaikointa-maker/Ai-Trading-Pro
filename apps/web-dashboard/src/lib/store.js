@@ -82,14 +82,23 @@ export function logout() {
   stopLive()
 }
 
+export async function loadIdentity() {
+  if (!state.token && !getToken()) return null
+  const me = await api.get('/api/auth/me', { silent: true }).catch(() => null)
+  if (me) state.user = me.user
+  return state.user
+}
+
 export async function bootstrap() {
-  if (!state.token) return
-  const [me, config, brokers] = await Promise.all([
-    api.get('/api/auth/me', { silent: true }).catch(() => null),
+  if (!state.token && !getToken()) return
+  await loadIdentity()
+  // Platform administrators have no tenant trading access. Do not send requests
+  // for broker/runtime data that the server is required to reject.
+  if (state.user?.platform_role === 'super_admin') return
+  const [config, brokers] = await Promise.all([
     api.get('/api/system/config', { silent: true }).catch(() => null),
     api.get('/api/brokers', { silent: true }).catch(() => null),
   ])
-  if (me) state.user = me.user
   if (config) {
     state.config = config
     if (config.symbols && !config.symbols.includes(state.symbol)) state.symbol = config.symbols[0]

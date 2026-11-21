@@ -3,7 +3,7 @@
     <div class="panel-head">
       <div>
         <div class="panel-title">Points → Profit Calculator</div>
-        <div class="panel-sub">ใช้ spec จริงของสัญลักษณ์ (point / tick size / contract)</div>
+        <div class="panel-sub">อิงสเปก Runtime market · ยังไม่ผูกกับบัญชี MT5 ที่เลือก</div>
       </div>
       <span class="chip chip-gold">{{ spec?.symbol || state.symbol }}</span>
     </div>
@@ -23,13 +23,14 @@
       <div class="kv"><dt>Contract size</dt><dd>{{ fmt(spec?.contract_size, 0) }}</dd></div>
       <div class="kv"><dt>Price movement</dt><dd>{{ fmt(result?.price_move, spec?.digits ?? 2) }}</dd></div>
       <div class="kv"><dt>Gross profit</dt><dd class="text-up">{{ money(result?.gross_profit) }}</dd></div>
+      <div class="kv"><dt>Commission · round turn</dt><dd class="text-muted">{{ money(result?.commission) }}</dd></div>
+      <div class="kv"><dt>Net estimate · after commission</dt><dd class="text-up">{{ money(result?.net_profit) }}</dd></div>
       <div class="kv"><dt>Value / point / lot</dt><dd>{{ money(result?.value_per_point_per_lot) }}</dd></div>
       <div class="kv"><dt>Spread cost @ typical</dt><dd class="text-down">{{ money(result?.spread_cost) }}</dd></div>
     </div>
     <p class="border-t border-ink-700/60 px-4 py-2 text-[10px] leading-relaxed text-muted">
-      ตัวอย่าง: XAUUSD ที่ point = 0.01 → 500 points = $5.00, 750 = $7.50, 1,000 = $10.00 ต่อราคา
-      แต่ถ้า point = 0.001 ระยะ 500 points จะเหลือเพียง $0.50 ของการเคลื่อนไหวราคา
-      ตัวเลขนี้ยังไม่รวม spread, commission, swap และ slippage
+      Gross คำนวณก่อนต้นทุน · Net estimate หักเฉพาะ commission · Spread cost แสดงแยกและยังไม่หักจาก Net
+      · ยังไม่รวม swap และ slippage · เป็นการประเมินจาก Runtime market spec ไม่ใช่ยอดรับประกัน
     </p>
     <p v-if="error" class="px-4 pb-3 text-[10.5px] text-down">{{ error }}</p>
   </section>

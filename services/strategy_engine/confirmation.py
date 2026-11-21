@@ -1,0 +1,241 @@
+"""Persistent, candidate-only 100 MT5-point signal confirmation gate.
+
+This gate owns signal confirmation state only. It does not size risk, approve an
+order, or call the execution gateway. The candidate profile is disabled unless
+the runtime is explicitly configured to enable it.
+"""
+from __future__ import annotations
+
+import hashlib
+import json
+import math
+import time
+from dataclasses import dataclass
+from typing import Any
+
+from packages.persistence.db import Database
+from packages.shared_schemas.models import Direction
+
+WAIT = "WAIT_100_POINTS"
+CONFIRMED = "M1_M5_CONFIRMED"
+EXPIRED = "EXPIRED"
+BLOCKED = "BLOCKED"
+INVALIDATED = "INVALIDATED"
+
+
+@dataclass(frozen=True)
+class ConfirmationResult:
+    state: str
+    candidate_id: str | None
+    expires_at: int | None
+    reason: str
+    reference_price: float | None = None
+    confirmation_bar_t: int | None = None
+    confirmation_close: float | None = None
+    confirmation_points: float = 0.0
+    chase_points: float | None = None
+
+
+class SignalConfirmationGate:
+    """One persistent candidate per workspace/broker/symbol, deduplicated in SQLite."""
+
+    def __init__(self, db: Database, *, confirmation_points: float = 100.0,
+                 max_chase_points: float = 30.0, expiry_seconds: int = 300,
+                 max_closed_m1_age_seconds: int = 75) -> None:
+        values = (confirmation_points, max_chase_points, expiry_seconds,
+                  max_closed_m1_age_seconds)
+        if not all(math.isfinite(float(value)) and float(value) > 0 for value in values):
+            raise ValueError("confirmation thresholds must be finite and positive")
+        if int(expiry_seconds) != expiry_seconds or int(max_closed_m1_age_seconds) != max_closed_m1_age_seconds:
+            raise ValueError("confirmation time limits must be whole seconds")
+        self.db = db
+        self.confirmation_points = float(confirmation_points)
+        self.max_chase_points = float(max_chase_points)
+        self.expiry_seconds = int(expiry_seconds)
+        self.max_closed_m1_age_seconds = int(max_closed_m1_age_seconds)
+
+    @staticmethod
+    def _signature(direction: Direction, strategy: str, zone_ids: list[str]) -> str:
+        payload = json.dumps([direction.value, strategy, sorted(set(zone_ids))], separators=(",", ":"))
+        return hashlib.sha256(payload.encode()).hexdigest()[:24]
+
+    def advance(self, *, broker_id: str, symbol: str, direction: Direction,
+                strategy: str, zone_ids: list[str], now: float, point: float,
+                reference_price: float, execution_price: float,
+                m1_bars: list[dict[str, Any]], m5_direction: Direction,
+                data_fresh: bool, broker_healthy: bool) -> ConfirmationResult:
+        """Advance one signal candidate using UTC market time and closed M1 evidence.
+
+        Chosen candidate interpretation: confirmation is a closed M1 close at
+        least 100 broker points beyond the first observed quote. Entry may be no
+        more than 30 broker points from that confirming close. This lives in the
+        OFF-by-default candidate profile and needs Demo acceptance before use.
+        """
+        if direction not in (Direction.up, Direction.down):
+            return ConfirmationResult(BLOCKED, None, None, "candidate has no trade direction")
+        if not broker_id.strip() or not symbol.strip() or not strategy.strip():
+            return ConfirmationResult(BLOCKED, None, None, "candidate identity is incomplete")
+        if not math.isfinite(float(now)) or not math.isfinite(float(point)) or point <= 0:
+            return ConfirmationResult(BLOCKED, None, None, "market clock or broker point is invalid")
+        if not math.isfinite(float(reference_price)) or reference_price <= 0:
+            return ConfirmationResult(BLOCKED, None, None, "reference quote is invalid")
+        if not math.isfinite(float(execution_price)) or execution_price <= 0:
+            return ConfirmationResult(BLOCKED, None, None, "execution-side quote is invalid")
+
+        key = f"signal-confirmation-v4:{self.db.workspace_id}:{broker_id}:{symbol}"
+        signature = self._signature(direction, strategy, zone_ids)
+        candidate_bar = self._latest_closed_bar(m1_bars, int(now))
+        candidate_bar_t = int(candidate_bar["t"]) if candidate_bar else None
+        existing: dict[str, Any] | None = None
+
+        # The single SQLite writer lock makes concurrent workers converge on the
+        # same candidate ID and release transition; a retry cannot create a second
+        # confirmation candidate for the same broker/symbol setup.
+        with self.db.cursor() as cur:
+            cur.execute("BEGIN IMMEDIATE")
+            row = cur.execute("SELECT value FROM kv WHERE key=?", (key,)).fetchone()
+            if row:
+                try:
+                    parsed = json.loads(row["value"])
+                    existing = parsed if isinstance(parsed, dict) else None
+                except (TypeError, json.JSONDecodeError):
+                    existing = None
+
+            same_candidate = bool(
+                existing and existing.get("signature") == signature
+                and isinstance(existing.get("candidate_id"), str)
+                and isinstance(existing.get("expires_at"), int)
+                and existing.get("state") in (WAIT, CONFIRMED, INVALIDATED)
+            )
+            if (same_candidate and existing["state"] == INVALIDATED
+                    and int(existing["expires_at"]) > int(now)):
+                return self._result(existing)
+            if (same_candidate and existing["state"] in (WAIT, CONFIRMED)
+                    and int(existing["expires_at"]) <= int(now)):
+                existing.update(state=EXPIRED, updated_at=int(now), reason="confirmation expired")
+                cur.execute("UPDATE kv SET value=?,updated_at=? WHERE key=?",
+                            (json.dumps(existing, sort_keys=True, allow_nan=False), time.time(), key))
+                return self._result(existing)
+            reusable = bool(same_candidate and existing.get("state") in (WAIT, CONFIRMED)
+                            and int(existing["expires_at"]) > int(now))
+            if reusable:
+                state = existing
+            else:
+                if not broker_healthy or not data_fresh:
+                    return ConfirmationResult(BLOCKED, None, None,
+                                              "fresh broker data is required to start confirmation")
+                if candidate_bar is None:
+                    return ConfirmationResult(BLOCKED, None, None,
+                                              "a fresh, closed M1 candle is required")
+                seed = f"{self.db.workspace_id}:{broker_id}:{symbol}:{signature}:{candidate_bar_t}"
+                candidate_id = "C-" + hashlib.sha256(seed.encode()).hexdigest()[:20]
+                state = {
+                    "schema_version": 1, "candidate_id": candidate_id,
+                    "broker_id": broker_id, "symbol": symbol, "signature": signature,
+                    "direction": direction.value, "strategy": strategy,
+                    "zone_ids": sorted(set(zone_ids)), "state": WAIT,
+                    "started_at": int(now), "source_bar_t": candidate_bar_t,
+                    "reference_price": float(reference_price),
+                    "expires_at": int(now) + self.expiry_seconds,
+                    "updated_at": int(now), "confirmation_bar_t": None,
+                    "confirmation_close": None, "confirmation_points": 0.0,
+                    "chase_points": None, "reason": "waiting for 100 MT5 points, closed M1 and aligned M5 trend",
+                }
+            if int(state["expires_at"]) <= int(now):
+                state.update(state=EXPIRED, updated_at=int(now), reason="confirmation expired")
+            elif state["state"] == WAIT:
+                reason = "waiting for 100 MT5 points, closed M1 and aligned M5 trend"
+                bar = candidate_bar
+                if not broker_healthy or not data_fresh:
+                    reason = "fresh broker data is unavailable; confirmation remains blocked"
+                elif bar is None:
+                    reason = "a fresh, closed M1 candle is required"
+                elif m5_direction != direction:
+                    reason = "M5 trend is not aligned with the candidate"
+                else:
+                    sign = 1.0 if direction == Direction.up else -1.0
+                    movement = (float(bar["c"]) - float(state["reference_price"])) * sign / point
+                    chase = abs(execution_price - float(bar["c"])) / point
+                    state.update(confirmation_bar_t=int(bar["t"]),
+                                 confirmation_close=float(bar["c"]),
+                                 confirmation_points=round(movement, 2),
+                                 chase_points=round(chase, 2))
+                    # Binary floats can represent an exact broker-point move as
+                    # 99.999999999...; allow only tiny numerical tolerance.
+                    if (movement >= self.confirmation_points
+                            or math.isclose(movement, self.confirmation_points, abs_tol=1e-7)):
+                        movement_confirmed = True
+                    else:
+                        movement_confirmed = False
+                    chase_within_limit = (
+                        chase <= self.max_chase_points
+                        or math.isclose(chase, self.max_chase_points, abs_tol=1e-7)
+                    )
+                    if movement_confirmed and chase_within_limit:
+                        state.update(state=CONFIRMED, updated_at=int(now),
+                                     reason="100-point closed M1 confirmation and M5 trend aligned")
+                    elif movement_confirmed:
+                        reason = (f"confirmation reached but entry is {chase:.1f} points from the close; "
+                                  f"maximum chase is {self.max_chase_points:.0f}")
+                    else:
+                        reason = f"M1 confirmation is {movement:.1f}/{self.confirmation_points:.0f} points"
+                if state["state"] == WAIT:
+                    state.update(updated_at=int(now), reason=reason)
+
+            cur.execute(
+                "INSERT INTO kv(key,value,updated_at) VALUES(?,?,?) "
+                "ON CONFLICT(key) DO UPDATE SET value=excluded.value,updated_at=excluded.updated_at",
+                (key, json.dumps(state, sort_keys=True, allow_nan=False), time.time()),
+            )
+
+        return self._result(state)
+
+    @staticmethod
+    def _result(state: dict[str, Any]) -> ConfirmationResult:
+        return ConfirmationResult(
+            state=state["state"], candidate_id=state["candidate_id"],
+            expires_at=int(state["expires_at"]), reason=state["reason"],
+            reference_price=float(state["reference_price"]),
+            confirmation_bar_t=state.get("confirmation_bar_t"),
+            confirmation_close=state.get("confirmation_close"),
+            confirmation_points=float(state.get("confirmation_points") or 0.0),
+            chase_points=state.get("chase_points"),
+        )
+
+    def invalidate(self, *, broker_id: str, symbol: str, candidate_id: str,
+                   reason: str = "signal rejected by user") -> bool:
+        key = f"signal-confirmation-v4:{self.db.workspace_id}:{broker_id}:{symbol}"
+        with self.db.cursor() as cur:
+            cur.execute("BEGIN IMMEDIATE")
+            row = cur.execute("SELECT value FROM kv WHERE key=?", (key,)).fetchone()
+            if not row:
+                return False
+            try:
+                state = json.loads(row["value"])
+            except (TypeError, json.JSONDecodeError):
+                return False
+            if (not isinstance(state, dict) or state.get("candidate_id") != candidate_id
+                    or state.get("state") != CONFIRMED):
+                return False
+            state.update(state=INVALIDATED, reason=reason[:200], updated_at=int(time.time()))
+            cur.execute("UPDATE kv SET value=?,updated_at=? WHERE key=?",
+                        (json.dumps(state, sort_keys=True, allow_nan=False), time.time(), key))
+        self.db.audit("signal-confirmation", "signal.confirmation.invalidated",
+                      {"broker_id": broker_id, "symbol": symbol,
+                       "candidate_id": candidate_id, "reason": reason[:200]})
+        return True
+
+    def _latest_closed_bar(self, bars: list[dict[str, Any]], now: int) -> dict[str, float | int] | None:
+        if not isinstance(bars, list):
+            return None
+        for row in reversed(bars):
+            try:
+                opened = int(row["t"])
+                close = float(row["c"])
+            except (KeyError, TypeError, ValueError):
+                continue
+            age = now - (opened + 60)
+            if (opened > 0 and math.isfinite(close) and close > 0
+                    and 0 <= age <= self.max_closed_m1_age_seconds):
+                return {"t": opened, "c": close}
+        return None

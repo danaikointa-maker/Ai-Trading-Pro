@@ -80,16 +80,30 @@ def test_event_link_uses_unique_broker_ticket_not_unrelated_signal(tmp_path):
 
 
 def test_management_revision_records_request_before_broker_io(tmp_path):
+    import time
+    from packages.shared_schemas.models import Direction, Position, SymbolSpec, Tick
+
     db = Database(tmp_path / "modifications.db")
     adapter = Mock()
     adapter.id = "demo"
     adapter.account_info.return_value = SimpleNamespace(
-        broker_id="demo", login="123", server="Demo", currency="USD")
+        broker_id="demo", login="123", server="Demo", currency="USD", account_type="demo")
     adapter.health.return_value = Health.connected
+    adapter.adapter_type = "mt5"
+    before = Position(ticket="T-2", broker_id="demo", symbol="XAUUSD", direction=Direction.up,
+                      volume=0.1, entry=2000, sl=1990, tp=2020, open_time=1,
+                      current_price=2000, points=0)
+    after = before.model_copy(update={"sl": 1995})
+    adapter.positions.side_effect = [[before], [after]]
+    adapter.symbol_spec.return_value = SymbolSpec(
+        symbol="XAUUSD", source="broker", spec_complete=True, stops_level_points=0,
+        freeze_level_points=0)
+    adapter.ticker.return_value = Tick(t=time.time(), bid=2000, ask=2000.1,
+                                       spread_points=10, last=2000)
     gateway = ExecutionGateway(SimpleNamespace(execution={}), db)
 
     def modify(*_args, **_kwargs):
-        assert db.query_one("SELECT kind,status FROM position_events")["status"] == "requested"
+        assert db.query_one("SELECT kind,status FROM position_events ORDER BY rowid DESC LIMIT 1")["status"] == "sending"
         return True
 
     adapter.modify_position.side_effect = modify
@@ -97,7 +111,8 @@ def test_management_revision_records_request_before_broker_io(tmp_path):
         assert gateway.modify(adapter, "T-2", sl=1995, reason="trailing") is True
         rows = PositionEventLog(db).for_ticket(
             broker_id="demo", ticket="T-2", account_identity=gateway._assert_account(adapter))
-        assert [e["status"] for e in rows] == ["requested", "accepted_unverified"]
+        assert [e["status"] for e in rows] == [
+            "reserved", "sending", "accepted_unverified", "confirmed"]
     finally:
         db.close()
 

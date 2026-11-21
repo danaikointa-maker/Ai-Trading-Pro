@@ -22,8 +22,8 @@ from typing import Any
 
 from integrations.brokers.base import BrokerAdapter, BrokerError
 from integrations.brokers.registry import BrokerRegistry
-from services.bridge.relay import BridgeRelay
 from packages.persistence.db import Database
+from packages.persistence.position_candles import PositionCandleLog
 from packages.shared_schemas.models import (
     AnalysisSnapshot,
     Direction,
@@ -43,31 +43,46 @@ from packages.shared_schemas.models import (
     TradeRecord,
 )
 from packages.shared_schemas.settings import Settings, get_settings
-from services.api_gateway.cluster import (LIVE_KEY, build_shared_state, decide_role,
-                                          replica_payload)
 from services.ai_forecast.predictor import ForecastPredictor
 from services.ai_forecast.registry import ModelRegistry
 from services.ai_forecast.trainer import ForecastTrainer
+from services.api_gateway.cluster import (
+    LIVE_KEY,
+    build_shared_state,
+    decide_role,
+    replica_payload,
+)
+from services.bridge.relay import BridgeRelay
 from services.execution_gateway.gateway import ExecutionGateway
 from services.market_data.news import NewsService
-from services.market_data.service import MarketDataService
 from services.market_data.replay import build_feed
+from services.market_data.service import MarketDataService
 from services.notification.notifier import Notifier
 from services.risk_engine.engine import RiskEngine, default_risk_state
 from services.risk_engine.manager import PositionAction, PositionManager
-from services.risk_engine.planner import PlanInputs, TradePlanner
-from services.strategy_engine.analysis import AnalysisContext, AnalysisService, decision_candles
-from packages.persistence.position_candles import PositionCandleLog
+from services.risk_engine.planner import TradePlanner, build_plan_inputs
+from services.strategy_engine.analysis import (
+    AnalysisContext,
+    AnalysisService,
+    decision_candles,
+)
 from services.strategy_engine.attribution import BlockerTally, RollingAttribution, merge
+from services.strategy_engine.confirmation import (
+    CONFIRMED as CONFIRMATION_CONFIRMED,
+)
+from services.strategy_engine.confirmation import (
+    SignalConfirmationGate,
+)
+from services.strategy_engine.engine import StrategyEngine
+from services.strategy_engine.momentum_veto import preview_stochastic_veto
+from services.strategy_engine.proposals import entry_proposals
+from services.strategy_engine.readiness import assess_readiness
 
 # One hour of live decisions is the default view: long enough that a four-second
 # decision loop fills it with hundreds of samples, short enough that a condition
 # which started this morning cannot hide inside it.
 DEFAULT_ATTRIBUTION_WINDOW = 3600.0
-from services.strategy_engine.engine import StrategyEngine
-from services.strategy_engine.readiness import assess_readiness
-from services.strategy_engine.proposals import entry_proposals
-from services.strategy_engine.momentum_veto import preview_stochastic_veto
+
 
 def _truthy(value: Any) -> bool:
     return str(value or "").strip().lower() in ("1", "true", "yes", "on")
@@ -237,6 +252,16 @@ class TradingRuntime:
         self.analysis = AnalysisService(self.settings, self.market, self.news)
         self.planner = TradePlanner(self.settings.risk_cfg(), self.settings.strategy_cfg())
         self.strategy = StrategyEngine(self.settings, self.risk, self.predictor, self.planner)
+        confirmation_cfg = self.settings.strategy_cfg().get("signal_confirmation_v4", {})
+        self.confirmation_gate = (
+            SignalConfirmationGate(
+                self.db,
+                confirmation_points=float(confirmation_cfg.get("confirmation_points", 100)),
+                max_chase_points=float(confirmation_cfg.get("max_chase_points", 30)),
+                expiry_seconds=int(confirmation_cfg.get("expiry_seconds", 300)),
+                max_closed_m1_age_seconds=int(confirmation_cfg.get("max_closed_m1_age_seconds", 75)),
+            ) if confirmation_cfg.get("enabled") is True else None
+        )
         self.manager = PositionManager(self.settings)
         self.gateway = ExecutionGateway(self.settings, self.db)
         self.notifier = Notifier(self.db, min_score=float(self.settings.strategy_cfg()
@@ -644,6 +669,39 @@ class TradingRuntime:
         tick = self.market.ticker(symbol)
         signal = self.strategy.generate(
             ctx, symbol, self.adapter.id, self.mode, tick, health, forecast, equity, now=now)
+        if self.confirmation_gate and signal.action in (SignalAction.buy, SignalAction.sell):
+            m5 = next((item.direction for item in ctx.snapshot.trend
+                       if item.timeframe.upper() == "M5"), Direction.sideways)
+            bars = ctx.frames.get("M1")
+            m1_bars = (bars[["t", "c"]].to_dict("records")
+                       if bars is not None and {"t", "c"}.issubset(bars.columns) else [])
+            result = self.confirmation_gate.advance(
+                broker_id=signal.broker_id, symbol=symbol,
+                direction=Direction.up if signal.action == SignalAction.buy else Direction.down,
+                strategy=signal.strategy, zone_ids=signal.zones_used,
+                now=now, point=float(spec.point),
+                reference_price=float(tick.ask if signal.action == SignalAction.buy else tick.bid),
+                execution_price=float(tick.ask if signal.action == SignalAction.buy else tick.bid),
+                m1_bars=m1_bars, m5_direction=m5,
+                data_fresh=ctx.snapshot.data_quality.get("ok") is True,
+                broker_healthy=health == Health.connected,
+            )
+            signal.explanation["signal_confirmation_v4"] = result.__dict__
+            signal.id = result.candidate_id or signal.id
+            if result.expires_at:
+                signal.expires_at = result.expires_at
+            if result.state != CONFIRMATION_CONFIRMED:
+                signal.blockers = list(dict.fromkeys(signal.blockers + [result.reason]))
+                signal.blocker_codes = list(dict.fromkeys(signal.blocker_codes + [
+                    "confirmation_100pt_" + result.state.lower()
+                ]))
+                signal.action = SignalAction.wait
+                signal.status = SignalStatus.weak if signal.score >= 50 else SignalStatus.no_trade
+            else:
+                # Keep the first released plan stable across four-second scans.
+                previous = self.plans.get(signal.id)
+                if previous and previous.action in (SignalAction.buy, SignalAction.sell):
+                    signal.plan = previous.plan
         atr_pct = (ctx.snapshot.indicators.atr14 / ctx.snapshot.price * 100) if ctx.snapshot.price else 0.0
         gate = self.strategy.evaluate_gate(
             signal, spec, tick, risk_state, ctx.snapshot.data_quality, ctx.snapshot.news_lockout,
@@ -962,7 +1020,8 @@ class TradingRuntime:
         # Archive only recently observed, already-closed M5 bars for positions
         # with an available *matching* analysed context, including non-active
         # symbols. Never fetch a current chart to fill a missing past interval.
-        feed = getattr(getattr(self, "market", None), "feed_mode", None)
+        market = getattr(self, "market", None)
+        feed = getattr(market, "effective_mode", getattr(market, "feed_mode", None))
         if not isinstance(feed, str) or not feed.strip():
             feed = getattr(adapter, "adapter_type", "unknown")
         if not isinstance(feed, str) or not feed.strip():
@@ -1047,18 +1106,15 @@ class TradingRuntime:
         equity = self.adapter.account_info().equity
         entry_price = tick.ask if direction == Direction.up else tick.bid
         settings = self.risk.settings_view()
-        result = self.planner.build(PlanInputs(
+        result = self.planner.build(build_plan_inputs(
+            risk_cfg=self.settings.risk_cfg(), effective=settings,
             direction=direction, entry=entry_price, spec=spec,
-            atr_points=max(1.0, ctx.snapshot.indicators.atr_points), equity=equity,
-            risk_pct=self.risk.limits().risk_per_trade_pct, spread_points=float(tick.spread_points),
+            atr_points=max(1.0, ctx.snapshot.indicators.atr_points),
+            equity=equity, spread_points=float(tick.spread_points),
             supports=ctx.snapshot.supports, resistances=ctx.snapshot.resistances,
-            swings=[{"kind": s.kind, "price": s.price} for s in ctx.snapshot.swings if s.confirmed],
-            target_mode=settings.targets_mode, min_points=settings.min_points, max_points=settings.max_points,
-            fixed_points=settings.fixed_points,
-            sl_min_points=float(self.settings.risk_cfg().get("stops", {}).get("sl_min_points", 150)),
-            sl_max_points=float(self.settings.risk_cfg().get("stops", {}).get("sl_max_points", 1200)),
-            min_rr_net=self.risk.limits().min_reward_risk,
-            closes_pct=list(self.settings.risk_cfg().get("targets", {}).get("ladder", {}).get("closes_pct", [40, 30, 30])),
+            swings=[{"kind": s.kind, "price": s.price, "idx": s.idx}
+                    for s in ctx.snapshot.swings if s.confirmed],
+            m5_bar_count=len(ctx.frames["M5"]),
         ))
         if result.plan is None:
             return None, "; ".join(result.blockers)
@@ -1245,6 +1301,11 @@ class TradingRuntime:
         signal = self.plans.get(signal_id)
         if signal is None:
             return {"ok": False, "error": "signal not found"}
+        if self.confirmation_gate:
+            self.confirmation_gate.invalidate(
+                broker_id=signal.broker_id, symbol=signal.symbol,
+                candidate_id=signal_id, reason=reason,
+            )
         signal.rejected_reason = reason
         signal.action = SignalAction.wait
         self.db.audit("user", "signal.reject", {"signal_id": signal_id, "reason": reason})
@@ -1607,7 +1668,7 @@ class TradingRuntime:
             "reconcile": self.last_reconcile,
             "unresolved_orders": self.gateway.unresolved_orders(self.adapter.id),
             "errors": errors,
-            "feed": getattr(self, "feed_mode", None)
+            "feed": getattr(self.market, "effective_mode", getattr(self, "feed_mode", None))
             or ("simulated" if self.adapter.adapter_type == "simulated_mt5" else "mt5"),
             "alerts": self.notifier.recent(8),
         }
@@ -1628,6 +1689,8 @@ class TradingRuntime:
             "training": self.training.get("state", "idle"),
             "notify": self.notifier.status()["state"],
         }
+        if self.market.publisher.get("enabled"):
+            services["feed"] = "ok" if self.market._publisher_fresh() else "stale"
         lease_state = self.lease.get("state", "unclaimed")
         role = self.role()
         if self.replica:
@@ -1642,7 +1705,7 @@ class TradingRuntime:
             "server_time": time.time(),
             "virtual_time": self.market.now(),
             "uptime_seconds": round(time.time() - self.started_at, 1),
-            "feed_mode": getattr(self, "feed_mode", None)
+            "feed_mode": getattr(self.market, "effective_mode", getattr(self, "feed_mode", None))
             or self.settings.market_data.get("feed_mode", "simulate"),
             "feed_note": getattr(self, "feed_note", None),
             "feed": self._feed_status(),
@@ -1736,6 +1799,12 @@ class TradingRuntime:
         }
 
     def _feed_status(self) -> dict[str, Any]:
+        if self.market.publisher.get("enabled"):
+            age = (time.time() - self.market._publisher_received_at
+                   if self.market._publisher_received_at else None)
+            return {"mode": self.market.effective_mode, "fresh": self.market._publisher_fresh(),
+                    "age_seconds": round(age, 2) if age is not None else None,
+                    "account_id": self.market.publisher.get("account_id")}
         describe = getattr(self.feed, "describe", None)
         if callable(describe):
             try:

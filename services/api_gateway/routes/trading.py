@@ -3,7 +3,7 @@ from __future__ import annotations
 import json
 
 from fastapi import APIRouter, Depends, HTTPException, Query
-from pydantic import BaseModel
+from pydantic import BaseModel, ConfigDict
 
 from packages.shared_schemas.models import Direction, EquityPoint, TradeMode, TradeRecord
 from packages.persistence.position_events import PositionEventLog
@@ -16,6 +16,8 @@ router = APIRouter(prefix="/api/trading", tags=["trading"])
 
 
 class ManualOrder(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
     symbol: str = "XAUUSD"
     direction: Direction
 

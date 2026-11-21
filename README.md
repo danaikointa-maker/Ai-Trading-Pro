@@ -264,6 +264,12 @@ quote, masks the login by omitting it from output, and closes only its Python IP
 connection. Quote time is the last available tick, not proof the market is open.
 Read-only applies to this diagnostic code, not other terminal EAs or clients.
 
+In the Brokers page, link the already-authenticated Demo terminal with the read-only
+check. Once it is `ready_read_only`, Dashboard/Trades Positions can select that account
+and request a fresh on-demand positions snapshot with broker SL/TP. The snapshot is
+separate from simulator/runtime positions and cannot be used by the read-only UI to
+close or modify trades. See [`docs/API.md`](docs/API.md) and [`docs/RUNBOOK.md`](docs/RUNBOOK.md).
+
 Neither vm100 nor vm200 is required for this local path. Remote terminal ownership
 and bridge authentication must be agreed separately before using a VM. This does
 not activate the MT5 adapter in the dashboard or authorize trading.
