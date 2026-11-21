@@ -62,9 +62,10 @@ def test_rates_reads_only_requested_frames_and_normalizes_mt5_fields():
     assert set(TIMEFRAMES) >= {"M1", "M5"}
 
 
-def test_readonly_publisher_loop_emits_demo_market_snapshot_only(monkeypatch):
+@pytest.mark.parametrize(("tick_age_seconds", "expect_publish"), [(0, True), (60, False)])
+def test_readonly_publisher_only_emits_fresh_utc_demo_quotes(
+        monkeypatch, tick_age_seconds, expect_publish):
     now = time.time()
-    server_offset = 7200
     calls = []
     mt5 = ModuleType("MetaTrader5")
     mt5.ACCOUNT_TRADE_MODE_DEMO = 0
@@ -81,10 +82,10 @@ def test_readonly_publisher_loop_emits_demo_market_snapshot_only(monkeypatch):
         trade_contract_size=100, volume_min=0.01, volume_max=50, volume_step=0.01,
         trade_stops_level=0, trade_freeze_level=0, currency_profit="USD")
     mt5.symbol_info_tick = lambda _symbol: SimpleNamespace(
-        bid=2300.0, ask=2300.2, last=2300.1, time=int(now + server_offset),
-        time_msc=int((now + server_offset) * 1000))
+        bid=2300.0, ask=2300.2, last=2300.1, time=int(now - tick_age_seconds),
+        time_msc=int((now - tick_age_seconds) * 1000))
     mt5.copy_rates_from_pos = lambda symbol, timeframe, start, count: [{
-        "time": int(now + server_offset) - 60, "open": 2299.0, "high": 2301.0, "low": 2298.0,
+        "time": int(now) - 60, "open": 2299.0, "high": 2301.0, "low": 2298.0,
         "close": 2300.0, "tick_volume": 12,
     }]
     mt5.shutdown = lambda: calls.append("shutdown")
@@ -125,16 +126,20 @@ def test_readonly_publisher_loop_emits_demo_market_snapshot_only(monkeypatch):
     with pytest.raises(KeyboardInterrupt):
         publisher.run()
 
+    if not expect_publish:
+        assert calls == ["shutdown"]
+        return
+
     endpoint, body, headers = calls[0]
     assert endpoint.endswith("/api/market/publish/mt5")
     assert headers == {"Authorization": "Bearer separate-data-token"}
     assert body["identity"] == {"login": "123456", "server": "Connext-Demo",
                                 "trade_mode": "demo", "connected": True}
-    assert body["time_basis"] == "broker_server"
-    assert body["server_time"] == body["quotes"]["XAUUSD"]["t"]
-    assert round(body["server_time"] - body["utc_time"]) == server_offset
+    assert body["time_basis"] == "utc"
+    assert body["server_time"] == body["utc_time"]
+    assert abs(body["utc_time"] - body["quotes"]["XAUUSD"]["t"]) <= 10
     assert body["captured_at"] == body["utc_time"]
-    assert body["rates"]["XAUUSD"]["M1"][0]["t"] == int(now + server_offset) - 60
+    assert body["rates"]["XAUUSD"]["M1"][0]["t"] == int(now) - 60
     assert body["quotes"]["XAUUSD"]["bid"] == 2300.0
     assert body["rates"]["XAUUSD"]["M1"][0]["c"] == 2300.0
     assert body["specs"]["XAUUSD"]["symbol"] == "XAUUSD"

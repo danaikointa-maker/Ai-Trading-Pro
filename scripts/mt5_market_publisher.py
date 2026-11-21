@@ -86,6 +86,9 @@ def run() -> int:
     bars = min(max(int(os.environ.get("NO7_MT5_MARKET_BARS", "600")), 20), 2000)
     poll_seconds = max(0.25, float(os.environ.get("NO7_MT5_MARKET_POLL_SECONDS", "0.5")))
     rates_seconds = max(poll_seconds, float(os.environ.get("NO7_MT5_MARKET_RATES_SECONDS", "5")))
+    max_tick_age = float(os.environ.get("NO7_MT5_MARKET_MAX_TICK_AGE_SECONDS", "10"))
+    if not 1 <= max_tick_age <= 15:
+        raise RuntimeError("NO7_MT5_MARKET_MAX_TICK_AGE_SECONDS must be between 1 and 15")
     terminal_path = os.environ.get("NO7_MT5_TERMINAL_PATH", "").strip()
     initialized = mt5.initialize(path=terminal_path) if terminal_path else mt5.initialize()
     if not initialized:
@@ -117,6 +120,12 @@ def run() -> int:
                     tick_time_msc = float(getattr(tick, "time_msc", 0) or 0)
                     tick_time = (tick_time_msc / 1000.0 if tick_time_msc > 0
                                  else float(tick.time))
+                    tick_age = now - tick_time
+                    # MetaTrader's Python integration returns tick/bar timestamps in UTC.
+                    # Do not infer a timezone offset from a tick: that would turn a stale
+                    # tick into an apparently current quote when the market is quiet/closed.
+                    if not 0 <= tick_age <= max_tick_age:
+                        continue
                     quotes[canonical] = {"bid": float(tick.bid), "ask": float(tick.ask),
                                          "last": float(tick.last or 0), "t": tick_time}
                     cached_specs[canonical] = {
@@ -141,18 +150,11 @@ def run() -> int:
                     last_rates = now
                 if quotes:
                     utc_now = time.time()
-                    # MT5 tick.time and CopyRates timestamps are broker-server
-                    # epoch values. Labeling them UTC makes the API compare them
-                    # to a UTC anchor and reject a legitimate UTC+/- timezone
-                    # quote as invalid. Keep the original MT5 timestamps and send
-                    # their server-clock anchor so the market service can convert
-                    # quotes and rates to UTC using the measured offset.
-                    server_now = max(float(row["t"]) for row in quotes.values())
                     payload = {
                         "identity": {"login": str(account.login), "server": account.server,
                                      "trade_mode": "demo", "connected": True},
-                        "captured_at": utc_now, "time_basis": "broker_server",
-                        "server_time": server_now, "utc_time": utc_now,
+                        "captured_at": utc_now, "time_basis": "utc",
+                        "server_time": utc_now, "utc_time": utc_now,
                         "quotes": quotes,
                         "rates": cached_rates if refresh_rates else {},
                         "specs": cached_specs if refresh_rates else {},
@@ -167,6 +169,10 @@ def run() -> int:
                               f"{rates_seconds:g}s at {datetime.now(timezone.utc).isoformat()}",
                               flush=True)
                         next_status = now + 30
+                elif now >= next_status:
+                    print("No fresh MT5 quote; publisher is withholding the snapshot",
+                          flush=True)
+                    next_status = now + 30
                 time.sleep(poll_seconds)
     finally:
         mt5.shutdown()
