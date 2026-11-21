@@ -9,32 +9,35 @@
     </div>
 
     <nav class="flex flex-1 flex-col gap-1">
-      <RouterLink v-for="item in nav" :key="item.to" :to="item.to" class="nav-link" active-class="active">
+      <RouterLink v-for="item in nav" :key="item.to" :to="item.to" class="nav-link" active-class="active"
+        :class="{ 'pointer-events-none opacity-40': !canOpen(item) }"
+        :aria-disabled="!canOpen(item)" :tabindex="canOpen(item) ? 0 : -1"
+        :title="navTitle(item)" @click="guardNav($event, item)">
         <component :is="'span'" v-html="item.icon" class="grid h-4 w-4 place-items-center opacity-80" />
         <span class="flex-1">{{ item.label }}</span>
         <span v-if="item.badge" class="chip px-1.5 py-0 text-[9.5px]">{{ item.badge }}</span>
+        <span v-if="!canOpen(item)" class="text-[10px]" aria-hidden="true">🔒</span>
       </RouterLink>
     </nav>
 
-    <div v-if="isPlatformSuperAdmin" class="mt-4 rounded-lg border border-ink-700/70 bg-ink-850/80 p-3">
-      <div class="label mb-1.5">Platform control plane</div>
-      <div class="text-[10.5px] leading-relaxed text-slate-300">Tenant administration only · no broker or trading access</div>
-    </div>
-    <div v-else class="mt-4 rounded-lg border border-ink-700/70 bg-ink-850/80 p-3">
+    <div class="mt-4 rounded-lg border border-ink-700/70 bg-ink-850/80 p-3">
       <div class="label mb-1.5">Connection</div>
       <div class="flex items-center gap-2 text-[11.5px]">
-        <span class="h-1.5 w-1.5 rounded-full" :class="state.connected ? 'bg-up' : 'bg-amber-400'" />
-        <span class="text-slate-300">{{ state.connected ? 'Live stream' : 'Reconnecting' }}</span>
+        <span class="h-1.5 w-1.5 rounded-full" :class="isPlatformSuperAdmin ? 'bg-slate-500' : state.connected ? 'bg-up' : 'bg-amber-400'" />
+        <span class="text-slate-300">{{ connectionLabel }}</span>
       </div>
       <div class="mt-2 flex items-center justify-between text-[10.5px] text-muted">
-        <span>transport</span><span class="num">{{ state.transport }}</span>
+        <span>{{ isPlatformSuperAdmin ? 'access' : 'transport' }}</span><span class="num">{{ isPlatformSuperAdmin ? 'admin' : state.transport }}</span>
       </div>
       <div class="mt-1 flex items-center justify-between text-[10.5px] text-muted">
-        <span>feed</span><span class="num">{{ state.live?.feed || '—' }}</span>
+        <span>{{ isPlatformSuperAdmin ? 'workspace' : 'feed' }}</span><span class="num">{{ isPlatformSuperAdmin ? 'platform' : state.live?.feed || '—' }}</span>
       </div>
     </div>
-    <div v-if="!isPlatformSuperAdmin" class="mt-3 rounded-lg border border-amber-400/20 bg-amber-400/5 p-3 text-[10.5px] leading-relaxed text-amber-200/80">
+    <div class="mt-3 rounded-lg border border-amber-400/20 bg-amber-400/5 p-3 text-[10.5px] leading-relaxed text-amber-200/80">
+      <template v-if="isPlatformSuperAdmin">Platform admin · จัดการ tenant ได้ แต่ไม่มีสิทธิ์เข้าถึงโบรกเกอร์หรือคำสั่งเทรด</template>
+      <template v-else>
       Demo / paper account. ตรวจสอบสถานะทางกฎหมายของโบรกเกอร์ก่อนใช้เงินจริง
+      </template>
     </div>
   </aside>
 </template>
@@ -57,7 +60,23 @@ const navItems = [
   { to: '/system', label: 'System', icon: icon('<circle cx="12" cy="12" r="3"/><path d="M12 3v3m0 12v3M3 12h3m12 0h3M5.6 5.6l2.1 2.1m8.6 8.6l2.1 2.1m0-12.8l-2.1 2.1M7.7 16.3l-2.1 2.1"/>') },
 ]
 const isPlatformSuperAdmin = computed(() => state.user?.platform_role === 'super_admin')
-const nav = computed(() => isPlatformSuperAdmin.value
-  ? navItems.filter((item) => item.to === '/system')
-  : navItems)
+const nav = computed(() => navItems)
+const connectionLabel = computed(() => isPlatformSuperAdmin.value
+  ? 'Trading workspace restricted'
+  : state.user ? state.connected ? 'Live stream' : 'Reconnecting' : 'Checking access')
+function canOpen(item) {
+  if (!state.user) return false
+  if (isPlatformSuperAdmin.value) return item.to === '/system'
+  return true
+}
+function guardNav(event, item) {
+  if (!canOpen(item)) event.preventDefault()
+}
+function navTitle(item) {
+  if (canOpen(item)) return item.label
+  if (!state.user) return 'กำลังตรวจสอบสิทธิ์ผู้ใช้'
+  return isPlatformSuperAdmin.value
+    ? 'บัญชี Platform Admin ไม่มีสิทธิ์เข้าถึงส่วนเทรด'
+    : 'ต้องมีสิทธิ์ Admin เพื่อจัดการระบบ'
+}
 </script>

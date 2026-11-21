@@ -95,8 +95,13 @@ def test_mt5_market_publisher_rejects_wrong_demo_identity_and_stale_data(
                                  headers=headers)
     stale = client.post("/api/market/publish/mt5",
                         json=_payload(captured_at=time.time() - 60), headers=headers)
+    stale_quote_payload = _payload(time_basis="utc")
+    stale_quote_payload["quotes"]["XAUUSD"]["t"] = time.time() - 60
+    stale_quote = client.post("/api/market/publish/mt5", json=stale_quote_payload,
+                              headers=headers)
     assert wrong_identity.status_code == 422
     assert stale.status_code == 422
+    assert stale_quote.status_code == 422
 
 
 def test_mt5_market_publisher_has_no_positions_or_command_payload(client, runtime, monkeypatch):
