@@ -82,10 +82,16 @@ export function logout() {
   stopLive()
 }
 
-export async function bootstrap() {
-  if (!state.token) return
+export async function loadIdentity() {
+  if (!state.token && !getToken()) return null
   const me = await api.get('/api/auth/me', { silent: true }).catch(() => null)
   if (me) state.user = me.user
+  return state.user
+}
+
+export async function bootstrap() {
+  if (!state.token && !getToken()) return
+  await loadIdentity()
   // Platform administrators have no tenant trading access. Do not send requests
   // for broker/runtime data that the server is required to reject.
   if (state.user?.platform_role === 'super_admin') return
