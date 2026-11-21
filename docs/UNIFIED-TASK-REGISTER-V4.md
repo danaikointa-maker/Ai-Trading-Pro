@@ -5,8 +5,8 @@ Status definitions: EXISTS_CODE = seen in repository but not live certified; NEE
 
 | ID | Phase | Owner code path | Baseline status | Specific next task | Acceptance evidence |
 |---|---|---|---|---|---|
-| U00 | Audit | docs/, tests/, config/ | NEEDS_AUDIT | map each existing feature/config to source and recent tests, verify dev branch and host statuses | signed gap matrix, actual file links |
-| U01 | Market data | services/market_data/, brokers | EXISTS_CODE | validate real Connext tick freshness and metadata; distinguish simulation | broker demo capture, tick provenance tests |
+| U00 | Audit | docs/, tests/, config/ | DONE (source audit; live runtime unavailable) | See `docs/audits/U00-PROJECT-AUDIT-2026-11-21.th.md`; VM100 is reachable but the expected app path/service/listeners and backup proof were not found | commit `85c3936` (audit report and host-role correction); baseline `559a2de`; focused test/build receipt in audit report; host/runtime remains NOT TESTED |
+| U01 | Market data | services/market_data/, brokers | BLOCKED (no active VM100 app/feed evidence) | establish isolated VM100 staging runtime and verify fresh PC MT5 Demo publisher data; do not start signal/execution work against stale or simulated quotes | broker Demo capture, tick provenance/freshness tests, staging health receipt |
 | U02 | Signal confirmation | services/strategy_engine/ | PLANNED | single 100-point WAIT state + closed M1/M5, timeout, dedup | 99/100-point/expiry/replay tests |
 | U03 | Risk profile | services/risk_engine/ config/risk.yaml | EXISTS_CODE | add VERSIONED candidate separately; audit precedence with legacy | invariants, no activation, config diff |
 | U04 | Initial SL/TP | services/risk_engine/planner.py | EXISTS_CODE | broker-aware ATR/structure and costs with single planning source | lot min and net RR tests |
