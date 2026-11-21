@@ -101,6 +101,7 @@ watch(
 )
 
 function landingTarget() {
+  if (state.user?.platform_role === 'super_admin') return '/system'
   const raw = route.query.next
   const next = typeof raw === 'string' ? raw : ''
   return next.startsWith('/') && !next.startsWith('//') ? next : '/'
@@ -117,8 +118,11 @@ onMounted(async () => {
   syncOnline()
   if (!isAuthed.value) return
   booted = true
-  if (route.name === 'login') return // the watcher above is already navigating
   await bootstrap().catch(() => {})
+  if (state.user?.platform_role === 'super_admin') {
+    if (route.name !== 'system') router.replace('/system').catch(() => {})
+    return
+  }
   startLive()
 })
 onUnmounted(() => {

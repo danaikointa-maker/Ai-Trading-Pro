@@ -84,12 +84,15 @@ export function logout() {
 
 export async function bootstrap() {
   if (!state.token) return
-  const [me, config, brokers] = await Promise.all([
-    api.get('/api/auth/me', { silent: true }).catch(() => null),
+  const me = await api.get('/api/auth/me', { silent: true }).catch(() => null)
+  if (me) state.user = me.user
+  // Platform administrators have no tenant trading access. Do not send requests
+  // for broker/runtime data that the server is required to reject.
+  if (state.user?.platform_role === 'super_admin') return
+  const [config, brokers] = await Promise.all([
     api.get('/api/system/config', { silent: true }).catch(() => null),
     api.get('/api/brokers', { silent: true }).catch(() => null),
   ])
-  if (me) state.user = me.user
   if (config) {
     state.config = config
     if (config.symbols && !config.symbols.includes(state.symbol)) state.symbol = config.symbols[0]

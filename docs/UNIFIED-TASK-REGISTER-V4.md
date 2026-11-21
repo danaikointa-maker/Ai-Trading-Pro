@@ -229,7 +229,8 @@ Status and next block:
 ## U09 role-consistent navigation — 2026-11-21
 - Cause found: tenant `admin` and `trader` already load the same Dashboard and navigation. `platform_role=super_admin` was intentionally given a different sidebar showing only System, which made the application appear to have separate Admin and Trader UIs.
 - `apps/web-dashboard/src/components/SideNav.vue` now renders one shared navigation layout for every role. Platform Super Admin sees the trading destinations in the same positions but disabled, preserving the platform-admin restriction; tenant roles continue to share the same workspace and their action controls remain permission-gated. Server-side authorization is unchanged and authoritative.
-- Verification: `npm.cmd run build` passed. Role-by-role browser review and runtime rollout NOT TESTED. Rollback is reverting this focused SideNav change; no API, auth, account, or trading behavior changed.
+- Platform Super Admin now lands on `/system` after login/reload; `bootstrap()` reads identity first and skips tenant broker/runtime requests for that role, and the UI does not start the trading WebSocket. Tenant Admin/Trader still share the same Terminal route and live data surface; only permission-gated controls differ.
+- Verification: Vue production build passed after the landing/bootstrap change. Role-by-role browser review remains NOT TESTED. Rollback is reverting these focused UI/store changes; backend auth, account, and trading behavior did not change.
 
 ## U01 isolated staging freshness-guard rollout — 2026-11-21
 - With the prior explicit staging approval, the clean isolated checkout at `/home/danai/no7-ai-trading-pro-v4-staging` was fast-forwarded from `aebcce9` to `0f39221`; no active runtime checkout or port 8000 process was touched. The committed dashboard bundle was built locally and copied to staging because `npm`/Node is absent from the VM shell PATH; no software was installed on the VM.

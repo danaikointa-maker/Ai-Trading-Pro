@@ -69,7 +69,7 @@
 <script setup>
 import { onMounted, ref } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
-import { bootstrap, login, startLive } from '../lib/store'
+import { bootstrap, login, startLive, state } from '../lib/store'
 import { getToken } from '../lib/api'
 
 const router = useRouter()
@@ -94,6 +94,7 @@ function fillDemo() {
 }
 
 function landingTarget() {
+  if (state.user?.platform_role === 'super_admin') return '/system'
   const raw = route.query.next
   const next = typeof raw === 'string' ? raw : ''
   return next.startsWith('/') && !next.startsWith('//') ? next : '/'
@@ -108,8 +109,9 @@ async function submit() {
     // user staring at the form (with a valid token already stored) whenever the
     // bootstrap calls were slow.
     await router.replace(landingTarget()).catch(() => window.location.assign('/'))
-    bootstrap().catch(() => {})
-    startLive()
+    bootstrap().then(() => {
+      if (state.user?.platform_role !== 'super_admin') startLive()
+    }).catch(() => {})
   } catch (err) {
     error.value = err.message
   } finally {
