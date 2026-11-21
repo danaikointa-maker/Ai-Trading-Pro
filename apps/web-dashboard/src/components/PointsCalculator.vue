@@ -3,7 +3,7 @@
     <div class="panel-head">
       <div>
         <div class="panel-title">Points → Profit Calculator</div>
-        <div class="panel-sub">ใช้ spec จริงของสัญลักษณ์ (point / tick size / contract)</div>
+        <div class="panel-sub">อิงสเปก Runtime market · ยังไม่ผูกกับบัญชี MT5 ที่เลือก</div>
       </div>
       <span class="chip chip-gold">{{ spec?.symbol || state.symbol }}</span>
     </div>
