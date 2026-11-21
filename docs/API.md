@@ -150,7 +150,7 @@ CORS เป็น **allowlist**: ค่าเริ่มต้นไม่ใ�
 | GET | `/api/market/ticker?symbol=` | last/bid/ask/spread |
 | POST | `/api/market/publish/mt5` | dedicated `Bearer` market-publisher token; Demo quotes/rates/specs only, separate from EA bridge poll/command queue |
 | GET | `/api/market/specs?symbol=` | digits/point/tick/contract/lot step/stops level |
-| GET | `/api/market/calculator?symbol=&points=&lot=` | points → profit (ไม่รวม spread/commission/swap/slippage) |
+| GET | `/api/market/calculator?symbol=&points=&lot=` | gross/net-after-commission estimate; spread cost is separate and not deducted; excludes swap/slippage; uses current runtime market spec, not an account-specific terminal link |
 | GET | `/api/analysis/{symbol}` | snapshot เต็ม (trend, structure, zones, indicators, regime) |
 | GET | `/api/analysis/{symbol}/zones` | supports/resistances พร้อม evidence |
 

@@ -357,13 +357,17 @@ def test_zones_endpoint_separates_statuses(client, auth):
     assert len(body["supports"]) >= 3 and len(body["resistances"]) >= 3
 
 
-def test_points_calculator_uses_live_spec(client, auth):
+def test_points_calculator_uses_current_runtime_spec_and_discloses_scope(client, auth):
     res = client.get("/api/market/calculator?symbol=XAUUSD&points=500&lot=0.01", headers=auth)
     assert res.status_code == 200
     body = res.json()
     assert body["spec"]["point"] == 0.01
     assert body["result"]["price_move"] == 5.0
-    assert "excludes" in body["disclaimer"].lower() or "Excludes" in body["disclaimer"]
+    assert body["result"]["net_profit"] == round(
+        body["result"]["gross_profit"] - body["result"]["commission"], 2)
+    assert body["result"]["spread_cost"] > 0
+    assert "not an account-specific terminal link" in body["disclaimer"]
+    assert "spread_cost is reported separately and is not deducted" in body["disclaimer"]
 
 
 def test_risk_settings_round_trip(client, auth):
