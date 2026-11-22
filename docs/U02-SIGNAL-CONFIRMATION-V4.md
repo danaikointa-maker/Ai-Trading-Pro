@@ -58,7 +58,7 @@ The gate creates no order rows. No schema migration is needed. Existing
   legacy-signal rejection, and absence of order rows. `test_readiness.py`,
   `test_signal_execution.py`, and `test_smart_entry_continuation.py` were also
   run as regressions. Current focused result: 50 passed; F/E9 lint passed.
-- GitHub Actions CI run #129 for code commit `d202a5b` passed, including the
+- GitHub Actions CI run #131 for code/test commit `e8c5b11` passed, including the
   dashboard build, full CI test gate, real-Redis checks, and bundle-size gate.
 - A deterministic replay probe passes through `ReplayFeed` and the real
   `TradingRuntime._decide_symbol` path: the signal stays WAIT until closed M1
