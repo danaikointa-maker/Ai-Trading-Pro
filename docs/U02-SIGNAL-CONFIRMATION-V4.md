@@ -60,9 +60,11 @@ The gate creates no order rows. No schema migration is needed. Existing
   run as regressions. Current focused result: 50 passed; F/E9 lint passed.
 - GitHub Actions CI run #129 for code commit `d202a5b` passed, including the
   dashboard build, full CI test gate, real-Redis checks, and bundle-size gate.
-- A deterministic Paper replay probe passes through `ReplayFeed` → the
-  confirmation gate → final execution-boundary validation, and leaves the
-  orders table empty. The full runtime/dashboard Paper replay remains untested.
+- A deterministic replay probe passes through `ReplayFeed` and the real
+  `TradingRuntime._decide_symbol` path: the signal stays WAIT until closed M1
+  confirmation, then becomes BUY after the final gate check. The orders table
+  remains empty in Manual mode. Full runtime/dashboard Paper execution remains
+  untested.
 - Runtime integration uses the current signal cycle; no live broker snapshot or
   runtime opt-in test has been performed.
 - End-to-end Paper runtime replay and Demo acceptance: **NOT TESTED**.

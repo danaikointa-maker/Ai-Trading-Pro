@@ -19,6 +19,7 @@ from packages.shared_schemas.models import (
     SymbolSpec,
     Tick,
     TradePlan,
+    TradeMode,
 )
 from services.api_gateway.state import TradingRuntime
 from services.market_data.replay import ReplayFeed
@@ -56,7 +57,7 @@ def advance(gate, *, direction=Direction.up, now=NOW, close=2000.0,
     )
 
 
-def test_paper_replay_feed_confirms_candidate_without_creating_an_order(db):
+def test_paper_replay_feed_confirms_runtime_signal_without_creating_an_order(db, monkeypatch):
     start = NOW - (NOW % 60)
     rows = [{"t": start + i * 60, "o": 2000.0, "h": 2000.2,
              "l": 1999.8, "c": 2000.0, "v": 1.0}
@@ -69,40 +70,74 @@ def test_paper_replay_feed_confirms_candidate_without_creating_an_order(db):
         warmup_bars=60, speed_minutes_per_second=60, tick_seconds=1, seed=5,
     )
     gate = SignalConfirmationGate(db)
-    first_quote = feed.ticker("XAUUSD")
-    reference = first_quote.ask
-    initial = gate.advance(
-        broker_id="paper-replay", symbol="XAUUSD", direction=Direction.up,
-        strategy="breakout_continuation", zone_ids=["replay-zone"],
-        now=feed.end_time, point=POINT, reference_price=reference,
-        execution_price=first_quote.ask,
-        m1_bars=feed.warm_history("XAUUSD", 120).to_dict("records"),
-        m5_direction=Direction.up, data_fresh=True, broker_healthy=True,
+
+    def context():
+        bars = feed.warm_history("XAUUSD", 120)
+        snapshot = SimpleNamespace(
+            spec=SymbolSpec(symbol="XAUUSD", point=POINT, digits=2),
+            trend=[SimpleNamespace(timeframe="M5", direction=Direction.up)],
+            data_quality={"ok": True}, news_lockout={},
+            indicators=SimpleNamespace(atr14=1.0), price=feed.last_bar_price("XAUUSD"),
+            regime=None, model_dump=lambda **_kwargs: {"symbol": "XAUUSD"},
+        )
+        return SimpleNamespace(snapshot=snapshot, frames={"M1": bars, "M5": bars})
+
+    scan = {"count": 0}
+
+    def generate_signal(*_args, **_kwargs):
+        scan["count"] += 1
+        now = int(feed.end_time)
+        return Signal(
+            id=f"paper-scan-{scan['count']}", t=now, symbol="XAUUSD",
+            timeframe="M1", broker_id="paper-replay", action=SignalAction.buy,
+            status=SignalStatus.valid, score=90, strategy="breakout_continuation",
+            regime="trending", expires_at=now + 120, zones_used=["replay-zone"],
+            plan=TradePlan(direction=Direction.up, entry=2000.0, sl=1990.0,
+                           tp1=2010.0, tp2=2020.0, tp3=2030.0, sl_points=100),
+        )
+
+    monkeypatch.setattr(
+        "services.api_gateway.state.entry_proposals",
+        lambda signal, *_args, **_kwargs: {
+            "signal_id": signal.id, "proposals": [], "executable": False,
+        },
     )
-    assert initial.state == WAIT
+    runtime = SimpleNamespace(
+        analysis=SimpleNamespace(snapshot=lambda _symbol: context()),
+        predictor=SimpleNamespace(
+            forecast=lambda *_args: SimpleNamespace(regime=""), approved=True),
+        market=SimpleNamespace(ticker=lambda symbol: feed.ticker(symbol)),
+        strategy=SimpleNamespace(
+            generate=generate_signal,
+            evaluate_gate=lambda *_args: SimpleNamespace(
+                allow=True, blockers=[], warnings=[], checks=[]),
+        ),
+        adapter=SimpleNamespace(id="paper-replay"), mode=TradeMode.manual,
+        confirmation_gate=gate, planner=object(),
+        risk=SimpleNamespace(limits=lambda: None),
+        lock=RLock(), attribution={}, contexts={}, forecasts={}, signals={},
+        plans={}, proposals={}, gates={}, signal_log=[], plan_analyses={}, version=0,
+        _log_error=lambda *_args: None,
+        _persist_signal=lambda *_args: None,
+        _maybe_alert=lambda *_args: None,
+        _maybe_alert_readiness=lambda *_args: None,
+    )
+
+    TradingRuntime._decide_symbol(runtime, "XAUUSD", 10_000.0,
+                                  Health.connected, SimpleNamespace(), feed.end_time)
+    first = runtime.signals["XAUUSD"]
+    assert first.action == SignalAction.wait
+    assert first.explanation["signal_confirmation_v4"]["state"] == WAIT
 
     for _ in range(feed.ticks_per_bar):
         feed.tick()
         feed.advance_clock()
 
-    current_quote = feed.ticker("XAUUSD")
-    latest_bars = feed.warm_history("XAUUSD", 120).to_dict("records")
-    confirmed = gate.advance(
-        broker_id="paper-replay", symbol="XAUUSD", direction=Direction.up,
-        strategy="breakout_continuation", zone_ids=["replay-zone"],
-        now=feed.end_time, point=POINT, reference_price=reference,
-        execution_price=current_quote.ask, m1_bars=latest_bars,
-        m5_direction=Direction.up, data_fresh=True, broker_healthy=True,
-    )
-    assert confirmed.state == CONFIRMED
-    checked = gate.validate_execution(
-        broker_id="paper-replay", symbol="XAUUSD",
-        candidate_id=confirmed.candidate_id or "", direction=Direction.up,
-        now=feed.end_time, point=POINT, execution_price=current_quote.ask,
-        m1_bars=latest_bars, m5_direction=Direction.up,
-        data_fresh=True, broker_healthy=True,
-    )
-    assert checked.state == CONFIRMED
+    TradingRuntime._decide_symbol(runtime, "XAUUSD", 10_000.0,
+                                  Health.connected, SimpleNamespace(), feed.end_time)
+    confirmed = runtime.signals["XAUUSD"]
+    assert confirmed.action == SignalAction.buy
+    assert confirmed.explanation["signal_confirmation_v4"]["state"] == CONFIRMED
     assert db.query("SELECT * FROM orders") == []
 
 
