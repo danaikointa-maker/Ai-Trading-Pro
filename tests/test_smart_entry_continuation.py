@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import json
 import sqlite3
+import time
 from types import SimpleNamespace
 from unittest.mock import Mock
 
@@ -12,7 +13,8 @@ import pytest
 from packages.persistence.db import Database
 from packages.persistence.position_events import PositionEventLog
 from packages.shared_schemas.models import (AnalysisSnapshot, Health, RiskLimits, SignalReadiness,
-                                            Signal, TradePlan, TradeRecord, Zone)
+                                            Position, Signal, SymbolSpec, Tick, TradePlan,
+                                            TradeRecord, Zone)
 from services.execution_gateway.gateway import ExecutionGateway
 from services.api_gateway.state import TradingRuntime
 from services.risk_engine.engine import default_risk_state
@@ -83,13 +85,24 @@ def test_management_revision_records_request_before_broker_io(tmp_path):
     db = Database(tmp_path / "modifications.db")
     adapter = Mock()
     adapter.id = "demo"
+    adapter.adapter_type = "mt5"
     adapter.account_info.return_value = SimpleNamespace(
-        broker_id="demo", login="123", server="Demo", currency="USD")
+        broker_id="demo", login="123", server="Demo", currency="USD",
+        account_type="demo")
     adapter.health.return_value = Health.connected
+    before = Position(ticket="T-2", symbol="XAUUSD", direction="up", volume=0.1,
+                      entry=2000, sl=1990, tp=2020, open_time=1,
+                      current_price=2000, broker_id="demo")
+    after = before.model_copy(update={"sl": 1995})
+    adapter.positions.side_effect = [[before], [after]]
+    adapter.symbol_spec.return_value = SymbolSpec(
+        symbol="XAUUSD", source="broker", spec_complete=True)
+    adapter.ticker.return_value = Tick(
+        t=time.time(), bid=2000, ask=2000.1, spread_points=10, last=2000)
     gateway = ExecutionGateway(SimpleNamespace(execution={}), db)
 
     def modify(*_args, **_kwargs):
-        assert db.query_one("SELECT kind,status FROM position_events")["status"] == "requested"
+        assert db.query_one("SELECT kind,status FROM position_events")["status"] == "reserved"
         return True
 
     adapter.modify_position.side_effect = modify
@@ -97,7 +110,8 @@ def test_management_revision_records_request_before_broker_io(tmp_path):
         assert gateway.modify(adapter, "T-2", sl=1995, reason="trailing") is True
         rows = PositionEventLog(db).for_ticket(
             broker_id="demo", ticket="T-2", account_identity=gateway._assert_account(adapter))
-        assert [e["status"] for e in rows] == ["requested", "accepted_unverified"]
+        assert [e["status"] for e in rows] == [
+            "reserved", "sending", "accepted_unverified", "confirmed"]
     finally:
         db.close()
 
