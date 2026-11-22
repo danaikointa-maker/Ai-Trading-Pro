@@ -23,13 +23,31 @@ TIMEFRAMES = {
     "H4": "TIMEFRAME_H4", "D1": "TIMEFRAME_D1", "W1": "TIMEFRAME_W1",
     "MN1": "TIMEFRAME_MN1",
 }
+REQUIRED_SETTINGS = (
+    "NO7_MT5_MARKET_API_URL",
+    "NO7_MT5_MARKET_PUBLISHER_TOKEN",
+    "NO7_MT5_MARKET_EXPECTED_LOGIN",
+    "NO7_MT5_MARKET_EXPECTED_SERVER",
+    "NO7_MT5_MARKET_SYMBOL_MAP",
+)
 
 
-def _required(name: str) -> str:
-    value = os.environ.get(name, "").strip()
-    if not value:
-        raise RuntimeError(f"required environment setting is missing: {name}")
-    return value
+def _required_settings() -> dict[str, str]:
+    settings = {name: os.environ.get(name, "").strip() for name in REQUIRED_SETTINGS}
+    missing = [name for name, value in settings.items() if not value]
+    if missing:
+        raise RuntimeError("required environment settings are missing: " + ", ".join(missing))
+    return settings
+
+
+def _expected_login(value: str) -> int:
+    try:
+        login = int(value)
+    except (TypeError, ValueError):
+        raise RuntimeError("NO7_MT5_MARKET_EXPECTED_LOGIN must be an integer") from None
+    if login <= 0:
+        raise RuntimeError("NO7_MT5_MARKET_EXPECTED_LOGIN must be positive")
+    return login
 
 
 def _symbol_map(raw: str) -> dict[str, str]:
@@ -104,13 +122,12 @@ def _quote_freshness(info: Any, tick: Any, now: float,
 
 
 def run() -> int:
-    import MetaTrader5 as mt5  # optional Windows-only dependency
-
-    endpoint = _validate_endpoint(_required("NO7_MT5_MARKET_API_URL"))
-    token = _required("NO7_MT5_MARKET_PUBLISHER_TOKEN")
-    expected_login = int(_required("NO7_MT5_MARKET_EXPECTED_LOGIN"))
-    expected_server = _required("NO7_MT5_MARKET_EXPECTED_SERVER")
-    symbols = _symbol_map(_required("NO7_MT5_MARKET_SYMBOL_MAP"))
+    settings = _required_settings()
+    endpoint = _validate_endpoint(settings["NO7_MT5_MARKET_API_URL"])
+    token = settings["NO7_MT5_MARKET_PUBLISHER_TOKEN"]
+    expected_login = _expected_login(settings["NO7_MT5_MARKET_EXPECTED_LOGIN"])
+    expected_server = settings["NO7_MT5_MARKET_EXPECTED_SERVER"]
+    symbols = _symbol_map(settings["NO7_MT5_MARKET_SYMBOL_MAP"])
     frames = [name.strip().upper() for name in os.environ.get(
         "NO7_MT5_MARKET_TIMEFRAMES", "M1,M3,M5,M15,H1,H4").split(",") if name.strip()]
     if set(frames) - set(TIMEFRAMES):
@@ -122,6 +139,8 @@ def run() -> int:
     if not 1 <= max_tick_age <= 15:
         raise RuntimeError("NO7_MT5_MARKET_MAX_TICK_AGE_SECONDS must be between 1 and 15")
     terminal_path = os.environ.get("NO7_MT5_TERMINAL_PATH", "").strip()
+    import MetaTrader5 as mt5  # optional Windows-only dependency
+
     initialized = mt5.initialize(path=terminal_path) if terminal_path else mt5.initialize()
     if not initialized:
         raise RuntimeError(f"MT5 initialize failed: {mt5.last_error()}")

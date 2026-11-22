@@ -8,7 +8,8 @@ import pytest
 
 import scripts.mt5_market_publisher as publisher
 from scripts.mt5_market_publisher import (
-    TIMEFRAMES, _quote_freshness, _rates, _symbol_map, _validate_endpoint,
+    REQUIRED_SETTINGS, TIMEFRAMES, _expected_login, _quote_freshness, _rates,
+    _required_settings, _symbol_map, _validate_endpoint,
 )
 
 
@@ -22,6 +23,32 @@ def test_symbol_map_supports_canonical_broker_suffix_mapping():
 def test_symbol_map_rejects_empty_or_duplicate_entries(raw):
     with pytest.raises(RuntimeError):
         _symbol_map(raw)
+
+
+def test_publisher_reports_all_missing_required_settings_without_values(monkeypatch):
+    for name in REQUIRED_SETTINGS:
+        monkeypatch.delenv(name, raising=False)
+    error = "required environment settings are missing: " + ", ".join(REQUIRED_SETTINGS)
+    with pytest.raises(RuntimeError, match="required environment settings are missing") as exc:
+        _required_settings()
+    assert str(exc.value) == error
+    assert "token-value" not in str(exc.value)
+
+
+def test_required_settings_returns_values_without_logging_them(monkeypatch):
+    for name in REQUIRED_SETTINGS:
+        monkeypatch.setenv(name, "private-value")
+    assert _required_settings() == {name: "private-value" for name in REQUIRED_SETTINGS}
+
+
+@pytest.mark.parametrize(("value", "message"), [
+    ("not-a-login", "must be an integer"),
+    ("0", "must be positive"),
+    ("-7", "must be positive"),
+])
+def test_expected_login_requires_positive_numeric_identity(value, message):
+    with pytest.raises(RuntimeError, match=message):
+        _expected_login(value)
 
 
 @pytest.mark.parametrize("url", [
