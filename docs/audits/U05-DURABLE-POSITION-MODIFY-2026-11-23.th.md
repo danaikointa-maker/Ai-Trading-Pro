@@ -31,7 +31,8 @@ An existing account-switch regression test lacked the complete Demo snapshot now
 | Execution/account/position regression | PASS | Combined command covering `test_position_modify_intents.py`, `test_execution_recovery.py`, `test_atomic_execution_claim.py`, `test_account_ownership.py`, `test_runtime_position_ownership.py`, `test_position_snapshot_atomic.py`, and `test_smart_entry_continuation.py` — 234 passed |
 | CI lint scope | PASS | `ruff check --select F,E9 .` — all checks passed |
 | Whitespace validation | PASS | `git -c core.whitespace=cr-at-eol diff --check` |
-| First GitHub CI attempt | FAIL, corrected | 1,556 passed, 7 skipped; `test_management_revision_records_request_before_broker_io` used an incomplete mock. Its fixture now supplies Demo identity, broker position/spec/quote, and confirms the durable state sequence through readback. CI rerun is pending this correction. |
+| First GitHub CI attempt | FAIL, corrected | 1,556 passed, 7 skipped; `test_management_revision_records_request_before_broker_io` used an incomplete mock. Its fixture now supplies Demo identity, broker position/spec/quote, and confirms the durable state sequence through readback. |
+| GitHub CI after fixture correction | PASS | Commit `a119382`: 1,557 passed, 7 skipped; separate real-Redis verification: 20 passed. Ruff safety/syntax scope and dashboard build passed. |
 | Windows full-repository suite | ENVIRONMENT-LIMITED | 1,506 passed, 37 skipped; 3 UI failures because this isolated worktree has no built dashboard/`node_modules`, and 18 Redis setup errors because its detected local server rejects `HELLO`. The targeted U05 regression set passed; GitHub CI builds the dashboard and prepares Redis before running the full suite. |
 | Staging parity after candidate rollout | NOT TESTED | Candidate was not deployed or restarted on VM100 |
 | Backup/restore or rollback drill | NOT TESTED | No stage data was modified |
@@ -44,7 +45,7 @@ The schema addition does not drop or rewrite the existing staging ledger. A roll
 
 ## U05 status and remaining gates
 
-U05 remains **PARTIAL / BLOCKED**. Local implementation and the U05-focused automated regressions are complete. The full GitHub CI rerun is still pending. Two acceptance work items remain:
+U05 remains **PARTIAL / BLOCKED**. The implementation, 234 focused regressions, and GitHub CI are complete. Two acceptance work items remain:
 
 1. An isolated VM100 staging parity/restart/concurrency/reconciliation check, with a verified backup and rollback path, without touching port 8000.
 2. An authorized Connext-Demo position-modify response plus broker readback/reconciliation receipt. This depends on U01 providing a fresh, verified Demo quote and requires explicit Demo acceptance; Live remains disabled.
