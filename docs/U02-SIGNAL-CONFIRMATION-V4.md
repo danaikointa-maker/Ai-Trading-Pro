@@ -57,12 +57,16 @@ The gate creates no order rows. No schema migration is needed. Existing
   restart, concurrent writers, invalidation, execution-boundary revalidation,
   legacy-signal rejection, and absence of order rows. `test_readiness.py`,
   `test_signal_execution.py`, and `test_smart_entry_continuation.py` were also
-  run as regressions. Current focused result: 49 passed; F/E9 lint passed.
+  run as regressions. Current focused result: 50 passed; F/E9 lint passed.
 - GitHub Actions CI run #127 for code commit `fc97219` passed, including the
   dashboard build, full CI test gate, real-Redis checks, and bundle-size gate.
+  The ReplayFeed probe was added after that run and is awaiting CI on this head.
+- A deterministic Paper replay probe passes through `ReplayFeed` → the
+  confirmation gate → final execution-boundary validation, and leaves the
+  orders table empty. The full runtime/dashboard Paper replay remains untested.
 - Runtime integration uses the current signal cycle; no live broker snapshot or
   runtime opt-in test has been performed.
-- Paper replay and Demo acceptance: **NOT TESTED**.
+- End-to-end Paper runtime replay and Demo acceptance: **NOT TESTED**.
 - Live trading: **NOT ENABLED / NOT TESTED**.
 
 ## Acceptance blockers / rollback

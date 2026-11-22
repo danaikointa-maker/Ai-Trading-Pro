@@ -21,6 +21,7 @@ from packages.shared_schemas.models import (
     TradePlan,
 )
 from services.api_gateway.state import TradingRuntime
+from services.market_data.replay import ReplayFeed
 from services.strategy_engine.confirmation import (
     BLOCKED,
     CONFIRMED,
@@ -53,6 +54,56 @@ def advance(gate, *, direction=Direction.up, now=NOW, close=2000.0,
         m1_bars=[{"t": bar_t, "o": close, "h": close, "l": close, "c": close, "v": 1}],
         m5_direction=m5, data_fresh=fresh, broker_healthy=healthy,
     )
+
+
+def test_paper_replay_feed_confirms_candidate_without_creating_an_order(db):
+    start = NOW - (NOW % 60)
+    rows = [{"t": start + i * 60, "o": 2000.0, "h": 2000.2,
+             "l": 1999.8, "c": 2000.0, "v": 1.0}
+            for i in range(62)]
+    rows[60].update(o=2000.0, h=2001.11, l=2000.0, c=2001.10)
+    frame = pd.DataFrame(rows)
+    feed = ReplayFeed(
+        {"XAUUSD": frame},
+        {"XAUUSD": {"point": POINT, "digits": 2, "spread_typical_points": 2}},
+        warmup_bars=60, speed_minutes_per_second=60, tick_seconds=1, seed=5,
+    )
+    gate = SignalConfirmationGate(db)
+    first_quote = feed.ticker("XAUUSD")
+    reference = first_quote.ask
+    initial = gate.advance(
+        broker_id="paper-replay", symbol="XAUUSD", direction=Direction.up,
+        strategy="breakout_continuation", zone_ids=["replay-zone"],
+        now=feed.end_time, point=POINT, reference_price=reference,
+        execution_price=first_quote.ask,
+        m1_bars=feed.warm_history("XAUUSD", 120).to_dict("records"),
+        m5_direction=Direction.up, data_fresh=True, broker_healthy=True,
+    )
+    assert initial.state == WAIT
+
+    for _ in range(feed.ticks_per_bar):
+        feed.tick()
+        feed.advance_clock()
+
+    current_quote = feed.ticker("XAUUSD")
+    latest_bars = feed.warm_history("XAUUSD", 120).to_dict("records")
+    confirmed = gate.advance(
+        broker_id="paper-replay", symbol="XAUUSD", direction=Direction.up,
+        strategy="breakout_continuation", zone_ids=["replay-zone"],
+        now=feed.end_time, point=POINT, reference_price=reference,
+        execution_price=current_quote.ask, m1_bars=latest_bars,
+        m5_direction=Direction.up, data_fresh=True, broker_healthy=True,
+    )
+    assert confirmed.state == CONFIRMED
+    checked = gate.validate_execution(
+        broker_id="paper-replay", symbol="XAUUSD",
+        candidate_id=confirmed.candidate_id or "", direction=Direction.up,
+        now=feed.end_time, point=POINT, execution_price=current_quote.ask,
+        m1_bars=latest_bars, m5_direction=Direction.up,
+        data_fresh=True, broker_healthy=True,
+    )
+    assert checked.state == CONFIRMED
+    assert db.query("SELECT * FROM orders") == []
 
 
 def test_buy_waits_for_100_closed_m1_points_and_aligned_m5(db):
