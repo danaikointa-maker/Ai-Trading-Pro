@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import os
 import sys
 import time
 from types import ModuleType, SimpleNamespace
@@ -8,8 +9,9 @@ import pytest
 
 import scripts.mt5_market_publisher as publisher
 from scripts.mt5_market_publisher import (
-    REQUIRED_SETTINGS, TIMEFRAMES, _expected_login, _quote_freshness, _rates,
-    _required_settings, _symbol_map, _validate_endpoint,
+    PUBLISHER_ENV_SETTINGS, REQUIRED_SETTINGS, TIMEFRAMES, _expected_login,
+    _quote_freshness, _rates, _required_settings, _symbol_map,
+    _validate_endpoint, load_publisher_environment, publisher_settings,
 )
 
 
@@ -39,6 +41,45 @@ def test_required_settings_returns_values_without_logging_them(monkeypatch):
     for name in REQUIRED_SETTINGS:
         monkeypatch.setenv(name, "private-value")
     assert _required_settings() == {name: "private-value" for name in REQUIRED_SETTINGS}
+
+
+def test_local_env_loads_only_publisher_allowlist_and_keeps_process_precedence(
+        tmp_path, monkeypatch):
+    for name in PUBLISHER_ENV_SETTINGS | {"NO7_BRIDGE_TOKEN", "BROKER_PASSWORD"}:
+        monkeypatch.delenv(name, raising=False)
+    monkeypatch.setenv("NO7_MT5_MARKET_API_URL", "http://127.0.0.1:18181/api/market/publish/mt5")
+    env_file = tmp_path / ".env"
+    env_file.write_text(
+        "NO7_MT5_MARKET_API_URL=http://wrong.example/publish\n"
+        "NO7_MT5_MARKET_PUBLISHER_TOKEN='dedicated-token'\n"
+        "NO7_MT5_MARKET_EXPECTED_LOGIN=123456\n"
+        "NO7_MT5_MARKET_EXPECTED_SERVER=Connext-Demo\n"
+        "export NO7_MT5_MARKET_SYMBOL_MAP=XAUUSD=XAUUSD.s\n"
+        "NO7_BRIDGE_TOKEN=bridge-token\n"
+        "BROKER_PASSWORD=broker-password\n",
+        encoding="utf-8",
+    )
+
+    settings = publisher_settings(env_file)
+
+    assert os.environ["NO7_MT5_MARKET_API_URL"].startswith("http://127.0.0.1:18181/")
+    assert os.environ["NO7_MT5_MARKET_PUBLISHER_TOKEN"] == "dedicated-token"
+    assert os.environ["NO7_MT5_MARKET_SYMBOL_MAP"] == "XAUUSD=XAUUSD.s"
+    assert settings == {
+        "NO7_MT5_MARKET_API_URL": "http://127.0.0.1:18181/api/market/publish/mt5",
+        "NO7_MT5_MARKET_PUBLISHER_TOKEN": "dedicated-token",
+        "NO7_MT5_MARKET_EXPECTED_LOGIN": "123456",
+        "NO7_MT5_MARKET_EXPECTED_SERVER": "Connext-Demo",
+        "NO7_MT5_MARKET_SYMBOL_MAP": "XAUUSD=XAUUSD.s",
+    }
+    assert "NO7_BRIDGE_TOKEN" not in os.environ
+    assert "BROKER_PASSWORD" not in os.environ
+
+
+def test_missing_local_env_file_is_ignored(tmp_path, monkeypatch):
+    monkeypatch.delenv("NO7_MT5_MARKET_PUBLISHER_TOKEN", raising=False)
+    load_publisher_environment(tmp_path / "missing.env")
+    assert "NO7_MT5_MARKET_PUBLISHER_TOKEN" not in os.environ
 
 
 @pytest.mark.parametrize(("value", "message"), [
