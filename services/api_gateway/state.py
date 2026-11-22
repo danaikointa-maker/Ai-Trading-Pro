@@ -68,6 +68,10 @@ from services.strategy_engine.engine import StrategyEngine
 from services.strategy_engine.readiness import assess_readiness
 from services.strategy_engine.proposals import entry_proposals
 from services.strategy_engine.momentum_veto import preview_stochastic_veto
+from services.strategy_engine.confirmation import (
+    CONFIRMED as CONFIRMATION_CONFIRMED,
+    SignalConfirmationGate,
+)
 
 def _truthy(value: Any) -> bool:
     return str(value or "").strip().lower() in ("1", "true", "yes", "on")
@@ -237,6 +241,17 @@ class TradingRuntime:
         self.analysis = AnalysisService(self.settings, self.market, self.news)
         self.planner = TradePlanner(self.settings.risk_cfg(), self.settings.strategy_cfg())
         self.strategy = StrategyEngine(self.settings, self.risk, self.predictor, self.planner)
+        confirmation_cfg = self.settings.strategy_cfg().get("signal_confirmation_v4", {})
+        self.confirmation_gate = (
+            SignalConfirmationGate(
+                self.db,
+                confirmation_points=float(confirmation_cfg.get("confirmation_points", 100)),
+                max_chase_points=float(confirmation_cfg.get("max_chase_points", 30)),
+                expiry_seconds=int(confirmation_cfg.get("expiry_seconds", 300)),
+                max_closed_m1_age_seconds=int(
+                    confirmation_cfg.get("max_closed_m1_age_seconds", 75)),
+            ) if confirmation_cfg.get("enabled") is True else None
+        )
         self.manager = PositionManager(self.settings)
         self.gateway = ExecutionGateway(self.settings, self.db)
         self.notifier = Notifier(self.db, min_score=float(self.settings.strategy_cfg()
@@ -644,6 +659,48 @@ class TradingRuntime:
         tick = self.market.ticker(symbol)
         signal = self.strategy.generate(
             ctx, symbol, self.adapter.id, self.mode, tick, health, forecast, equity, now=now)
+        if self.confirmation_gate and signal.action in (SignalAction.buy, SignalAction.sell):
+            direction = Direction.up if signal.action == SignalAction.buy else Direction.down
+            m5_direction = next((item.direction for item in ctx.snapshot.trend
+                                 if item.timeframe.upper() == "M5"), Direction.sideways)
+            m1_frame = ctx.frames.get("M1")
+            m1_bars = (m1_frame[["t", "c"]].to_dict("records")
+                       if m1_frame is not None and {"t", "c"}.issubset(m1_frame.columns) else [])
+            execution_price = float(tick.ask if direction == Direction.up else tick.bid)
+            confirmation = self.confirmation_gate.advance(
+                broker_id=signal.broker_id, symbol=symbol, direction=direction,
+                strategy=signal.strategy, zone_ids=signal.zones_used,
+                now=now, point=float(spec.point),
+                reference_price=execution_price, execution_price=execution_price,
+                m1_bars=m1_bars, m5_direction=m5_direction,
+                data_fresh=ctx.snapshot.data_quality.get("ok") is True,
+                broker_healthy=health == Health.connected,
+            )
+            if confirmation.state == CONFIRMATION_CONFIRMED:
+                confirmation = self.confirmation_gate.validate_execution(
+                    broker_id=signal.broker_id, symbol=symbol,
+                    candidate_id=confirmation.candidate_id or "", direction=direction,
+                    now=now, point=float(spec.point), execution_price=execution_price,
+                    m1_bars=m1_bars, m5_direction=m5_direction,
+                    data_fresh=ctx.snapshot.data_quality.get("ok") is True,
+                    broker_healthy=health == Health.connected,
+                )
+            signal.explanation["signal_confirmation_v4"] = confirmation.__dict__
+            signal.id = confirmation.candidate_id or signal.id
+            if confirmation.expires_at:
+                signal.expires_at = confirmation.expires_at
+            if confirmation.state != CONFIRMATION_CONFIRMED:
+                signal.blockers = list(dict.fromkeys(signal.blockers + [confirmation.reason]))
+                signal.blocker_codes = list(dict.fromkeys(signal.blocker_codes + [
+                    "confirmation_100pt_" + confirmation.state.lower()
+                ]))
+                signal.action = SignalAction.wait
+                signal.status = SignalStatus.weak if signal.score >= 50 else SignalStatus.no_trade
+            else:
+                # Preserve the first plan released by this confirmation candidate.
+                previous = self.plans.get(signal.id)
+                if previous and previous.action in (SignalAction.buy, SignalAction.sell):
+                    signal.plan = previous.plan
         atr_pct = (ctx.snapshot.indicators.atr14 / ctx.snapshot.price * 100) if ctx.snapshot.price else 0.0
         gate = self.strategy.evaluate_gate(
             signal, spec, tick, risk_state, ctx.snapshot.data_quality, ctx.snapshot.news_lockout,
@@ -1109,6 +1166,16 @@ class TradingRuntime:
             return {"ok": False, "error": "signal expired — wait for a fresh one"}
         if signal.action not in (SignalAction.buy, SignalAction.sell):
             return {"ok": False, "error": "signal is not actionable"}
+        if self.confirmation_gate:
+            with self.lock:
+                current = self.signals.get(signal.symbol)
+            if (current is None or current.id != signal.id
+                    or current.action != signal.action):
+                return {"ok": False, "error": "signal is no longer the current actionable setup"}
+            proof = signal.explanation.get("signal_confirmation_v4")
+            if (not isinstance(proof, dict) or proof.get("state") != CONFIRMATION_CONFIRMED
+                    or proof.get("candidate_id") != signal.id):
+                return {"ok": False, "error": "signal has no current 100-point confirmation"}
         # A hand-approval must not lower the bar the signal was generated against:
         # anything under the execution threshold is weak by the strategy's own rule,
         # and the risk gate only enforces the score floor in full-auto mode.
@@ -1138,6 +1205,27 @@ class TradingRuntime:
             quality = (ctx.snapshot.data_quality if ctx else self.market.data_quality(signal.symbol))
             news_lock = (ctx.snapshot.news_lockout if ctx else self.news.lockout(now))
             atr_pct = (ctx.snapshot.indicators.atr14 / ctx.snapshot.price * 100) if ctx else 0.0
+            if self.confirmation_gate:
+                if ctx is None:
+                    return {"ok": False, "error": "current M1/M5 confirmation context is unavailable"}
+                direction = Direction.up if signal.action == SignalAction.buy else Direction.down
+                m5_direction = next((item.direction for item in ctx.snapshot.trend
+                                     if item.timeframe.upper() == "M5"), Direction.sideways)
+                m1_frame = ctx.frames.get("M1")
+                m1_bars = (m1_frame[["t", "c"]].to_dict("records")
+                           if m1_frame is not None and {"t", "c"}.issubset(m1_frame.columns) else [])
+                execution_price = float(tick.ask if direction == Direction.up else tick.bid)
+                confirmation = self.confirmation_gate.validate_execution(
+                    broker_id=signal.broker_id, symbol=signal.symbol,
+                    candidate_id=signal.id, direction=direction, now=now,
+                    point=float(spec.point), execution_price=execution_price,
+                    m1_bars=m1_bars, m5_direction=m5_direction,
+                    data_fresh=quality.get("ok") is True,
+                    broker_healthy=self.adapter.health() == Health.connected,
+                )
+                if confirmation.state != CONFIRMATION_CONFIRMED:
+                    return {"ok": False, "error": confirmation.reason,
+                            "confirmation_state": confirmation.state}
             gate = self.strategy.evaluate_gate(signal, spec, tick, risk_state, quality, news_lock,
                                               self.adapter.health(), self.predictor.approved, atr_pct)
             if not gate.allow:
@@ -1246,6 +1334,11 @@ class TradingRuntime:
         signal = self.plans.get(signal_id)
         if signal is None:
             return {"ok": False, "error": "signal not found"}
+        if self.confirmation_gate:
+            self.confirmation_gate.invalidate(
+                broker_id=signal.broker_id, symbol=signal.symbol,
+                candidate_id=signal_id, reason=reason,
+            )
         signal.rejected_reason = reason
         signal.action = SignalAction.wait
         self.db.audit("user", "signal.reject", {"signal_id": signal_id, "reason": reason})
