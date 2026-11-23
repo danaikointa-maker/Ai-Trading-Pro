@@ -11,7 +11,23 @@
       </button>
       <span class="text-[9.5px] text-muted">ไม่กระทบระบบเทรด</span>
     </div>
-    <div ref="container" class="h-[380px] w-full sm:h-[440px]"></div>
+    <div class="flex flex-wrap items-center gap-1 border-b border-ink-700/60 px-2 py-1.5" aria-label="ควบคุมมุมมองกราฟ">
+      <button class="btn px-2 py-1 text-[10px]" :disabled="!bars || loading" aria-label="ซูมออก" title="ซูมออก" @click="zoom(-1)">−</button>
+      <button class="btn px-2 py-1 text-[10px]" :disabled="!bars || loading" aria-label="ซูมเข้า" title="ซูมเข้า" @click="zoom(1)">+</button>
+      <label class="flex items-center gap-1 text-[9px] text-muted" title="ความกว้างแท่งเป็นพิกเซล">
+        px <input class="input w-14 py-1 text-[10px]" type="number" min="2" max="48" step="1" :value="spacing" aria-label="ความกว้างแท่ง" @change="setSpacing($event.target.value)" />
+      </label>
+      <button class="btn px-2 py-1 text-[9px]" :aria-pressed="autoScroll" aria-label="เลื่อนตามแท่งล่าสุดอัตโนมัติ" title="ติดตามแท่งล่าสุด" @click="toggleAutoScroll">{{ autoScroll ? 'LIVE ✓' : 'LIVE ○' }}</button>
+      <button class="btn px-2 py-1 text-[9px]" :aria-pressed="chartShift" aria-label="เว้นที่ว่างด้านขวาของกราฟ" title="Chart shift" @click="toggleShift">SHIFT {{ chartShift ? '✓' : '○' }}</button>
+      <button class="btn px-2 py-1 text-[9px]" :disabled="!bars || loading" aria-label="กลับไปแท่งล่าสุด" title="แท่งล่าสุด" @click="goLatest">ล่าสุด</button>
+      <button class="btn px-2 py-1 text-[9px]" :disabled="!bars || loading" aria-label="แสดงแท่งทั้งหมดที่โหลด" title="Fit all" @click="fitAll">ทั้งหมด</button>
+    </div>
+    <div class="relative">
+      <div ref="container" class="h-[380px] w-full sm:h-[440px]"
+           @pointerdown="startChartDrag" @pointermove="moveChartDrag" @pointerup="endChartDrag"
+           @pointercancel="endChartDrag" @pointerleave="endChartDrag"></div>
+      <canvas ref="segmentCanvas" class="pointer-events-none absolute inset-0 z-10" aria-hidden="true"></canvas>
+    </div>
     <div class="pointer-events-none absolute left-3 top-12 flex flex-wrap items-center gap-1.5">
       <span class="chip chip-gold">{{ state.symbol }} · {{ state.timeframe }}</span>
       <span class="chip" :class="feedWarn ? 'chip-warn' : ''" :title="feedTitle">{{ feedLabel }}</span>
@@ -45,8 +61,10 @@ import { computed, onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue'
 import { createChart } from 'lightweight-charts'
 import { api } from '../lib/api'
 import { positions, state } from '../lib/store'
+import { clampBarSpacing, latestLogicalRange, matchesChartSymbol, nextBarCount, nextBarSpacing, shortMarkerSpan, validPriceRange, validTimeRange } from '../lib/chartViewport'
 
 const container = ref(null)
+const segmentCanvas = ref(null)
 const loading = ref(false)
 const error = ref('')
 const bars = ref(0)
@@ -57,8 +75,21 @@ let ema20 = null
 let ema50 = null
 let ema200 = null
 let priceLines = []
+let shortMarkers = []
 let lastCandle = null
 let resizeObs = null
+let priceDigits = 2
+let loadedViewKey = ''
+let viewportFrame = null
+let viewportSaveTimer = null
+let markerFrame = null
+let dragOrigin = null
+const VIEW_PREFS_KEY = 'no7.chart.viewport.v1'
+let savedPrefs = {}
+try { savedPrefs = JSON.parse(localStorage.getItem(VIEW_PREFS_KEY) || '{}') || {} } catch { /* preferences are optional */ }
+const spacing = ref(clampBarSpacing(savedPrefs.spacing))
+const chartShift = ref(savedPrefs.chartShift !== false)
+const autoScroll = ref(savedPrefs.autoScroll !== false)
 const displayOffsetSeconds = ref(0)
 const displayBasis = ref('utc')
 const offsetLabel = computed(() => {
@@ -70,6 +101,99 @@ function formatServerClock(timestamp) {
   if (typeof timestamp !== 'number') return ''
   return new Date((timestamp + displayOffsetSeconds.value) * 1000).toLocaleTimeString('en-GB', {
     timeZone: 'UTC', hour: '2-digit', minute: '2-digit',
+  })
+}
+
+function saveViewPrefs() {
+  try {
+    localStorage.setItem(VIEW_PREFS_KEY, JSON.stringify({
+      spacing: spacing.value, chartShift: chartShift.value, autoScroll: autoScroll.value,
+    }))
+    const range = chart?.timeScale().getVisibleRange()
+    if (range && loadedViewKey && !autoScroll.value) {
+      localStorage.setItem(`${VIEW_PREFS_KEY}:${loadedViewKey}`, JSON.stringify(range))
+    }
+  } catch { /* private mode or invalid preference storage is non-fatal */ }
+}
+
+function syncViewport() {
+  if (viewportFrame) cancelAnimationFrame(viewportFrame)
+  viewportFrame = requestAnimationFrame(() => {
+    if (!chart || !container.value) return
+    spacing.value = clampBarSpacing(chart.timeScale().options().barSpacing)
+    const visible = chart.timeScale().getVisibleLogicalRange()
+    if (autoScroll.value && bars.value > 0 && visible && visible.to < bars.value - 1 - 1) {
+      autoScroll.value = false
+    }
+    clearTimeout(viewportSaveTimer)
+    viewportSaveTimer = setTimeout(saveViewPrefs, 200)
+    drawShortMarkers()
+  })
+}
+
+function latestRange() {
+  if (!chart) return null
+  const visibleBars = chart.timeScale().width() / spacing.value
+  return latestLogicalRange(bars.value, visibleBars, chartShift.value ? 8 : 1)
+}
+
+function goLatest() {
+  const range = latestRange()
+  if (!chart || !range) return
+  autoScroll.value = true
+  chart.priceScale('right').applyOptions({ autoScale: true })
+  chart.timeScale().setVisibleLogicalRange(range)
+  saveViewPrefs()
+}
+
+function setSpacing(value) {
+  spacing.value = clampBarSpacing(value)
+  chart?.timeScale().applyOptions({ barSpacing: spacing.value })
+  if (autoScroll.value) goLatest()
+  syncViewport()
+}
+
+function zoom(direction) { setSpacing(nextBarSpacing(spacing.value, direction)) }
+
+function toggleAutoScroll() {
+  autoScroll.value = !autoScroll.value
+  if (autoScroll.value) goLatest()
+  saveViewPrefs()
+}
+
+function toggleShift() {
+  chartShift.value = !chartShift.value
+  chart?.timeScale().applyOptions({ rightOffset: chartShift.value ? 8 : 1 })
+  if (autoScroll.value) goLatest()
+  saveViewPrefs()
+}
+
+function fitAll() {
+  if (!chart || !bars.value) return
+  autoScroll.value = false
+  chart.timeScale().fitContent()
+  syncViewport()
+}
+
+function startChartDrag(event) { dragOrigin = { x: event.clientX, y: event.clientY } }
+function moveChartDrag(event) {
+  if (event.buttons) scheduleMarkerRedraw()
+  if (!dragOrigin || !event.buttons) return
+  if (Math.abs(event.clientX - dragOrigin.x) > 4 || Math.abs(event.clientY - dragOrigin.y) > 4) {
+    autoScroll.value = false
+    saveViewPrefs()
+  }
+}
+function endChartDrag() {
+  dragOrigin = null
+  scheduleMarkerRedraw()
+}
+
+function scheduleMarkerRedraw() {
+  if (markerFrame) cancelAnimationFrame(markerFrame)
+  markerFrame = requestAnimationFrame(() => {
+    markerFrame = null
+    drawShortMarkers()
   })
 }
 
@@ -137,7 +261,9 @@ function buildChart() {
     grid: { vertLines: { color: 'rgba(38,51,63,0.45)' }, horzLines: { color: 'rgba(38,51,63,0.45)' } },
     rightPriceScale: { borderColor: '#1a2331', scaleMargins: { top: 0.12, bottom: 0.12 } },
     timeScale: {
-      borderColor: '#1a2331', timeVisible: true, secondsVisible: false, rightOffset: 6,
+      borderColor: '#1a2331', timeVisible: true, secondsVisible: false,
+      barSpacing: spacing.value, minBarSpacing: 2, rightOffset: chartShift.value ? 8 : 1,
+      rightBarStaysOnScroll: true,
       tickMarkFormatter: (time) => formatServerClock(time),
     },
     crosshair: {
@@ -162,11 +288,14 @@ function buildChart() {
   ema50 = line('rgba(96,165,250,0.8)', 1)
   ema200 = line('rgba(167,139,250,0.8)', 1)
   syncSeriesVisibility()
+  chart.timeScale().subscribeVisibleLogicalRangeChange(syncViewport)
   resizeObs = new ResizeObserver(() => {
     if (!chart || !container.value) return
     const { clientWidth, clientHeight } = container.value
     if (clientWidth > 0 && clientHeight > 0) {
       chart.applyOptions({ width: clientWidth, height: clientHeight })
+      if (autoScroll.value && bars.value) goLatest()
+      syncViewport()
     }
   })
   resizeObs.observe(container.value)
@@ -186,6 +315,8 @@ async function retry() {
 
 async function load() {
   if (!candleSeries) return
+  const previousRange = chart.timeScale().getVisibleRange()
+  const previousViewKey = loadedViewKey
   loading.value = true
   error.value = ''
   try {
@@ -193,6 +324,7 @@ async function load() {
       `/api/market/candles?symbol=${encodeURIComponent(state.symbol)}&timeframe=${state.timeframe}&limit=${state.range}`,
     )
     const raw = Array.isArray(data.candles) ? data.candles : []
+    const nextViewKey = `${data.feed || 'feed'}:${data.symbol || state.symbol}:${state.timeframe}`
     displayBasis.value = data.time?.display_basis || 'utc'
     displayOffsetSeconds.value = displayBasis.value === 'broker_server'
       ? Number(data.time?.server_utc_offset_seconds || 0) : 0
@@ -220,8 +352,28 @@ async function load() {
     line(ema20, 20)
     line(ema50, 50)
     line(ema200, 200)
+    priceDigits = Number.isInteger(data.spec?.digits) ? Math.min(8, Math.max(0, data.spec.digits)) : 2
     lastCandle = candles[candles.length - 1] || null
-    chart.timeScale().fitContent()
+    chart.timeScale().applyOptions({
+      barSpacing: spacing.value, rightOffset: chartShift.value ? 8 : 1,
+    })
+    const firstTime = candles[0]?.time
+    const lastTime = candles.at(-1)?.time
+    let storedRange = null
+    try {
+      storedRange = JSON.parse(localStorage.getItem(`${VIEW_PREFS_KEY}:${nextViewKey}`) || 'null')
+    } catch { /* ignore invalid saved viewport */ }
+    if (autoScroll.value) {
+      goLatest()
+    } else if (previousViewKey === nextViewKey && validTimeRange(previousRange, firstTime, lastTime)) {
+      chart.timeScale().setVisibleRange(previousRange)
+    } else if (validTimeRange(storedRange, firstTime, lastTime)) {
+      chart.timeScale().setVisibleRange(storedRange)
+    } else {
+      chart.timeScale().fitContent()
+    }
+    loadedViewKey = nextViewKey
+    syncViewport()
     drawOverlays()
   } catch (err) {
     error.value = String((err && err.message) || err)
@@ -255,18 +407,62 @@ function addLine(price, color, title, style = 2, width = 1) {
   priceLines.push({ series: candleSeries, line })
 }
 
+function drawShortMarkers() {
+  const canvas = segmentCanvas.value
+  if (!canvas || !container.value || !candleSeries) return
+  const width = container.value.clientWidth
+  const height = container.value.clientHeight
+  const ratio = Math.max(1, window.devicePixelRatio || 1)
+  if (width < 1 || height < 1) return
+  canvas.width = Math.round(width * ratio)
+  canvas.height = Math.round(height * ratio)
+  canvas.style.width = `${width}px`
+  canvas.style.height = `${height}px`
+  const ctx = canvas.getContext('2d')
+  if (!ctx) return
+  ctx.setTransform(ratio, 0, 0, ratio, 0, 0)
+  ctx.clearRect(0, 0, width, height)
+  const span = shortMarkerSpan(width)
+  if (!span) return
+  for (const marker of shortMarkers) {
+    const y = candleSeries.priceToCoordinate(marker.price)
+    if (!Number.isFinite(y) || y < 1 || y > height - 1) continue
+    ctx.save()
+    ctx.strokeStyle = marker.color
+    ctx.fillStyle = marker.color
+    ctx.lineWidth = marker.emphasis ? 2 : 1.5
+    ctx.setLineDash(marker.dashed ? [5, 3] : [])
+    ctx.beginPath()
+    ctx.moveTo(span.left, y)
+    ctx.lineTo(span.right, y)
+    ctx.stroke()
+    ctx.setLineDash([])
+    ctx.font = '10px ui-monospace, monospace'
+    const label = `${marker.label} ${Number(marker.price).toFixed(priceDigits)}`
+    const labelWidth = ctx.measureText(label).width + 8
+    const labelLeft = Math.max(span.left, span.right - labelWidth)
+    ctx.globalAlpha = 0.9
+    ctx.fillRect(labelLeft, y - 11, span.right - labelLeft, 12)
+    ctx.globalAlpha = 1
+    ctx.fillStyle = '#071018'
+    ctx.fillText(label, labelLeft + 4, y - 2)
+    ctx.restore()
+  }
+}
+
 function drawOverlays() {
   if (!candleSeries) return
   clearLines()
+  shortMarkers = []
   const signal = state.live?.signal
   const analysis = state.live?.analysis
   const plan = signal?.plan
   if (layerVisibility.plan && plan && ['BUY', 'SELL', 'WAIT'].includes(signal.action)) {
-    addLine(plan.entry, 'rgba(245,181,65,0.9)', 'entry', 0, 2)
-    addLine(plan.sl, 'rgba(248,113,113,0.9)', 'SL', 2, 1)
-    addLine(plan.tp1, 'rgba(52,211,153,0.7)', 'TP1', 2, 1)
-    addLine(plan.tp2, 'rgba(52,211,153,0.55)', 'TP2', 2, 1)
-    addLine(plan.tp3, 'rgba(52,211,153,0.4)', 'TP3', 2, 1)
+    if (matchesChartSymbol(signal.symbol, state.symbol)) {
+      if (plan.entry > 0) shortMarkers.push({ price: plan.entry, color: 'rgba(245,181,65,0.95)', label: 'ENTRY', emphasis: true })
+      if (plan.sl > 0) shortMarkers.push({ price: plan.sl, color: 'rgba(248,113,113,0.95)', label: 'SL', dashed: true })
+      if (plan.tp1 > 0) shortMarkers.push({ price: plan.tp1, color: 'rgba(52,211,153,0.9)', label: 'TP1', dashed: true })
+    }
   }
   if (layerVisibility.sr && analysis) {
     ;(analysis.resistances || []).slice(0, 2).forEach((z) =>
@@ -294,12 +490,14 @@ function drawOverlays() {
     )
   }
   if (layerVisibility.positions) {
-    positions.value.forEach((p) => {
-      addLine(p.entry, 'rgba(96,165,250,0.8)', `#${p.ticket}`, 1, 1)
-      addLine(p.sl, 'rgba(248,113,113,0.6)', 'pos SL', 1, 1)
-      addLine(p.tp, 'rgba(52,211,153,0.6)', 'pos TP', 1, 1)
+    positions.value.filter(p => matchesChartSymbol(p.symbol, state.symbol)).forEach((p) => {
+      const ticket = String(p.ticket).slice(-6)
+      if (p.entry > 0) shortMarkers.push({ price: p.entry, color: 'rgba(96,165,250,0.9)', label: `#${ticket} IN` })
+      if (p.sl > 0) shortMarkers.push({ price: p.sl, color: 'rgba(248,113,113,0.95)', label: `#${ticket} SL`, dashed: true })
+      if (p.tp > 0) shortMarkers.push({ price: p.tp, color: 'rgba(52,211,153,0.95)', label: `#${ticket} TP`, dashed: true })
     })
   }
+  drawShortMarkers()
 }
 
 function updateLast() {
@@ -308,8 +506,12 @@ function updateLast() {
   const seconds = { M1: 60, M5: 300, M15: 900, H1: 3600, H4: 14400 }[state.timeframe] || 300
   const bucket = Math.floor(tick.t / seconds) * seconds
   const price = Number(tick.last)
+  if (!Number.isFinite(bucket) || !Number.isFinite(price) || price <= 0 || bucket < lastCandle.time) return
   if (bucket > lastCandle.time) {
     lastCandle = { time: bucket, open: price, high: price, low: price, close: price }
+    candleSeries.update(lastCandle)
+    bars.value = nextBarCount(bars.value)
+    if (autoScroll.value) goLatest()
   } else {
     lastCandle = {
       ...lastCandle,
@@ -317,8 +519,9 @@ function updateLast() {
       low: Math.min(lastCandle.low, price),
       close: price,
     }
+    candleSeries.update(lastCandle)
   }
-  candleSeries.update(lastCandle)
+  drawShortMarkers()
 }
 
 watch(() => [state.symbol, state.timeframe, state.range], load)
@@ -341,6 +544,10 @@ onMounted(async () => {
 })
 onBeforeUnmount(() => {
   resizeObs?.disconnect()
+  if (viewportFrame) cancelAnimationFrame(viewportFrame)
+  if (markerFrame) cancelAnimationFrame(markerFrame)
+  clearTimeout(viewportSaveTimer)
+  chart?.timeScale().unsubscribeVisibleLogicalRangeChange(syncViewport)
   chart?.remove()
   chart = null
 })

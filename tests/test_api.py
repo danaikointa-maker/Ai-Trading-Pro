@@ -292,6 +292,9 @@ def test_live_snapshot_has_every_block_the_ui_needs(client, auth):
 def test_live_snapshot_marks_memory_quote_stale_after_feed_stops(client, auth, runtime, monkeypatch):
     from packages.shared_schemas.models import Tick
 
+    # The runtime is session-scoped and other tests may temporarily exercise the
+    # publisher route. Force this case to cover the adapter + last-known quote path.
+    monkeypatch.setitem(runtime.market.publisher, "enabled", False)
     tick = Tick(t=1_700_000_000, bid=2000, ask=2001, spread_points=100, last=2000.5)
     runtime.market.on_ticks({"XAUUSD": tick})
     runtime.active_symbol = "XAUUSD"
