@@ -131,6 +131,11 @@ Status definitions: EXISTS_CODE = seen in repository but not live certified; NEE
 - A test-order race was repaired in `tests/test_api.py` by freezing the simulated tick for the API assertion; production code and trading behavior are unchanged. Initial two worktree failures were missing frontend build/dependencies; after installation, the only remaining failure was the background tick race and the final suite passed.
 - U06/U07/U08/U09 remain PARTIAL for the acceptance gaps in the audit report; U10 remains DONE. U05/MT5 Demo, live feed, authenticated visual review, Auto, account and broker state were not changed.
 
+### U11–U15 continuation recheck (2026-11-24)
+
+- On V4 merge base `0d4ab1b489de1cc77261a9f436fead35b19abebe`, TradingView contract/ingress/persistence plus read-only AI trader suite passed **31 tests**, with one pre-existing Starlette/httpx deprecation warning. Exact command and scope are recorded in `docs/audits/U11-U15-followup-2026-11-23.th.md`.
+- U11 remains BLOCKED pending safe Paper/Demo failure/recovery receipts; U12 remains PARTIAL/BLOCKED pending officer review and VM100 identity/API; U13 stays DONE; U14 local contract stays DONE; U15 remains PARTIAL because external TLS/proxy/Access/secret-manager gates are unverified. No order, broker, Auto/Live, VM or Cloudflare state changed.
+
 ## Anti-duplication ledger
 - Do NOT let TradingView/Lens/LLM/webhook create executable signals, alter MT5 canonical prices/specs, approve risk, toggle Auto, or call execution. Use U14?U18 as the only TradingView queue; do not add a parallel plan/backlog.
 - Do NOT create a second RiskEngine or PositionManager. Existing: `services/risk_engine/engine.py`, `manager.py`.
