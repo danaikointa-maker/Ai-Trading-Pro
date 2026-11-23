@@ -55,7 +55,7 @@ from services.market_data.replay import build_feed
 from services.notification.notifier import Notifier
 from services.risk_engine.engine import RiskEngine, default_risk_state
 from services.risk_engine.manager import PositionAction, PositionManager
-from services.risk_engine.planner import PlanInputs, TradePlanner, build_plan_inputs
+from services.risk_engine.planner import TradePlanner, build_plan_inputs
 from services.strategy_engine.analysis import (
     AnalysisContext,
     AnalysisService,

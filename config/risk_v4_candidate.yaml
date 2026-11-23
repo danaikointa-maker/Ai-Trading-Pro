@@ -32,6 +32,16 @@ targets:
   minimum_net_reward_risk: 1.50
   reject_if_obstructed: true
 
+# Planner switches are proposals for the inactive candidate only. Runtime
+# continues to load config/risk.yaml until an explicit reviewed migration.
+plan_options:
+  sl_policy: atr_structure
+  sl_structure_buffer_atr: 0.20
+  swing_lookback_bars: 10
+  directional_tick_rounding: true
+  single_target_r: 2.00
+  enforcement_status: candidate_only
+
 execution:
   full_auto_enabled: false
   live_auto_enabled: false

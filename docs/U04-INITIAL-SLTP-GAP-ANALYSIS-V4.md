@@ -7,7 +7,9 @@ source; no second SL/TP engine was created. An opt-in `PlanInputs` flag now
 supports outward tick normalization for SL/TP. It defaults to `false`, so
 legacy tick rounding is unchanged. An opt-in ATR+structure stop policy is also
 available to direct planner callers; the candidate profile remains unloaded
-from runtime settings.
+from runtime settings. Its `plan_options` are recorded in the single canonical
+inactive file `config/risk_v4_candidate.yaml`; no second U04 risk candidate is
+maintained.
 
 ## Existing behavior
 
@@ -58,10 +60,11 @@ from runtime settings.
 ## Test evidence
 
 `pytest tests/test_invariants.py tests/test_spec_safety.py
-tests/test_v4_risk_candidate.py tests/test_v4_plan_candidate.py
+tests/test_risk_profile_candidate.py tests/test_v4_plan_candidate.py
 tests/test_risk_engine.py tests/test_risk_state_failure.py
 tests/test_smart_entry_continuation.py tests/test_v4_single_target_manager.py
--q` — **94 passed**.
+-q` — **95 passed** after consolidating candidate configuration and adding
+the single-candidate isolation regression.
 These protect current sizing, side-correct geometry, broker tick grid, RR,
 partial-volume feasibility, legacy Risk Engine vetoes and candidate isolation.
 They do not establish broker Demo acceptance or validate an SL/TP order.
@@ -81,6 +84,11 @@ Candidate-only tick-normalization tests cover BUY and SELL geometry with a
    net-RR behavior are covered.
 6. Verify `order_check`, margin, stops/freeze levels and post-fill SL/TP only
    through the existing ExecutionGateway and an explicitly approved Demo.
+
+The candidate profile is represented only by `config/risk_v4_candidate.yaml`.
+The older duplicate `config/candidates/conservative_v4_risk.yaml` was removed;
+candidate isolation is regression-tested and `config/risk.yaml` remains the
+runtime source.
 
 No LIVE order, broker action, profile activation or migration occurred. U04 is
 not complete; this audit merely clarifies the implementation boundary.

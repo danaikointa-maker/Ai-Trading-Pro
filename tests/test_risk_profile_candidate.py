@@ -25,6 +25,18 @@ def test_v4_candidate_is_explicitly_inactive_and_does_not_change_legacy_profile(
     assert candidate["limits"]["max_aggregate_risk_pct"] == 1.0
     assert candidate["limits"]["max_trades_per_day"] == 5
     assert candidate["targets"]["partial_close_enabled"] is False
+    assert candidate["plan_options"] == {
+        "sl_policy": "atr_structure",
+        "sl_structure_buffer_atr": 0.2,
+        "swing_lookback_bars": 10,
+        "directional_tick_rounding": True,
+        "single_target_r": 2.0,
+        "enforcement_status": "candidate_only",
+    }
+
+
+def test_v4_has_one_authoritative_inactive_risk_candidate():
+    assert not (ROOT / "config/candidates/conservative_v4_risk.yaml").exists()
 
 
 def test_v4_candidate_file_is_not_the_runtime_risk_config():
