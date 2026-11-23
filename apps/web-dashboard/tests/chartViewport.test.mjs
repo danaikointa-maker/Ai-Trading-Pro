@@ -5,6 +5,7 @@ import {
   clampBarSpacing,
   latestLogicalRange,
   matchesChartSymbol,
+  nextBarCount,
   nextBarSpacing,
   shortMarkerSpan,
   validPriceRange,
@@ -25,6 +26,12 @@ test('latest range retains a bounded view and configurable right margin', () => 
   assert.deepEqual(latestLogicalRange(100, 40, 8), { from: 67, to: 107 })
   assert.equal(latestLogicalRange(0, 40), null)
   assert.equal(latestLogicalRange(100, 0).from, 97)
+})
+
+test('appending a new candle advances the latest-bar count', () => {
+  assert.equal(nextBarCount(240), 241)
+  assert.equal(nextBarCount(0), 1)
+  assert.equal(nextBarCount(Number.NaN), 1)
 })
 
 test('saved time viewport restores only when the selected candle data covers it', () => {

@@ -61,7 +61,7 @@ import { computed, onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue'
 import { createChart } from 'lightweight-charts'
 import { api } from '../lib/api'
 import { positions, state } from '../lib/store'
-import { clampBarSpacing, latestLogicalRange, matchesChartSymbol, nextBarSpacing, shortMarkerSpan, validPriceRange, validTimeRange } from '../lib/chartViewport'
+import { clampBarSpacing, latestLogicalRange, matchesChartSymbol, nextBarCount, nextBarSpacing, shortMarkerSpan, validPriceRange, validTimeRange } from '../lib/chartViewport'
 
 const container = ref(null)
 const segmentCanvas = ref(null)
@@ -82,6 +82,7 @@ let priceDigits = 2
 let loadedViewKey = ''
 let viewportFrame = null
 let viewportSaveTimer = null
+let markerFrame = null
 let dragOrigin = null
 const VIEW_PREFS_KEY = 'no7.chart.viewport.v1'
 let savedPrefs = {}
@@ -176,13 +177,25 @@ function fitAll() {
 
 function startChartDrag(event) { dragOrigin = { x: event.clientX, y: event.clientY } }
 function moveChartDrag(event) {
+  if (event.buttons) scheduleMarkerRedraw()
   if (!dragOrigin || !event.buttons) return
   if (Math.abs(event.clientX - dragOrigin.x) > 4 || Math.abs(event.clientY - dragOrigin.y) > 4) {
     autoScroll.value = false
     saveViewPrefs()
   }
 }
-function endChartDrag() { dragOrigin = null }
+function endChartDrag() {
+  dragOrigin = null
+  scheduleMarkerRedraw()
+}
+
+function scheduleMarkerRedraw() {
+  if (markerFrame) cancelAnimationFrame(markerFrame)
+  markerFrame = requestAnimationFrame(() => {
+    markerFrame = null
+    drawShortMarkers()
+  })
+}
 
 // UI preferences only: never write these switches into state.live or send an
 // API request. Engine, risk controls and persisted trade decisions are unchanged.
@@ -497,6 +510,7 @@ function updateLast() {
   if (bucket > lastCandle.time) {
     lastCandle = { time: bucket, open: price, high: price, low: price, close: price }
     candleSeries.update(lastCandle)
+    bars.value = nextBarCount(bars.value)
     if (autoScroll.value) goLatest()
   } else {
     lastCandle = {
@@ -531,6 +545,7 @@ onMounted(async () => {
 onBeforeUnmount(() => {
   resizeObs?.disconnect()
   if (viewportFrame) cancelAnimationFrame(viewportFrame)
+  if (markerFrame) cancelAnimationFrame(markerFrame)
   clearTimeout(viewportSaveTimer)
   chart?.timeScale().unsubscribeVisibleLogicalRangeChange(syncViewport)
   chart?.remove()
