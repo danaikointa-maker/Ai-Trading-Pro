@@ -55,8 +55,12 @@ from services.market_data.replay import build_feed
 from services.notification.notifier import Notifier
 from services.risk_engine.engine import RiskEngine, default_risk_state
 from services.risk_engine.manager import PositionAction, PositionManager
-from services.risk_engine.planner import PlanInputs, TradePlanner
-from services.strategy_engine.analysis import AnalysisContext, AnalysisService, decision_candles
+from services.risk_engine.planner import TradePlanner, build_plan_inputs
+from services.strategy_engine.analysis import (
+    AnalysisContext,
+    AnalysisService,
+    decision_candles,
+)
 from packages.persistence.position_candles import PositionCandleLog
 from services.strategy_engine.attribution import BlockerTally, RollingAttribution, merge
 
@@ -1048,18 +1052,15 @@ class TradingRuntime:
         equity = self.adapter.account_info().equity
         entry_price = tick.ask if direction == Direction.up else tick.bid
         settings = self.risk.settings_view()
-        result = self.planner.build(PlanInputs(
+        result = self.planner.build(build_plan_inputs(
+            risk_cfg=self.settings.risk_cfg(), effective=settings,
             direction=direction, entry=entry_price, spec=spec,
-            atr_points=max(1.0, ctx.snapshot.indicators.atr_points), equity=equity,
-            risk_pct=self.risk.limits().risk_per_trade_pct, spread_points=float(tick.spread_points),
+            atr_points=max(1.0, ctx.snapshot.indicators.atr_points),
+            equity=equity, spread_points=float(tick.spread_points),
             supports=ctx.snapshot.supports, resistances=ctx.snapshot.resistances,
-            swings=[{"kind": s.kind, "price": s.price} for s in ctx.snapshot.swings if s.confirmed],
-            target_mode=settings.targets_mode, min_points=settings.min_points, max_points=settings.max_points,
-            fixed_points=settings.fixed_points,
-            sl_min_points=float(self.settings.risk_cfg().get("stops", {}).get("sl_min_points", 150)),
-            sl_max_points=float(self.settings.risk_cfg().get("stops", {}).get("sl_max_points", 1200)),
-            min_rr_net=self.risk.limits().min_reward_risk,
-            closes_pct=list(self.settings.risk_cfg().get("targets", {}).get("ladder", {}).get("closes_pct", [40, 30, 30])),
+            swings=[{"kind": s.kind, "price": s.price, "idx": s.idx}
+                    for s in ctx.snapshot.swings if s.confirmed],
+            m5_bar_count=len(ctx.frames["M5"]),
         ))
         if result.plan is None:
             return None, "; ".join(result.blockers)

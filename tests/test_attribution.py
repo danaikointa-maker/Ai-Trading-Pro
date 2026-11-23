@@ -146,6 +146,15 @@ def test_strategy_blockers_carry_codes_one_for_one(runtime):
     assert seen, "no symbol produced a blocker, so nothing was actually checked"
 
 
+def test_candidate_planner_blocker_codes_are_registered():
+    candidate_codes = {
+        "invalid_stop_policy", "structure_missing", "stop_distance_max",
+        "broker_stop_distance", "invalid_target_policy", "target_distance_max",
+        "broker_target_distance", "opposing_zone",
+    }
+    assert candidate_codes <= {code for code, _ in BLOCKER_CODES}
+
+
 def test_planner_blockers_carry_codes(runtime):
     from packages.shared_schemas.models import Direction
 
