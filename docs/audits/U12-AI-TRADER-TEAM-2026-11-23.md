@@ -44,7 +44,7 @@ agent tool was introduced. LLM output cannot approve, submit, retry, modify, or 
 | Expose only bounded, allowlisted provenance | PASS (unit and route tests; see CI evidence in PR) |
 | Order-intent prompt does not reach the model | PASS (mocked enabled model test) |
 | Explain request does not call gateway submission/modification/close | PASS (gateway spies in API test) |
-| Automated regression / lint | PASS locally: 17 targeted tests; Ruff E9/F; compileall and `git diff --check`. Hosted CI pending PR |
+| Automated regression / lint | PASS locally: 17 targeted tests; Ruff E9/F; compileall and `git diff --check`. Hosted CI #152 passed full Gate, real-Redis proof and dashboard bundle |
 | Real MT5 Demo observation | NOT TESTED; not needed for read-only code acceptance and U01 feed remains blocked |
 | Multiple AI officer orchestration | NOT IMPLEMENTED; remains outside this slice |
 | Live trading | NOT ENABLED; no broker or execution action performed |
