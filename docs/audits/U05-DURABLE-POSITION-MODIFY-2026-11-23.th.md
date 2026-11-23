@@ -60,5 +60,9 @@ U05 remains **PARTIAL / BLOCKED**. Local candidate implementation and automated 
 - Paper quote freshness uses the adapter's injected virtual clock; real broker
   adapters continue to use wall-clock freshness. The checks retain stale and
   future quote rejection in both modes.
+- The hosted run exposed a dev-test dependency drift: the same `fakeredis 2.40.0`
+  passed with `redis 8.1.0` but failed during test setup with `redis 8.2.0`.
+  Development requirements now constrain Redis to the compatible `<8.2` range;
+  production requirements remain unchanged.
 - The focused seven-file execution/account/bridge regression now passes **152
   tests**, with one pre-existing Starlette/httpx deprecation warning.
