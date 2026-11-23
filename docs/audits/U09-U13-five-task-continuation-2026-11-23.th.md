@@ -55,3 +55,8 @@ Work branch: `feature/u09-u13-five-task-v4`
 ## Rollback
 
 - Revert code/docs commit เพื่อย้อนการเปลี่ยนแอป; เก็บ `alerts.dedupe_fingerprint` และ index ไว้ เพราะเป็น additive migration และไม่ควรลบข้อมูล schema ระหว่าง rollback
+
+## Merge receipt
+
+- GitHub Actions Gate #156 ผ่านทุก job รวม real-Redis proof/self-check, dashboard build และ bundle-size check
+- PR #53 merge เข้า `plan/unified-development-v4` เป็น `7cee568fcdc5b5061d99e9a8393f21aa5c5abde2`

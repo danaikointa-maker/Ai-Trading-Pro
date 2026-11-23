@@ -19,11 +19,8 @@ from fastapi.staticfiles import StaticFiles
 
 from packages.shared_schemas.settings import get_settings
 from services.api_gateway.auth import ensure_demo_user
-from services.api_gateway.ratelimit import RateLimiter, RateLimitMiddleware, build_store
-from services.api_gateway.wsquota import WebSocketQuota, build_lease_store
 from services.api_gateway.netutil import parse_networks
-from services.api_gateway.security import (SecurityHeadersMiddleware,
-                                           parse_origins)
+from services.api_gateway.ratelimit import RateLimiter, RateLimitMiddleware, build_store
 from services.api_gateway.routes import (
     analysis,
     auth,
@@ -38,12 +35,15 @@ from services.api_gateway.routes import (
     risk,
     signals,
     system,
-    trading,
     teams,
+    trading,
+    tradingview,
     users,
     ws,
 )
+from services.api_gateway.security import SecurityHeadersMiddleware, parse_origins
 from services.api_gateway.state import TradingRuntime
+from services.api_gateway.wsquota import WebSocketQuota, build_lease_store
 
 DASHBOARD_DIST = Path(__file__).resolve().parents[2] / "apps" / "web-dashboard" / "dist"
 
@@ -124,7 +124,7 @@ def create_app(runtime: TradingRuntime | None = None) -> FastAPI:
                        csp_mode=str(sh.get("csp_mode", "enforce")),
                        hsts=bool(sh.get("hsts", True)))
     for module in (auth, platform, teams, broker_accounts, system, market, analysis, signals, trading, risk, brokers, backtest,
-               datasets, users, bridge, explain, ws):
+               datasets, users, bridge, explain, tradingview, ws):
         app.include_router(module.router)
 
     @app.get("/api", include_in_schema=False)

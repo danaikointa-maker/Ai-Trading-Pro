@@ -40,7 +40,7 @@ not command idempotency.
 | Notification/outbox, delivery, ownership, modify, readiness, AI explain and API regression | PASS — 270 passed, 1 deselected, 1 existing Starlette/httpx deprecation warning |
 | Chart viewport suite | PASS — 7 passed |
 | Selected Ruff F/E9/I, `compileall`, `git diff --check` | PASS |
-| Hosted CI #150 from the preceding U10 slice: repository Gate, real-Redis proof/self-check, dashboard build and bundle-size check | PASS; this continuation's hosted Gate is pending its PR |
+| Hosted CI #150 from the preceding U10 slice: repository Gate, real-Redis proof/self-check, dashboard build and bundle-size check | PASS; continuation Gate #156 passed and PR #53 merged as `7cee568` |
 | Full repository pytest on Windows | INCONCLUSIVE for repository-wide acceptance: 1,558 passed, 37 skipped, 3 failed and 18 Redis tests errored in 399 seconds. The Redis test server found on this host rejects RESP3 `HELLO`; the 3 UI failures were due to missing worktree `node_modules`/dashboard `dist` and passed after `npm ci`, Vite build, and an isolated rerun. Hosted CI #150 supplied the complete gate and passed. |
 | Broker Demo/Live notification and execution receipts | NOT TESTED; no broker action was sent |
 

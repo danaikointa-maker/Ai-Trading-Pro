@@ -113,6 +113,7 @@
         <SignalCard :gate="live?.gate" />
         <RiskPanel />
         <AlertFeed />
+        <TradingViewLensPanel />
       </div>
     </div>
   </div>
@@ -129,6 +130,7 @@ import RiskPanel from '../components/RiskPanel.vue'
 import SignalCard from '../components/SignalCard.vue'
 import Stat from '../components/Stat.vue'
 import TrendStrip from '../components/TrendStrip.vue'
+import TradingViewLensPanel from '../components/TradingViewLensPanel.vue'
 import { fmt, money, pct } from '../lib/format'
 import { state } from '../lib/store'
 

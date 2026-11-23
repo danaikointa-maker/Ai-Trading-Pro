@@ -39,6 +39,7 @@ DEFAULT_RULES: dict[str, dict[str, float]] = {
     "explain": {"limit": 20, "window_seconds": 60},
     "backtest": {"limit": 6, "window_seconds": 60},
     "train": {"limit": 2, "window_seconds": 3600},
+    "tradingview": {"limit": 120, "window_seconds": 60},
     # The EA polls once a second; 240/min leaves room for a retry without letting a
     # runaway loop hammer the box.
     "bridge": {"limit": 240, "window_seconds": 60},
@@ -53,6 +54,7 @@ RULE_PATHS: tuple[tuple[str, str], ...] = (
     ("/api/backtests", "backtest"),
     ("/api/forecast/train", "train"),
     ("/api/bridge", "bridge"),
+    ("/api/integrations/tradingview", "tradingview"),
 )
 
 # Nothing here costs anything, and blocking the health probe or static assets
