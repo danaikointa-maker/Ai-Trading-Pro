@@ -1,15 +1,15 @@
 # บันทึกทำงานต่อเนื่อง 5 งาน: U09–U13
 
 วันที่: 2026-11-23 (Asia/Bangkok)  
-Planning baseline: `4fa6335`  
-Work branch: `feature/u09-u13-five-task-v4`  
+Planning baseline: `d7106f0f390d75611384f3d2e7c78a610e6aff99` (latest merged V4 plan commit)
+Work branch: `feature/u09-u13-followup-v4-20261123`
 คิวอ้างอิง: `docs/UNIFIED-TASK-REGISTER-V4.md`
 
 ## ผลงานรายงาน
 
 ### U09 — Dashboard
 
-- ตรวจ chart viewport, latest-bar tracking, markers และ symbol matching ซ้ำ: 7 test ผ่าน
+- ตรวจ chart viewport, latest-bar tracking, markers และ symbol matching ซ้ำ: `node --test apps/web-dashboard/tests/chartViewport.test.mjs` — 7 ผ่าน
 - ยังยืนยัน layout ด้วย authenticated desktop/mobile screenshot ไม่ได้ เพราะ Computer Use รายงาน browser host unavailable
 - live MT5 quote, reconnect และ broker clock visual acceptance ยัง NOT TESTED; U09 คง PARTIAL
 
@@ -29,6 +29,7 @@ Work branch: `feature/u09-u13-five-task-v4`
 ### U12 — AI Trader Team
 
 - ตรวจ read-only `/api/explain` และ local text-only AI ตาม audit เดิม; ไม่มี tool calling หรือ gateway execution capability
+- เพิ่ม role/data/Auto-mode/audit/test boundary proposal ใน `docs/audits/U12-AI-TRADER-TEAM-2026-11-23.md`; ยังเป็น design-only
 - Multi-officer orchestration และ independent security review ยังไม่มี จึงคง PARTIAL
 
 ### U13 — Documentation sync
@@ -38,9 +39,10 @@ Work branch: `feature/u09-u13-five-task-v4`
 
 ## หลักฐานทดสอบ
 
+- U09 viewport/chart suite `node --test apps/web-dashboard/tests/chartViewport.test.mjs`: **7 passed**
+- U12 read-only explainer safety unit suite `tests/test_ai_trader_readonly.py`: **4 passed**
 - Notification/outbox, delivery, ownership, modify, readiness, AI explain และ API regression: **270 passed, 1 deselected, 1 existing Starlette/httpx deprecation warning**
 - `tests/test_api.py::test_spa_deep_links_are_served` ถูก deselect เพราะ worktree นี้ยังไม่มี dashboard `dist`; Vite build ผ่านใน PR #52 และไม่มี Vue source change ในชุดนี้
-- `node --test apps/web-dashboard/tests/chartViewport.test.mjs`: **7 passed**
 - `ruff --select E9,F,I`, `compileall`: ผ่าน
 - `git diff --check`: ผ่าน
 
