@@ -11,6 +11,7 @@ import os
 import sys
 import time
 from datetime import datetime, timezone
+from pathlib import Path
 from typing import Any
 from urllib.parse import urlsplit
 
@@ -30,6 +31,45 @@ REQUIRED_SETTINGS = (
     "NO7_MT5_MARKET_EXPECTED_SERVER",
     "NO7_MT5_MARKET_SYMBOL_MAP",
 )
+PUBLISHER_ENV_SETTINGS = frozenset({
+    *REQUIRED_SETTINGS,
+    "NO7_MT5_MARKET_TIMEFRAMES",
+    "NO7_MT5_MARKET_BARS",
+    "NO7_MT5_MARKET_POLL_SECONDS",
+    "NO7_MT5_MARKET_RATES_SECONDS",
+    "NO7_MT5_MARKET_MAX_TICK_AGE_SECONDS",
+    "NO7_MT5_TERMINAL_PATH",
+})
+
+
+def load_publisher_environment(env_path: Path | None = None) -> None:
+    """Load only the market-publisher allowlist from the project .env file.
+
+    Explicit process environment values take precedence. Other project secrets,
+    including the EA bridge token and broker credentials, are never imported.
+    """
+    path = env_path or Path(__file__).resolve().parents[1] / ".env"
+    try:
+        lines = path.read_text(encoding="utf-8-sig").splitlines()
+    except FileNotFoundError:
+        return
+    except OSError as exc:
+        raise RuntimeError("publisher settings file is unreadable") from exc
+
+    for raw_line in lines:
+        line = raw_line.strip()
+        if not line or line.startswith("#"):
+            continue
+        if line.startswith("export "):
+            line = line[7:].lstrip()
+        key, separator, value = line.partition("=")
+        key = key.strip()
+        if not separator or key not in PUBLISHER_ENV_SETTINGS or key in os.environ:
+            continue
+        value = value.strip()
+        if len(value) >= 2 and value[0] == value[-1] and value[0] in {"'", '"'}:
+            value = value[1:-1]
+        os.environ[key] = value
 
 
 def _required_settings() -> dict[str, str]:
@@ -38,6 +78,12 @@ def _required_settings() -> dict[str, str]:
     if missing:
         raise RuntimeError("required environment settings are missing: " + ", ".join(missing))
     return settings
+
+
+def publisher_settings(env_path: Path | None = None) -> dict[str, str]:
+    """Resolve required publisher settings from process environment and local .env."""
+    load_publisher_environment(env_path)
+    return _required_settings()
 
 
 def _expected_login(value: str) -> int:
@@ -122,7 +168,7 @@ def _quote_freshness(info: Any, tick: Any, now: float,
 
 
 def run() -> int:
-    settings = _required_settings()
+    settings = publisher_settings()
     endpoint = _validate_endpoint(settings["NO7_MT5_MARKET_API_URL"])
     token = settings["NO7_MT5_MARKET_PUBLISHER_TOKEN"]
     expected_login = _expected_login(settings["NO7_MT5_MARKET_EXPECTED_LOGIN"])
