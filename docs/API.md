@@ -154,6 +154,15 @@ CORS เป็น **allowlist**: ค่าเริ่มต้นไม่ใ�
 | GET | `/api/analysis/{symbol}` | snapshot เต็ม (trend, structure, zones, indicators, regime) |
 | GET | `/api/analysis/{symbol}/zones` | supports/resistances พร้อม evidence |
 
+### TradingView AI Agent Lens (shadow-only, V4 feature branch)
+
+| Method | Path | Notes |
+|---|---|---|
+| POST | `/api/integrations/tradingview/ai-agent-lens` | Disabled unless `NO7_TRADINGVIEW_ENABLED=true`; JSON envelope `{token,packet}` with a dedicated 32+ character `NO7_TRADINGVIEW_WEBHOOK_TOKEN`; explicit provider→No7 mapping required in `NO7_TRADINGVIEW_SYMBOL_MAP`. Accepts normalized closed-bar evidence, max body 64 KiB, deduplicates by packet hash, bounds retention to seven days/10,000 rows, and returns `quality: shadow_only`. No order/account fields or execution path. |
+| GET | `/api/integrations/tradingview/ai-agent-lens/latest?symbol=&timeframe=&limit=` | JWT required; read-only evidence and exact candle-time comparison when a same-symbol/timeframe No7 signal exists. Lens and No7 scores remain separate. |
+
+Ingress credential is in the JSON envelope body because TradingView alert configuration cannot be assumed to set a custom Authorization header. Do not place it in a URL; require HTTPS at the public ingress, redact request bodies there, and keep the endpoint disabled until a dedicated secret and exact symbol map are configured. For rotation, replace the value in the secret manager/process environment and restart every API worker; verify that the old value returns 401 and a non-sensitive packet with the new value is accepted. Never place either value in a URL, command history or logs. No packet or LLM output can approve a signal or call execution. This adapter is not a quote feed; MT5 remains the price/specification authority.
+
 ## Forecast
 
 | Method | Path | Notes |

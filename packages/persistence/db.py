@@ -40,6 +40,17 @@ CREATE TABLE IF NOT EXISTS signals (
 );
 CREATE INDEX IF NOT EXISTS idx_signals_t ON signals(t DESC);
 
+-- Validated, source-scoped TradingView evidence only. Never stores credentials,
+-- raw webhook bodies, broker account state, or executable orders.
+CREATE TABLE IF NOT EXISTS tradingview_evidence (
+    payload_sha256 TEXT PRIMARY KEY, source_symbol TEXT NOT NULL,
+    mapped_symbol TEXT NOT NULL, timeframe TEXT NOT NULL, event TEXT NOT NULL,
+    bar_close_utc INTEGER NOT NULL, received_at_utc INTEGER NOT NULL,
+    payload TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_tradingview_evidence_latest
+    ON tradingview_evidence(mapped_symbol, timeframe, bar_close_utc DESC);
+
 CREATE TABLE IF NOT EXISTS orders (
     id TEXT PRIMARY KEY, created_at REAL, idempotency_key TEXT UNIQUE,
     state TEXT, broker_id TEXT, symbol TEXT, payload TEXT
@@ -363,6 +374,42 @@ class Database:
     def close(self) -> None:
         with self._lock:
             self._conn.close()
+
+    def store_tradingview_evidence(self, evidence: dict[str, Any], *,
+                                   max_age_seconds: int = 604800,
+                                   max_rows: int = 10000) -> bool:
+        """Insert normalized advisory evidence with bounded retention.
+
+        Returns False for an idempotent duplicate. Raw webhook data and secrets
+        are never accepted by this persistence method.
+        """
+        digest = str(evidence.get("payload_sha256") or "")
+        required = ("source_symbol", "mapped_symbol", "timeframe", "event",
+                    "bar_close_utc", "received_at_utc")
+        if len(digest) != 64 or any(key not in evidence for key in required):
+            raise ValueError("invalid normalized TradingView evidence")
+        payload = json.dumps(evidence, sort_keys=True, separators=(",", ":"),
+                             ensure_ascii=False, allow_nan=False)
+        now = float(evidence["received_at_utc"])
+        with self.cursor() as cur:
+            cur.execute(
+                "INSERT OR IGNORE INTO tradingview_evidence "
+                "(payload_sha256,source_symbol,mapped_symbol,timeframe,event,bar_close_utc,received_at_utc,payload) "
+                "VALUES(?,?,?,?,?,?,?,?)",
+                (digest, evidence["source_symbol"], evidence["mapped_symbol"],
+                 evidence["timeframe"], evidence["event"], evidence["bar_close_utc"],
+                 evidence["received_at_utc"], payload),
+            )
+            inserted = cur.rowcount == 1
+            cur.execute("DELETE FROM tradingview_evidence WHERE received_at_utc < ?",
+                        (now - max(0, int(max_age_seconds)),))
+            cur.execute(
+                "DELETE FROM tradingview_evidence WHERE payload_sha256 IN "
+                "(SELECT payload_sha256 FROM tradingview_evidence "
+                "ORDER BY received_at_utc DESC LIMIT -1 OFFSET ?)",
+                (max(1, int(max_rows)),),
+            )
+        return inserted
 
     # ------------------------------------------------------------------- kv
     def kv_get(self, key: str, default: Any = None) -> Any:

@@ -62,6 +62,7 @@ def test_rules_follow_the_route():
     assert RateLimiter.rule_for("/api/explain", "POST") == "explain"
     assert RateLimiter.rule_for("/api/backtests", "POST") == "backtest"
     assert RateLimiter.rule_for("/api/forecast/train", "POST") == "train"
+    assert RateLimiter.rule_for("/api/integrations/tradingview/ai-agent-lens", "POST") == "tradingview"
     # A GET never spends the order budget, and unknown paths fall through.
     assert RateLimiter.rule_for("/api/trading/order", "GET") == "default"
     assert RateLimiter.rule_for("/api/system/config", "GET") == "default"
