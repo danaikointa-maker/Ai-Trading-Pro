@@ -28,7 +28,8 @@ account's alert. Gateway command behavior is unchanged.
 | Existing unknown position-modify intent does not resend | PASS — `tests/test_position_modify_intents.py::test_gateway_does_not_retry_unknown_modify_intent` |
 | Readiness and smart-entry notification regression | PASS — focused suite, 143 passed total |
 | Selected Ruff F/E9, `compileall`, `git diff --check` | PASS |
-| Full repository pytest on Windows | INCONCLUSIVE for repository-wide acceptance: 1,558 passed, 37 skipped, 3 failed and 18 Redis tests errored in 399 seconds. The Redis test server found on this host rejects RESP3 `HELLO`; the 3 UI failures were due to missing worktree `node_modules`/dashboard `dist` and passed after `npm ci`, Vite build, and an isolated rerun. Hosted CI remains the complete acceptance gate. |
+| Hosted CI #150: repository Gate, real-Redis proof/self-check, dashboard build and bundle-size check | PASS |
+| Full repository pytest on Windows | INCONCLUSIVE for repository-wide acceptance: 1,558 passed, 37 skipped, 3 failed and 18 Redis tests errored in 399 seconds. The Redis test server found on this host rejects RESP3 `HELLO`; the 3 UI failures were due to missing worktree `node_modules`/dashboard `dist` and passed after `npm ci`, Vite build, and an isolated rerun. Hosted CI #150 supplied the complete gate and passed. |
 | Dedupe persistence across process restart | NOT TESTED; current event cache is in-memory and bounded by 300 seconds |
 | Broker Demo/Live notification and execution receipts | NOT TESTED; no broker action was sent |
 
