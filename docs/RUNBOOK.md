@@ -46,6 +46,13 @@ Broker Manager บันทึก Demo/Live เป็นคนละ managed-acc
 > จะ **แก้โค้ด** ไม่ใช่แค่ดูแลระบบ: `./scripts/dev_setup.sh` ติดตั้งทุกอย่างให้ในคำสั่งเดียว
 > และ [`DEVELOPMENT.md`](DEVELOPMENT.md) อธิบายแผนที่โค้ด/เกต/งานถัดไป
 
+### Local AI explainer
+
+`NO7_LOCAL_AI_ENABLED` ปิดเป็นค่าเริ่มต้น (`false`). เมื่อเปิดใช้ จะเรียก Ollama-compatible
+text generation เพื่อเรียบเรียงคำอธิบายจาก fact sheet เท่านั้น; ไม่มี tools หรือ broker credentials.
+คำถามลักษณะคำสั่งซื้อ/ขายถูกปฏิเสธก่อนเรียกโมเดล. การตั้งค่านี้ไม่เปิด Auto Trading และไม่เปลี่ยน feed,
+Risk Engine หรือ ExecutionGateway.
+
 ```bash
 # ติดตั้งหรือกู้สภาพแวดล้อมพัฒนา (venv + deps + .env + dashboard bundle)
 ./scripts/dev_setup.sh

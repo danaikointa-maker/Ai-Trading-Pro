@@ -54,7 +54,7 @@ Dashboard ใช้ WebSocket เป็นหลัก และ fallback ไป
 | Real-time | WebSocket + REST fallback | dashboard ต้องอัปเดตทุกวินาที แต่ยังต้องใช้ได้ผ่าน proxy ที่ปิด WS |
 | SPA | Vue 3 + vue-router (ไม่ใช่ SSR) | เสิร์ฟ `dist` จาก FastAPI พร้อม catch-all → deep link ใช้ได้ |
 | Forecast | LightGBM multiclass + isotonic + quantile bands | เร็ว, ให้ทั้งความน่าจะเป็นและช่วงราคา; Temporal CNN จะเพิ่มเมื่อพิสูจน์ว่าเหนือกว่า |
-| คำอธิบาย | deterministic template ก่อน, Ollama เป็นตัวเลือก | ระบบต้องอธิบายได้แม้ LLM ไม่ทำงาน และห้าม LLM สั่งออร์เดอร์ |
+| คำอธิบาย | deterministic template ก่อน, Ollama เป็นตัวเลือก | ระบบต้องอธิบายได้แม้ LLM ไม่ทำงาน; fact sheet มี feed/quote/clock provenance แบบ allowlist และตัดคำขอสั่งออร์เดอร์ก่อนเรียก LLM; ไม่มี tool หรือ execution route |
 
 ## 4. Risk Engine
 

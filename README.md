@@ -40,13 +40,16 @@
 | Risk Engine (kill switch, daily/weekly loss, cooldown, spread, news) | ✅ |
 | Execution gateway | มี atomic admission สำหรับ connections ที่ใช้ SQLite DB เดียวกัน; ไม่ใช่ multi-host fencing |
 | Backtest engine + walk-forward + cost model | ✅ |
-| AI Journal / Explainer (deterministic, LLM เป็นตัวเลือก) | ✅ |
+| AI Journal / Explainer (deterministic, LLM เป็นตัวเลือก, read-only provenance) | ✅ |
 | Dashboard (Vue 3 + Tailwind + ECharts + Lightweight Charts) | ✅ 10 หน้า |
 | MQL5 EA durable journal + bridge | claim/outcome replay และ fail-closed guards; ไม่รับรอง broker exactly-once หรือ power-loss durability |
 | Tick storage รายวัน (parquet, lazy) + intra-bar ordering | ✅ |
 | Mobile PWA (ติดตั้งได้, แถบอัปเดต/ออฟไลน์ที่บอกความจริง) | ✅ |
 | TLS (uvicorn หรือ reverse proxy) + security headers/CORS allowlist | ✅ |
 | Telegram / LINE แจ้งเตือน | ✅ ส่งจริงผ่าน HTTP (retry/pacing/redact) — ยังไม่ทดสอบกับปลายทางจริง |
+
+AI Explainer เป็นผู้ช่วยอธิบายข้อมูลตลาดแบบอ่านอย่างเดียว ไม่ใช่ทีม agent ที่สั่งงานโค้ดหรือส่งคำสั่งเทรด;
+รายละเอียดขอบเขตและหลักฐานของ U12 อยู่ที่ [`docs/audits/U12-AI-TRADER-TEAM-2026-11-23.md`](docs/audits/U12-AI-TRADER-TEAM-2026-11-23.md).
 
 ## เริ่มต้นใช้งาน (Linux/macOS/Windows, ไม่ต้องมี MT5)
 
