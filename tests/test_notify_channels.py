@@ -129,6 +129,24 @@ def test_duplicate_alerts_are_deduped_without_extra_network_calls(db):
     assert second.meta["deduped"] is True
 
 
+def test_event_dedupe_key_isolated_per_account_and_action(db):
+    transport = FakeTransport()
+    notifier = build(db, env={"TELEGRAM_BOT_TOKEN": "tok", "TELEGRAM_CHAT_ID": "42"},
+                     transport=transport, telegram_enabled=True, dedupe_seconds=0,
+                     min_interval_seconds=0)
+    first = notifier.emit("warning", "Management modify: unknown", "ticket T-1",
+                          symbol="XAUUSD", dedupe_key="account-a:T-1:sl-1995", dedupe_seconds=300)
+    repeated = notifier.emit("warning", "Management modify: unknown", "ticket T-1",
+                             symbol="XAUUSD", dedupe_key="account-a:T-1:sl-1995", dedupe_seconds=300)
+    other_account = notifier.emit("warning", "Management modify: unknown", "ticket T-1",
+                                  symbol="XAUUSD", dedupe_key="account-b:T-1:sl-1995", dedupe_seconds=300)
+
+    assert first.id.startswith("A")
+    assert repeated.id.startswith("D")
+    assert other_account.id.startswith("A")
+    assert len(transport.calls) == 2
+
+
 def test_webhook_payload_is_generic_json(db):
     transport = FakeTransport()
     notifier = build(db, env={}, transport=transport, webhook_enabled=True,

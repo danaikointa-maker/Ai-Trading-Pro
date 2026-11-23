@@ -9,6 +9,7 @@ trading and vice versa.
 """
 from __future__ import annotations
 
+import hashlib
 import json
 import math
 import os
@@ -1032,10 +1033,36 @@ class TradingRuntime:
                                    "rejected" if result.get("ok") is False else "unknown")
         finally:
             try:
-                self.notifier.emit("info" if outcome == "accepted" else "warning",
-                                   f"Management {action.kind} request: {outcome}",
-                                   f"Ticket {action.ticket}. Execution and remaining exposure have not been verified; "
-                                   "reconcile before further action or resending.", dedupe_seconds=0)
+                dedupe_key = None
+                dedupe_seconds = 0
+                try:
+                    identity = self.gateway._assert_account(adapter)
+                    position = next((p for p in self.positions_cache
+                                     if str(p.ticket) == str(action.ticket)), None)
+                    event = {
+                        "broker_id": adapter.id, "account_identity": identity,
+                        "ticket": str(action.ticket), "kind": action.kind,
+                        "reason": str(getattr(action, "reason", "")),
+                        "new_sl": getattr(action, "new_sl", None),
+                        "volume": getattr(action, "volume", None), "outcome": outcome,
+                        "position": ({"symbol": position.symbol, "direction": position.direction.value,
+                                      "entry": position.entry, "open_time": position.open_time}
+                                     if position else None),
+                    }
+                    canonical = json.dumps(event, sort_keys=True, separators=(",", ":"),
+                                           allow_nan=False, default=str)
+                    dedupe_key = hashlib.sha256(canonical.encode("utf-8")).hexdigest()
+                    dedupe_seconds = 300
+                except Exception:
+                    # Missing account identity must not cause one account's alert
+                    # to suppress another account's event. Emit without dedupe.
+                    pass
+                self.notifier.emit(
+                    "info" if outcome == "accepted" else "warning",
+                    f"Management {action.kind} request: {outcome}",
+                    f"Ticket {action.ticket}. Execution and remaining exposure have not been verified; "
+                    "reconcile before further action or resending.",
+                    dedupe_seconds=dedupe_seconds, dedupe_key=dedupe_key)
             except Exception:
                 # Do not mask an action exception or suggest that resending is safe.
                 self._log_error("management_notification", RuntimeError("management request notification failed"))
