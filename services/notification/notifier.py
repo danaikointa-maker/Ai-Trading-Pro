@@ -555,8 +555,10 @@ class Notifier:
 
     # -------------------------------------------------------------------- public
     def emit(self, level: str, title: str, message: str, symbol: str | None = None,
-             meta: dict[str, Any] | None = None, dedupe_seconds: int | None = None) -> Alert:
-        key = f"{level}:{title}:{symbol}"
+             meta: dict[str, Any] | None = None, dedupe_seconds: int | None = None,
+             dedupe_key: str | None = None) -> Alert:
+        key = (f"{level}:event:{dedupe_key}" if dedupe_key
+               else f"{level}:{title}:{symbol}")
         now = time.time()
         window = self.dedupe_seconds if dedupe_seconds is None else dedupe_seconds
         if window and now - self._last.get(key, 0) < window:

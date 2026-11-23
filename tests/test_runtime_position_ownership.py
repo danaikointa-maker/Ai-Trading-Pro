@@ -760,6 +760,30 @@ def test_management_notifications_report_acknowledgement_not_execution(managed, 
     operation.assert_called_once()
 
 
+def test_management_alert_dedupe_key_is_account_and_action_scoped(managed):
+    runtime, broker, _ = managed
+    runtime.notifier = Mock()
+    runtime.gateway.modify = Mock(return_value=False)
+    runtime.gateway._assert_account = Mock(side_effect=[
+        {"broker_id": "demo", "workspace_id": "default", "server": "Demo", "login": "123"},
+        {"broker_id": "demo", "workspace_id": "default", "server": "Demo", "login": "456"},
+    ])
+    action = SimpleNamespace(kind="modify", ticket="T-1", new_sl=1995.0,
+                             volume=None, reason="trailing")
+
+    TradingRuntime._apply_action(runtime, action, {}, adapter=broker)
+    TradingRuntime._apply_action(runtime, action, {}, adapter=broker)
+
+    first, second = runtime.notifier.emit.call_args_list
+    assert first.kwargs["dedupe_seconds"] == 300
+    assert second.kwargs["dedupe_seconds"] == 300
+    assert first.kwargs["dedupe_key"] != second.kwargs["dedupe_key"]
+    runtime.gateway.modify.assert_has_calls([
+        ((broker, "T-1"), {"sl": 1995.0, "reason": "trailing"}),
+        ((broker, "T-1"), {"sl": 1995.0, "reason": "trailing"}),
+    ])
+
+
 @pytest.mark.parametrize("fails", [False, True])
 def test_management_notification_failure_preserves_action_outcome_without_retry(managed, fails):
     runtime, _, _ = managed
