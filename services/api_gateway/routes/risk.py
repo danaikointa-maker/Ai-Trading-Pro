@@ -103,9 +103,14 @@ def calculator(symbol: str = "XAUUSD", points: float = 750, lot: float = 0.01,
                sl_points: float | None = None,
                runtime: TradingRuntime = Depends(get_runtime), user=Depends(current_user)):
     spec = runtime.adapter.symbol_spec(symbol)
-    out = {"points": points_calculator(spec, points, lot), "spec": spec.model_dump()}
+    out = {"points": points_calculator(spec, points, lot), "spec": spec.model_dump(),
+           "provenance": {"market_feed": runtime.market.effective_mode,
+                          "spec_source": spec.source, "rate_source": spec.rate_source,
+                          "account_currency": spec.account_currency,
+                          "spec_complete": spec.spec_complete}}
     if balance is not None and risk_pct is not None and sl_points:
         out["lot_for_risk"] = runtime.planner.lot_for_risk(spec, balance, risk_pct, sl_points)
-    out["disclaimer"] = ("Uses the symbol's actual point / tick size / contract size from the connected "
-                         "account. Excludes spread, commission and swap.")
+    out["disclaimer"] = ("Gross and net are estimates in account currency. Net after known costs "
+                         "subtracts typical spread and commission; swap and slippage are excluded. "
+                         "The result is not a profit guarantee.")
     return out

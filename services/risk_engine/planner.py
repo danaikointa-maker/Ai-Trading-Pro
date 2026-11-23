@@ -513,23 +513,47 @@ class TradePlanner:
         return spec.normalize_lot(equity * risk_pct / 100.0 / loss_per_lot)
 
 
-def points_calculator(spec: SymbolSpec, points: float, lot: float) -> dict[str, float]:
-    """Mirror of the dashboard calculator, but using the *live* contract specs."""
+def points_calculator(spec: SymbolSpec, points: float, lot: float) -> dict[str, Any]:
+    """Account-currency P&L estimate from one broker/declared symbol spec."""
     price_move = points * spec.point
-    gross = price_move * spec.contract_size * lot
-    commission = spec.commission_per_lot_round_turn * lot
+    same_currency = spec.profit_currency.upper() == spec.account_currency.upper()
+    rate = float(spec.quote_to_account_rate)
+    rate_known = (math.isfinite(rate) and rate > 0 and (
+        (same_currency and spec.rate_source == "identity" and rate == 1.0)
+        or (not same_currency and spec.rate_source == "ticker")
+    ))
+    valuation_valid = bool(spec.spec_complete and rate_known)
+    gross = spec.pnl_in_account_currency(price_move, lot) if valuation_valid else None
+    commission = (spec.commission_per_lot_round_turn * lot) if valuation_valid else None
+    spread_cost = (spec.spread_typical_points * spec.value_per_point_per_lot * lot
+                   if valuation_valid else None)
+    net_after_commission = gross - commission if gross is not None and commission is not None else None
+    net_after_known_costs = (gross - commission - spread_cost
+                             if gross is not None and commission is not None and spread_cost is not None
+                             else None)
     return {
         "points": points,
         "point_size": spec.point,
         "lot": lot,
         "contract_size": spec.contract_size,
         "price_move": round(price_move, spec.digits),
-        "value_per_point_per_lot": round(spec.value_per_point_per_lot, 4),
-        "gross_profit": round(gross, 2),
-        "commission": round(commission, 2),
-        "net_profit": round(gross - commission, 2),
-        "currency": spec.profit_currency,
-        "spread_cost": round(spec.spread_typical_points * spec.value_per_point_per_lot * lot, 2),
+        "value_per_point_per_lot": (round(spec.value_per_point_per_lot, 4)
+                                     if valuation_valid else None),
+        "gross_profit": round(gross, 2) if gross is not None else None,
+        "commission": round(commission, 2) if commission is not None else None,
+        "net_profit": round(net_after_commission, 2) if net_after_commission is not None else None,
+        "spread_cost": round(spread_cost, 2) if spread_cost is not None else None,
+        "net_after_known_costs": (round(net_after_known_costs, 2)
+                                  if net_after_known_costs is not None else None),
+        "currency": spec.account_currency,
+        "profit_currency": spec.profit_currency,
+        "account_currency": spec.account_currency,
+        "rate_source": spec.rate_source,
+        "spec_source": spec.source,
+        "spec_complete": spec.spec_complete,
+        "valuation_valid": valuation_valid,
+        "valuation_reason": ("" if valuation_valid else
+                             "symbol specification or account-currency conversion is unresolved"),
     }
 
 

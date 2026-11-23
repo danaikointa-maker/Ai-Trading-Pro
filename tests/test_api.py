@@ -326,13 +326,25 @@ def test_zones_endpoint_separates_statuses(client, auth):
     assert len(body["supports"]) >= 3 and len(body["resistances"]) >= 3
 
 
-def test_points_calculator_uses_live_spec(client, auth):
+def test_points_calculator_reports_runtime_spec_and_provenance(client, auth):
     res = client.get("/api/market/calculator?symbol=XAUUSD&points=500&lot=0.01", headers=auth)
     assert res.status_code == 200
     body = res.json()
     assert body["spec"]["point"] == 0.01
     assert body["result"]["price_move"] == 5.0
-    assert "excludes" in body["disclaimer"].lower() or "Excludes" in body["disclaimer"]
+    assert body["result"]["currency"] == body["spec"]["account_currency"]
+    assert body["provenance"]["spec_source"] == body["spec"]["source"]
+    assert body["provenance"]["market_feed"] == "simulate"
+    assert "swap" in body["disclaimer"].lower() and "slippage" in body["disclaimer"].lower()
+
+
+def test_risk_calculator_uses_the_same_account_currency_core(client, auth):
+    response = client.get("/api/risk/calculator?symbol=XAUUSD&points=500&lot=0.01", headers=auth)
+    assert response.status_code == 200
+    body = response.json()
+    assert body["points"]["gross_profit"] == 5.0
+    assert body["points"]["currency"] == body["spec"]["account_currency"]
+    assert body["provenance"]["spec_source"] == body["spec"]["source"]
 
 
 def test_risk_settings_round_trip(client, auth):
