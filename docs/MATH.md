@@ -158,6 +158,19 @@ recovery_factor     = net / (max_dd × starting_balance)
 `equity` ระหว่าง backtest = balance (บวก/ลบ pnl ที่ปิดแล้ว) + floating ของไม้ที่เปิด ✅
 (ก่อนหน้านี้ balance ไม่ถูกอัปเดต ทำให้ equity แบนและ return = 0)
 
+### TradingView shadow outcome study (offline research only)
+
+`services/strategy_engine/tradingview_shadow.py` รับเฉพาะ canonical closed-bar UTC rows และ evidence/No7 decision ที่ตรง symbol, timeframe, close-time. เวลาเข้าใช้ `open` ของแท่งถัดไปที่เริ่มหลัง evidence/decision พร้อมใช้ แล้ววัดการเปลี่ยนราคาถึง close ตามจำนวนแท่ง:
+
+```
+gross_points = direction × (exit_close − entry_open) / point
+cost_points  = spread_points + 2 × slippage_points_per_side
+               + commission_round_turn / (value_per_point_per_lot × reference_lot)
+net_points   = gross_points − cost_points
+```
+
+การศึกษานี้ใช้ broker-sourced `SymbolSpec` และค่า cost แบบคงที่ที่ผู้เรียกส่งมา; ไม่จำลอง SL/TP, margin, intrabar fill, swap หรือ spread ที่เปลี่ยนตามเวลา และ **ไม่ใช่ backtest ของระบบเทรดหรือกำไรขาดทุนบัญชี**. ต้องมี Lens corpus, No7 availability timestamps และ historical cost series ก่อนสรุปผลจริง; ดู `docs/audits/U16-U18-followup-2026-11-23.th.md`.
+
 ## 9. สิ่งที่ยังเป็นการประมาณ (ไม่ใช่บั๊ก แต่ต้องรู้)
 
 | เรื่อง | สถานะ |

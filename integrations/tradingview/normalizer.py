@@ -11,6 +11,18 @@ from packages.shared_schemas.tradingview import (
     TradingViewLensPacket,
 )
 
+TIMEFRAME_TO_NO7 = {
+    "1": "M1", "3": "M3", "5": "M5", "15": "M15", "30": "M30",
+    "60": "H1", "120": "H2", "240": "H4", "1440": "D1", "10080": "W1",
+    "D": "D1", "W": "W1",
+}
+
+
+def canonical_no7_timeframe(value: str) -> str:
+    """Normalize Lens aliases and No7 labels to one timeframe spelling."""
+    normalized = value.strip().upper()
+    return TIMEFRAME_TO_NO7.get(normalized, normalized)
+
 
 def normalize_lens_packet(raw: dict[str, Any], *, mapped_symbol: str,
                           received_at: float | None = None) -> ExternalAnalysisEvidence:
