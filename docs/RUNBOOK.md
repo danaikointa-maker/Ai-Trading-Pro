@@ -431,6 +431,15 @@ curl -s localhost:8000/api/system/notify -H "Authorization: Bearer $TOK" | jq '.
 | ข้อความยาวเกิน | ตัดให้พอดีลิมิต (Telegram 4096 / LINE 5000) ไม่ให้ผู้ให้บริการตอบ 400 |
 | ส่งไม่สำเร็จ | บันทึกใน `alerts` + `notify_status` (`failures`), `state: "failing"` ใน health |
 
+แจ้งเตือน management ที่มี account/action dedupe key จะเก็บ fingerprint แบบ
+SHA-256 ใน `alerts.dedupe_fingerprint` พร้อมแถว `notify_outbox` ภายใน SQLite
+transaction เดียว ก่อนส่ง เพื่อป้องกัน alert ซ้ำจากหลาย Notifier หรือหลัง restart
+ภายในช่วงที่กำหนด (ปัจจุบัน 300 วินาที) การ migration เพิ่มคอลัมน์และ index แบบ
+additive; ห้ามลบคอลัมน์นี้ขณะ rollback แอป Outbox เป็น at-least-once: หาก provider
+รับข้อความแล้วแต่ response หาย ระบบอาจส่งซ้ำหลัง retry ได้ การ dedupe
+แจ้งเตือนไม่ใช่ idempotency ของ order/modify/close — คำสั่งเทรดใช้ ExecutionGateway
+และต้อง reconcile ผลที่ยังไม่ชัดเจน
+
 **Token ไม่รั่ว**: token ของ Telegram อยู่ใน URL จึงอาจโผล่ในข้อความ error — ทุกสตริงที่ออกจาก
 notifier (status, alert payload, error) ถูกแทนด้วย `***` ก่อนเก็บ/ส่ง และ `status()` แสดงแค่
 `base` (host) ไม่ใช่ token

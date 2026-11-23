@@ -102,7 +102,7 @@ CREATE TABLE IF NOT EXISTS open_positions (
 
 CREATE TABLE IF NOT EXISTS alerts (
     id TEXT PRIMARY KEY, t INTEGER, level TEXT, title TEXT, message TEXT,
-    channel TEXT, payload TEXT
+    channel TEXT, payload TEXT, dedupe_fingerprint TEXT
 );
 CREATE INDEX IF NOT EXISTS idx_alerts_t ON alerts(t DESC);
 
@@ -208,7 +208,8 @@ CREATE INDEX IF NOT EXISTS idx_bridge_commands
 CREATE TABLE IF NOT EXISTS notify_outbox (
     id TEXT PRIMARY KEY, channel TEXT NOT NULL, title TEXT, message TEXT,
     level TEXT, symbol TEXT, created_at REAL NOT NULL, next_attempt_at REAL NOT NULL,
-    attempts INTEGER DEFAULT 0, last_status INTEGER DEFAULT 0, last_error TEXT DEFAULT ''
+    attempts INTEGER DEFAULT 0, last_status INTEGER DEFAULT 0, last_error TEXT DEFAULT '',
+    alert_id TEXT
 );
 CREATE INDEX IF NOT EXISTS idx_notify_outbox ON notify_outbox(next_attempt_at);
 """
@@ -284,6 +285,12 @@ class Database:
             "request_payload": "TEXT NOT NULL DEFAULT '{}'",
             "position_lifetime_fingerprint": "TEXT NOT NULL DEFAULT 'legacy-unscoped'",
         },
+        "alerts": {
+            "dedupe_fingerprint": "TEXT",
+        },
+        "notify_outbox": {
+            "alert_id": "TEXT",
+        },
     }
 
     def _migrate(self) -> None:
@@ -299,6 +306,16 @@ class Database:
                         # another worker added it between the PRAGMA and the ALTER
                         if "duplicate column" not in str(exc).lower():
                             raise
+
+        # Account/action notification dedupe survives process restarts without
+        # introducing a second notification store. Older alerts remain intact.
+        self._conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_alerts_dedupe "
+            "ON alerts(dedupe_fingerprint, t DESC)"
+        )
+        self._conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_notify_outbox_alert ON notify_outbox(alert_id)"
+        )
 
         # Scope the single unresolved intent fence to one broker position
         # lifetime. Existing rows get a conservative legacy sentinel during the
