@@ -514,8 +514,10 @@ def test_confirmed_modify_updates_account_snapshot_without_false_external_change
         db.close()
 
 
-def test_reconcile_accepts_chained_confirmed_modifications_from_stored_baseline(tmp_path):
-    db = Database(tmp_path / "gateway-chained-modifies.db")
+@pytest.mark.parametrize("use_snapshot", [False, True])
+def test_reconcile_accepts_chained_confirmed_modifications_from_stored_baseline(
+        tmp_path, use_snapshot):
+    db = Database(tmp_path / f"gateway-chained-modifies-{use_snapshot}.db")
     adapter, gateway = _gateway_case(db)
     before = adapter.positions.return_value[0]
     first = before.model_copy(update={"sl": 1995.0})
@@ -528,11 +530,16 @@ def test_reconcile_accepts_chained_confirmed_modifications_from_stored_baseline(
 
         assert gateway.modify(adapter, "T-1", sl=1995.0, reason="break-even") is True
         assert gateway.modify(adapter, "T-1", sl=1997.0, reason="trailing") is True
-        result = gateway.reconcile(adapter)
-
-        assert result["ok"] is True
-        assert result["changed_at_broker"] == []
-        assert result["observation_transitions"] == []
+        if use_snapshot:
+            observations = gateway.open_position_snapshot(
+                [second], broker_id="demo", account_identity=gateway._assert_account(adapter),
+                retain_unverified=True)
+            assert all(item["status"] == "baseline_restored" for item in observations)
+        else:
+            result = gateway.reconcile(adapter)
+            assert result["ok"] is True
+            assert result["changed_at_broker"] == []
+            assert result["observation_transitions"] == []
     finally:
         db.close()
 

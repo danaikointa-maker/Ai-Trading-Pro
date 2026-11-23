@@ -27,10 +27,10 @@ An existing event-order regression test lacked the complete Demo snapshot now re
 
 | Check | Result | Evidence |
 |---|---|---|
-| Durable intent focused tests | PASS | `pytest -q tests/test_position_modify_intents.py` — 22 passed |
-| Execution/account/position regression | PASS | `pytest tests/test_position_modify_intents.py tests/test_account_ownership.py tests/test_execution_recovery.py tests/test_bridge_readonly.py tests/test_atomic_execution_claim.py tests/test_smart_entry_continuation.py tests/test_signal_execution.py -q` — 143 passed, 1 pre-existing Starlette/httpx deprecation warning |
+| Durable intent focused tests | PASS | `pytest -q tests/test_position_modify_intents.py` — 25 passed |
+| Execution/account/position regression | PASS | `pytest tests/test_position_modify_intents.py tests/test_account_ownership.py tests/test_execution_recovery.py tests/test_bridge_readonly.py tests/test_atomic_execution_claim.py tests/test_smart_entry_continuation.py tests/test_signal_execution.py -q` — 146 passed, 1 pre-existing Starlette/httpx deprecation warning |
 | Selected Ruff and whitespace checks | PASS | Ruff `--select F,E9` on changed Python files and `git diff --check` |
-| Hosted CI | PENDING | Run after this candidate branch is pushed |
+| Hosted CI | PENDING | Run after the review corrections are pushed |
 | Staging parity after candidate rollout | NOT TESTED | Candidate was not deployed or restarted on VM100 |
 | Backup/restore or rollback drill | NOT TESTED | No stage data was modified |
 | Connext-Demo broker modify and readback receipt | NOT TESTED | No broker command was sent |
@@ -46,3 +46,14 @@ U05 remains **PARTIAL / BLOCKED**. Local candidate implementation and automated 
 
 1. An isolated VM100 staging parity/restart/concurrency/reconciliation check, with a verified backup and rollback path, without touching port 8000.
 2. An authorized Connext-Demo position-modify response plus broker readback/reconciliation receipt. This depends on U01 providing a fresh, verified Demo quote and requires explicit Demo acceptance; Live remains disabled.
+
+## PR review corrections
+
+- Reconciliation follows the ordered confirmed SL transition chain from the
+  stored position baseline in both `reconcile()` and the read-only position
+  snapshot path. Tests cover two confirmed stop improvements before the next
+  snapshot.
+- Repeating the current SL while requesting a different TP now fails closed;
+  explicit TP values must be finite, positive, and aligned to broker tick size.
+- The focused seven-file execution/account/bridge regression now passes **146
+  tests**, with one pre-existing Starlette/httpx deprecation warning.
