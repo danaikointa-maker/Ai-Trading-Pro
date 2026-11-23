@@ -309,9 +309,7 @@ class RiskEngine:
 
     def set_mode(self, mode: TradeMode, actor: str = "user") -> TradeMode:
         if mode == TradeMode.full_auto:
-            allowed = (self.settings.security.get("allow_full_auto")
-                       and self.db.kv_get("full_auto_enabled", False))
-            if not allowed:
+            if not self.full_auto_authorized():
                 raise PermissionError("full auto is locked: enable it in Risk settings and set "
                                       "NO7_ALLOW_FULL_AUTO=true on a demo account")
         self.db.kv_set("trade_mode", mode.value)
@@ -382,8 +380,8 @@ class RiskEngine:
         gate.add("news_lockout", news_ok,
                  f"news lockout: {news_lockout.get('reason') or 'high-impact event window'}")
         if is_full_auto:
-            gate.add("full_auto_lock", bool(self.settings.security.get("allow_full_auto")),
-                     "full auto is disabled by the deployment switch")
+            gate.add("full_auto_lock", self.full_auto_authorized(),
+                     "full auto is disabled by the deployment or Risk Engine switch")
             gate.add("full_auto_score", signal_score >= 85, f"full auto needs score >= 85 (got {signal_score:.0f})")
             gate.add("full_auto_model", model_approved,
                      "full auto requires a model that passed its out-of-sample gates")
@@ -393,8 +391,23 @@ class RiskEngine:
         return gate
 
     # -------------------------------------------------------------- helpers
+    def full_auto_authorized(self) -> bool:
+        """Both independent switches must authorize Full Auto for every cycle."""
+        return bool(self.settings.security.get("allow_full_auto")
+                    and self.db.kv_get("full_auto_enabled", False))
+
     def record_mode(self) -> TradeMode:
-        return TradeMode(self.db.kv_get("trade_mode", TradeMode.manual.value))
+        mode = TradeMode(self.db.kv_get("trade_mode", TradeMode.manual.value))
+        if mode == TradeMode.full_auto and not self.full_auto_authorized():
+            # An old persisted selection cannot keep automation armed after either
+            # independent authorization switch is removed.
+            self.db.kv_set("trade_mode", TradeMode.manual.value)
+            self.db.audit("system", "mode.full_auto_locked", {
+                "previous_mode": TradeMode.full_auto.value,
+                "reason": "deployment or Risk Engine switch is disabled",
+            })
+            return TradeMode.manual
+        return mode
 
     def daily_report(self, now: float | None = None) -> dict[str, Any]:
         now = now or time.time()

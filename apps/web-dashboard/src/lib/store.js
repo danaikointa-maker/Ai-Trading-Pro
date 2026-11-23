@@ -54,6 +54,7 @@ export const permissions = computed(() => {
     role,
     canTrade: rank >= 2,
     canManageUsers: rank >= 3,
+    canControlFullAuto: rank >= 3,
     reason: rank >= 2 ? '' : 'บัญชีนี้เป็น viewer — อ่านได้อย่างเดียว',
   }
 })
@@ -99,8 +100,18 @@ export async function bootstrap() {
 }
 
 export async function refreshTrading() {
-  const data = await api.get('/api/trading/state', { silent: true }).catch(() => null)
+  const [data, config] = await Promise.all([
+    api.get('/api/trading/state', { silent: true }).catch(() => null),
+    api.get('/api/system/config', { silent: true }).catch(() => null),
+  ])
   if (data) state.trading = data
+  if (config) state.config = config
+}
+
+export async function refreshSystemConfig() {
+  const config = await api.get('/api/system/config', { silent: true }).catch(() => null)
+  if (config) state.config = config
+  return config
 }
 
 export function setSymbol(symbol) {
@@ -153,9 +164,8 @@ export function startLive() {
     if (state.transport !== 'ws') {
       const data = await api.get('/api/trading/live', { silent: true }).catch(() => null)
       if (data) applyLive(data, 'polling')
-    } else {
-      await refreshTrading()
     }
+    await refreshTrading()
   }, 5000)
 }
 

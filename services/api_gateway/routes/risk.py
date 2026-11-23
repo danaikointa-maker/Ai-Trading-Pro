@@ -3,7 +3,9 @@ from __future__ import annotations
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
 
+from packages.shared_schemas.models import TradeMode
 from services.api_gateway.deps import current_user, get_runtime
+from services.api_gateway.roles import ADMIN, at_least
 from services.api_gateway.state import TradingRuntime
 from services.risk_engine.planner import points_calculator
 
@@ -41,16 +43,26 @@ def settings_view(runtime: TradingRuntime = Depends(get_runtime), user=Depends(c
 @router.put("/settings")
 def update(payload: RiskUpdate, runtime: TradingRuntime = Depends(get_runtime),
            user=Depends(current_user)):
+    # Changing the deployment-level Full Auto posture is an admin-only action.
+    # Check this before applying any other fields so a mixed payload is atomic
+    # with respect to authorization.
+    if payload.full_auto_enabled is not None and not at_least(user.get("role"), ADMIN):
+        raise HTTPException(status_code=403,
+                            detail="changing the Full Auto security flag requires admin role")
+    if (payload.full_auto_enabled is True
+            and not runtime.settings.security.get("allow_full_auto")):
+        raise HTTPException(status_code=400,
+                            detail="NO7_ALLOW_FULL_AUTO is false in the environment — full auto is locked")
     if payload.limits:
         runtime.risk.update_limits(payload.limits, actor=user["email"])
     if payload.full_auto_enabled is not None:
-        if payload.full_auto_enabled and not runtime.settings.security.get("allow_full_auto"):
-            raise HTTPException(status_code=400,
-                                detail="NO7_ALLOW_FULL_AUTO is false in the environment — full auto is locked")
         runtime.db.kv_set("full_auto_enabled", bool(payload.full_auto_enabled))
         runtime.db.audit(user["email"], "risk.full_auto", {"enabled": payload.full_auto_enabled})
+        if not payload.full_auto_enabled and runtime.mode == TradeMode.full_auto:
+            runtime.set_mode(TradeMode.manual, actor=user["email"])
     return {"ok": True, "limits": runtime.risk.limits().model_dump(),
-            "full_auto_enabled": bool(runtime.db.kv_get("full_auto_enabled", False))}
+            "full_auto_enabled": bool(runtime.db.kv_get("full_auto_enabled", False)),
+            "mode": runtime.mode.value}
 
 
 @router.post("/kill-switch")

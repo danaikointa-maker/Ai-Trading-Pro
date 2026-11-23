@@ -16,6 +16,7 @@ import sqlite3
 import pytest
 
 from packages.persistence.db import Database
+from packages.shared_schemas.models import TradeMode
 from services.api_gateway.auth import hash_password
 from services.api_gateway.roles import (ADMIN, PLATFORM_SUPER_ADMIN, TRADER, VIEWER,
                                         at_least, is_platform_super_admin, normalize_role)
@@ -251,3 +252,83 @@ def test_user_changes_are_audited(client, h):
         assert any(action == "users.update" for action, _ in actions)
     finally:
         _cleanup(client, h, "audited@no7.ai")
+
+
+def test_full_auto_controls_are_admin_only_and_mixed_update_is_atomic(client, h, runtime):
+    trader_token = _make_user(client, h, "auto-control@no7.ai", TRADER)
+    th = {"Authorization": f"Bearer {trader_token}"}
+    old_env = runtime.settings.security.get("allow_full_auto", False)
+    old_enabled = runtime.db.kv_get("full_auto_enabled", False)
+    old_mode = runtime.db.kv_get("trade_mode", TradeMode.manual.value)
+    old_runtime_mode = runtime.mode
+    before_spread = runtime.risk.limits().max_spread_points
+    try:
+        # Exercise authorization even when both positive switches would otherwise
+        # permit the feature. Keep the runtime entry mode at Manual throughout.
+        runtime.settings.security["allow_full_auto"] = True
+        runtime.db.kv_set("full_auto_enabled", False)
+        runtime.db.kv_set("trade_mode", TradeMode.manual.value)
+        runtime.mode = TradeMode.manual
+
+        enable = client.put("/api/risk/settings", json={
+            "limits": {"max_spread_points": before_spread + 1},
+            "full_auto_enabled": True,
+        }, headers=th)
+        assert enable.status_code == 403
+        assert runtime.risk.limits().max_spread_points == before_spread
+        assert runtime.db.kv_get("full_auto_enabled", False) is False
+
+        runtime.db.kv_set("full_auto_enabled", True)
+        disable = client.put("/api/risk/settings", json={
+            "limits": {"max_spread_points": before_spread + 1},
+            "full_auto_enabled": False,
+        }, headers=th)
+        assert disable.status_code == 403
+        assert runtime.risk.limits().max_spread_points == before_spread
+        assert runtime.db.kv_get("full_auto_enabled", False) is True
+
+        mode = client.post("/api/trading/mode", json={"mode": "full_auto"}, headers=th)
+        assert mode.status_code == 403
+        assert runtime.mode == TradeMode.manual
+        assert runtime.db.kv_get("trade_mode") == TradeMode.manual.value
+    finally:
+        runtime.settings.security["allow_full_auto"] = old_env
+        runtime.db.kv_set("full_auto_enabled", old_enabled)
+        runtime.db.kv_set("trade_mode", old_mode)
+        runtime.mode = old_runtime_mode
+        _cleanup(client, h, "auto-control@no7.ai")
+
+
+def test_startup_downgrades_persisted_full_auto_when_switch_is_off(runtime):
+    old_env = runtime.settings.security.get("allow_full_auto", False)
+    old_enabled = runtime.db.kv_get("full_auto_enabled", False)
+    old_mode = runtime.db.kv_get("trade_mode", TradeMode.manual.value)
+    try:
+        runtime.settings.security["allow_full_auto"] = True
+        runtime.db.kv_set("full_auto_enabled", False)
+        runtime.db.kv_set("trade_mode", TradeMode.full_auto.value)
+        assert runtime.risk.record_mode() == TradeMode.manual
+        assert runtime.db.kv_get("trade_mode") == TradeMode.manual.value
+    finally:
+        runtime.settings.security["allow_full_auto"] = old_env
+        runtime.db.kv_set("full_auto_enabled", old_enabled)
+        runtime.db.kv_set("trade_mode", old_mode)
+
+
+def test_environment_lock_rejects_full_auto_before_mixed_limit_update(client, h, runtime):
+    old_env = runtime.settings.security.get("allow_full_auto", False)
+    old_enabled = runtime.db.kv_get("full_auto_enabled", False)
+    before_spread = runtime.risk.limits().max_spread_points
+    try:
+        runtime.settings.security["allow_full_auto"] = False
+        runtime.db.kv_set("full_auto_enabled", False)
+        response = client.put("/api/risk/settings", json={
+            "limits": {"max_spread_points": before_spread + 1},
+            "full_auto_enabled": True,
+        }, headers=h)
+        assert response.status_code == 400
+        assert runtime.risk.limits().max_spread_points == before_spread
+        assert runtime.db.kv_get("full_auto_enabled", False) is False
+    finally:
+        runtime.settings.security["allow_full_auto"] = old_env
+        runtime.db.kv_set("full_auto_enabled", old_enabled)

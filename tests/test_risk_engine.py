@@ -109,6 +109,22 @@ def test_full_auto_needs_env_switch_high_score_and_approved_model(runtime):
     assert "full auto" in joined.lower()
 
 
+def test_full_auto_risk_gate_also_requires_the_risk_engine_switch(runtime):
+    old_env = runtime.settings.security.get("allow_full_auto", False)
+    old_enabled = runtime.db.kv_get("full_auto_enabled", False)
+    try:
+        runtime.settings.security["allow_full_auto"] = True
+        runtime.db.kv_set("full_auto_enabled", False)
+        gate = _gate(runtime, is_full_auto=True, signal_score=100,
+                     model_approved=True, calibrated_probability=1.0)
+        checks = {check["name"]: check for check in gate.checks}
+        assert checks["full_auto_lock"]["ok"] is False
+        assert not gate.allow
+    finally:
+        runtime.settings.security["allow_full_auto"] = old_env
+        runtime.db.kv_set("full_auto_enabled", old_enabled)
+
+
 def test_abnormal_volatility_blocks(runtime):
     gate = _gate(runtime, atr_pct=9.5)
     assert not gate.allow
