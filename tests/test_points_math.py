@@ -51,3 +51,59 @@ def test_lot_grows_with_equity_not_lottery_sizes():
     small = TradePlanner.lot_for_risk(GOLD, 10_000, 0.5, 400)
     big = TradePlanner.lot_for_risk(GOLD, 20_000, 0.5, 400)
     assert big == pytest.approx(small * 2, rel=0.05)
+
+
+def test_points_calculator_converts_gross_profit_to_account_currency():
+    jpy_quoted_usd_account = SymbolSpec(
+        symbol="USDJPY", digits=3, point=0.001, tick_size=0.001,
+        contract_size=100_000, min_lot=0.01, max_lot=50, lot_step=0.01,
+        spread_typical_points=8, commission_per_lot_round_turn=7,
+        profit_currency="JPY", account_currency="USD",
+        quote_to_account_rate=1 / 157.2, rate_source="ticker", source="broker",
+    )
+
+    calc = points_calculator(jpy_quoted_usd_account, points=1000, lot=0.1)
+
+    assert calc["gross_profit"] == pytest.approx(10_000 / 157.2, abs=0.01)
+    assert calc["commission"] == pytest.approx(0.7)
+    assert calc["spread_cost"] == pytest.approx(8 * 0.001 * 100_000 * 0.1 / 157.2, abs=0.01)
+    assert calc["net_profit"] == pytest.approx(calc["gross_profit"] - calc["commission"])
+    assert calc["net_after_known_costs"] == pytest.approx(
+        calc["gross_profit"] - calc["commission"] - calc["spread_cost"])
+    assert calc["currency"] == "USD"
+    assert calc["profit_currency"] == "JPY"
+    assert calc["rate_source"] == "ticker"
+    assert calc["spec_source"] == "broker"
+
+
+def test_points_calculator_suppresses_money_when_fx_rate_is_unknown():
+    unresolved = SymbolSpec(
+        symbol="USDJPY", digits=3, point=0.001, tick_size=0.001,
+        contract_size=100_000, min_lot=0.01, max_lot=50, lot_step=0.01,
+        profit_currency="JPY", account_currency="USD",
+        quote_to_account_rate=1.0, rate_source="unknown", spec_complete=False,
+    )
+
+    calc = points_calculator(unresolved, points=1000, lot=0.1)
+
+    assert calc["valuation_valid"] is False
+    assert calc["gross_profit"] is None
+    assert calc["commission"] is None
+    assert calc["net_profit"] is None
+    assert calc["spread_cost"] is None
+    assert "unresolved" in calc["valuation_reason"]
+
+
+def test_points_calculator_rejects_inconsistent_identity_fx_rate():
+    invalid_identity = SymbolSpec(
+        symbol="EURUSD", digits=5, point=0.00001, tick_size=0.00001,
+        contract_size=100_000, min_lot=0.01, max_lot=50, lot_step=0.01,
+        profit_currency="USD", account_currency="USD",
+        quote_to_account_rate=1.25, rate_source="identity",
+    )
+
+    calc = points_calculator(invalid_identity, points=1000, lot=0.1)
+
+    assert calc["valuation_valid"] is False
+    assert calc["gross_profit"] is None
+    assert calc["net_profit"] is None

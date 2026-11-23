@@ -155,7 +155,7 @@ CORS เป็น **allowlist**: ค่าเริ่มต้นไม่ใ�
 | GET | `/api/market/ticker?symbol=` | last/bid/ask/spread |
 | POST | `/api/market/publish/mt5` | dedicated `Bearer` market-publisher token; Demo quotes/rates/specs only, separate from EA bridge poll/command queue |
 | GET | `/api/market/specs?symbol=` | digits/point/tick/contract/lot step/stops level |
-| GET | `/api/market/calculator?symbol=&points=&lot=` | points → profit (ไม่รวม spread/commission/swap/slippage) |
+| GET | `/api/market/calculator?symbol=&points=&lot=` | read-only estimate ในสกุลบัญชี; คืน `gross_profit`, `net_profit` หลัง commission, `spread_cost`, `net_after_known_costs`, แหล่ง market/spec/FX และ `valuation_valid`; ไม่คืนยอดเงินเมื่อสเปกหรือ FX ยังไม่ครบ; swap/slippage ไม่รวม |
 | GET | `/api/analysis/{symbol}` | snapshot เต็ม (trend, structure, zones, indicators, regime) |
 | GET | `/api/analysis/{symbol}/zones` | supports/resistances พร้อม evidence |
 
@@ -199,7 +199,7 @@ H080 reload ใช้ approval ของ payload และ DB ร่วมกั
 | GET | `/api/risk/settings` | limits + targets + stops + full_auto requirements |
 | PUT | `/api/risk/settings` | `{limits:{...}}` patch (audit ทุกครั้ง); `full_auto_enabled` เปลี่ยนได้โดย admin เท่านั้น และปิดแล้วจะกลับ Manual หาก Full Auto กำลังเลือกอยู่ |
 | POST | `/api/risk/kill-switch` \| `DELETE` | เปิด/ปิดด้วยมือ |
-| GET | `/api/risk/calculator?symbol=&points=&lot=` | เหมือน market calculator |
+| GET | `/api/risk/calculator?symbol=&points=&lot=` | ใช้ math core เดียวกับ market calculator; read-only และคืน provenance สเปก/FX |
 
 ## Brokers & backtest
 
