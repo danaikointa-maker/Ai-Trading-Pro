@@ -1,6 +1,9 @@
 from __future__ import annotations
 
+import hashlib
+import json
 import math
+import uuid
 
 from fastapi import APIRouter, Depends
 from pydantic import BaseModel
@@ -87,6 +90,27 @@ def explain(payload: ExplainRequest, runtime: TradingRuntime = Depends(get_runti
     observability = _research_observability(runtime, symbol)
     explainer = TradeExplainer(No7LocalAI())
     result = explainer.explain(payload.question, signal, snapshot, forecast, observability)
-    result["facts"] = explainer.fact_sheet(signal, snapshot, forecast, observability)
+    facts = explainer.fact_sheet(signal, snapshot, forecast, observability)
+    officer_team = explainer.officer_team(facts, snapshot.server_time if snapshot else None)
+    request_id = uuid.uuid4().hex
+    officer_team["request_id"] = request_id
+    output_hash = hashlib.sha256(json.dumps(
+        officer_team["officers"], sort_keys=True, ensure_ascii=False, separators=(",", ":")
+    ).encode("utf-8")).hexdigest()
+    workspace_id = str(getattr(runtime.db, "workspace_id", "unknown"))
+    scope_seed = "\0".join((str(user.get("tenant_id") or "unassigned"), workspace_id,
+                            str(snapshot.broker_id if snapshot else "unknown"), symbol))
+    runtime_scope_ref = hashlib.sha256(scope_seed.encode("utf-8")).hexdigest()[:20]
+    runtime.db.audit(user.get("email", "unknown"), "ai.trader_officer_brief", {
+        "request_id": request_id,
+        "runtime_scope_ref": runtime_scope_ref,
+        "source_timestamp": snapshot.server_time if snapshot else None,
+        "freshness": observability.get("quote_status", "unavailable"),
+        "officer_set_version": officer_team["version"],
+        "output_hash": output_hash,
+        "safety_outcome": "read_only_no_execution_capability",
+    })
+    result["facts"] = facts
+    result["officer_team"] = officer_team
     result["llm"] = No7LocalAI().describe()
     return result

@@ -8,7 +8,12 @@ from __future__ import annotations
 from typing import Any
 
 from integrations.no7_local_ai.client import No7LocalAI
-from packages.shared_schemas.models import AnalysisSnapshot, ForecastBundle, Signal, SignalAction
+from packages.shared_schemas.models import (
+    AnalysisSnapshot,
+    ForecastBundle,
+    Signal,
+    SignalAction,
+)
 
 
 class TradeExplainer:
@@ -84,6 +89,135 @@ class TradeExplainer:
                 "invalidation": forecast.invalidation,
             }
         return facts
+
+    @staticmethod
+    def officer_team(facts: dict[str, Any], source_time: int | None = None) -> dict[str, Any]:
+        """Build an advisory-only officer brief from the existing allowlisted facts.
+
+        This is a deterministic role projection, not another model, signal, risk,
+        account or execution engine. No user prompt or private account data enters it.
+        """
+        facts = facts if isinstance(facts, dict) else {}
+        observability = facts.get("observability")
+        observability = observability if isinstance(observability, dict) else {}
+        quote_status = observability.get("quote_status")
+        quote_status = quote_status if quote_status in {"fresh", "stale", "unavailable"} else "unavailable"
+        feed_mode = observability.get("feed_mode")
+        feed_mode = feed_mode if feed_mode in {
+            "simulate", "simulated", "replay", "mt5", "mt5-live",
+            "mt5_demo_publisher", "mt5_demo_publisher_stale", "unknown",
+        } else "unknown"
+        quote_source = observability.get("quote_source")
+        quote_source = quote_source if quote_source in {
+            "broker", "persisted", "mt5_demo_publisher", "unavailable",
+        } else "unavailable"
+        data_quality = facts.get("data_quality")
+        analysis_quality = ("ok" if isinstance(data_quality, dict) and data_quality.get("ok") is True
+                            else "unverified")
+        analysis_ready = quote_status == "fresh" and analysis_quality == "ok"
+        time_basis = observability.get("display_basis")
+        time_basis = time_basis if time_basis in {"utc", "broker_server", "unknown"} else "unknown"
+        freshness = quote_status
+        common = {"source_timestamp": source_time if isinstance(source_time, int) else None,
+                  "time_basis": time_basis, "freshness": freshness,
+                  "analysis_quality": analysis_quality}
+
+        officers: list[dict[str, Any]] = [{
+            "role_id": "market_data_steward",
+            "title": "ผู้ดูแลข้อมูลตลาด",
+            "status": "available" if quote_status == "fresh" else quote_status,
+            "summary": (f"Feed {feed_mode}; quote {quote_status} จาก {quote_source}; "
+                        f"คุณภาพ snapshot {analysis_quality}; เวลาอ้างอิง {time_basis}."),
+            "fact_refs": ["observability.feed_mode", "observability.quote_status",
+                          "observability.quote_source", "observability.display_basis", "data_quality"],
+            **common,
+        }]
+
+        if analysis_ready:
+            trend_rows = facts.get("trend") if isinstance(facts.get("trend"), list) else []
+            trend_labels: list[str] = []
+            for row in trend_rows[:4]:
+                if not isinstance(row, dict):
+                    continue
+                timeframe = row.get("tf")
+                direction = row.get("direction")
+                if timeframe in {"M1", "M3", "M5", "M15", "M30", "H1", "H4", "D1"} \
+                        and direction in {"up", "down", "sideways"}:
+                    trend_labels.append(f"{timeframe} {direction}")
+            zones = facts.get("zones") if isinstance(facts.get("zones"), dict) else {}
+            supports = zones.get("supports") if isinstance(zones.get("supports"), list) else []
+            resistances = zones.get("resistances") if isinstance(zones.get("resistances"), list) else []
+            if trend_labels:
+                summary = "แนวโน้มจาก snapshot เดิม: " + ", ".join(trend_labels)
+                refs = ["trend"]
+            else:
+                summary = "snapshot ปัจจุบันไม่มีข้อมูลแนวโน้มที่ผ่าน allowlist"
+                refs = []
+            if supports or resistances:
+                summary += f"; มีแนวรับ {len(supports)} และแนวต้าน {len(resistances)} รายการใน fact sheet"
+                refs.append("zones")
+            officers.append({
+                "role_id": "structure_analyst",
+                "title": "นักวิเคราะห์โครงสร้าง",
+                "status": "available" if refs else "unavailable",
+                "summary": summary,
+                "fact_refs": refs,
+                **common,
+            })
+        else:
+            reason = ("คุณภาพ snapshot ไม่ผ่านหรือไม่มีหลักฐาน" if quote_status == "fresh"
+                      else "quote ไม่สดหรือไม่มีข้อมูลยืนยัน")
+            officers.append({
+                "role_id": "structure_analyst", "title": "นักวิเคราะห์โครงสร้าง",
+                "status": "unavailable",
+                "summary": f"งดสรุปโครงสร้าง เพราะ{reason}",
+                "fact_refs": ["observability.quote_status", "data_quality"], **common,
+            })
+
+        decision = facts.get("decision")
+        decision = decision if decision in {"BUY", "SELL", "WAIT", "NO_TRADE"} else None
+        signal_status = facts.get("status")
+        signal_status = signal_status if signal_status in {"strong", "valid", "weak", "no_trade"} else None
+        if analysis_ready and decision is not None:
+            signal_summary = f"สรุปสัญญาณเดิม {decision} (สถานะ {signal_status or 'ไม่ระบุ'}); ไม่คำนวณคะแนนหรือแผนใหม่"
+            signal_refs = ["decision"] + (["status"] if signal_status else [])
+            signal_state = "available"
+        else:
+            signal_summary = "ไม่มีสัญญาณสดที่ยืนยันได้ จึงไม่สรุปทิศทาง"
+            signal_refs = ["observability.quote_status", "data_quality"]
+            signal_state = "unavailable"
+        officers.append({
+            "role_id": "signal_analyst", "title": "นักวิเคราะห์สัญญาณ",
+            "status": signal_state, "summary": signal_summary,
+            "fact_refs": signal_refs, **common,
+        })
+        officers.append({
+            "role_id": "risk_officer", "title": "เจ้าหน้าที่ความเสี่ยง",
+            "status": "unavailable",
+            "summary": "ยังไม่มี Risk Engine read model ที่ผูกสิทธิ์บัญชีใน explain route; ไม่อนุมานวงเงินหรืออนุมัติความเสี่ยง",
+            "fact_refs": [], **common,
+        })
+
+        if analysis_ready and decision is not None:
+            chair_summary = f"รวบรวมจาก quote สดและสัญญาณเดิม {decision}; ไม่มีการโหวตเฉลี่ยหรืออนุมัติคำสั่ง"
+            chair_refs = ["observability.quote_status", "decision"]
+            chair_state = "available"
+        else:
+            chair_summary = "ยังสรุปความเห็นร่วมไม่ได้ เพราะข้อมูลตลาดไม่สดหรือสัญญาณไม่พร้อม"
+            chair_refs = ["observability.quote_status", "data_quality"]
+            chair_state = "unavailable"
+        officers.append({
+            "role_id": "desk_chair", "title": "หัวหน้าทีม",
+            "status": chair_state, "summary": chair_summary,
+            "fact_refs": chair_refs, **common,
+        })
+        return {
+            "version": "u12-readonly-v1",
+            "mode": "deterministic_read_only",
+            "account_specific": False,
+            "execution_capability": False,
+            "officers": officers,
+        }
 
     def deterministic_answer(self, question: str, signal: Signal | None,
                              snapshot: AnalysisSnapshot | None, forecast: ForecastBundle | None) -> dict[str, Any]:

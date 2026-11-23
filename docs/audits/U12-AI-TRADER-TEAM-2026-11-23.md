@@ -116,5 +116,16 @@ model-disabled/timeout deterministic fallback; output source-reference validatio
 secret and identifier redaction; role/RBAC access; and spies proving no
 ExecutionGateway submit/modify/close method is called. A separate reviewer must
 review prompt injection, data minimization, output handling and the runtime's
-account scoping. This section is a design proposal only: officers are not yet
-implemented or independently security-reviewed, so U12 remains PARTIAL.
+account scoping. At the date of this design (2026-11-23), officer orchestration
+was not implemented. See the dated continuation below for the current candidate
+and still-open independent review gates.
+
+## 2026-11-24 continuation — deterministic read-only officer brief
+
+- Extended the existing authenticated `POST /api/explain` response with five role cards from one allowlisted fact sheet: Market Data Steward, Structure Analyst, Signal Analyst, Risk Officer and Desk Chair. This reuses `TradeExplainer`, the existing API and existing audit table; it creates no service, agent runtime, model tool, signal/risk/execution engine, database or order route.
+- Cards are deterministic and source-referenced. Each includes status, summary, fact references, source timestamp, time basis, quote freshness and analysis-quality status. Structure/signal/chair conclusions require both a fresh quote and `data_quality.ok=true`; stale or unverified analysis suppresses them. The Risk Officer always reports unavailable until an authorized Risk Engine read model is added. `account_specific` and `execution_capability` are false; no balance, login, position, ticket, user question or raw prompt is included in the officer packet.
+- The existing `/api/explain` text answer remains separate and can use the optional local LLM; order-intent refusal still returns before the model call. Officers cannot change Manual/Semi/Auto, create or alter strategy rules, approve Risk Engine, call ExecutionGateway or issue MT5 commands.
+- Audit uses the existing table and stores request ID, a tenant/workspace/broker/symbol runtime-scope hash (not a verified broker-login identity), source time/freshness, officer version, output hash and fixed safety outcome. It does not store the raw question or prompt.
+- Vue ExplainPanel shows the read-only cards and source refs. It is a text-card surface, not a virtual-office character implementation.
+- Tests: `tests/test_ai_trader_readonly.py` **9 passed**; broader API/account-ownership/workspace-isolation/rate-limit regression **88 passed**; dashboard Vite 8.3.8 build **664 modules**, chart viewport **7 passed**; Ruff E9/F/I, compileall and `git diff --check` passed. One existing Starlette/httpx deprecation warning remains. The broader default Ruff rules also report existing FastAPI `Depends` B008 findings and SIM114 in unchanged observability logic; these are outside the selected repository lint gate.
+- **U12 stays PARTIAL.** Independent prompt/data/account-boundary security review, true account A/B identity isolation, VM100 Office API/service identity and end-to-end Windows↔VM100 connectivity remain NOT TESTED. No Auto/Live or broker action was changed.

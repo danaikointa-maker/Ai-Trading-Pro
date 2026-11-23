@@ -7,9 +7,14 @@
 
 ## AI Trader Team / Explainer
 
-- U12 เพิ่ม feed, quote และ clock provenance แบบ allowlist ให้ fact sheet ใน `/api/explain` และปฏิเสธ
-  คำขอที่มีเจตนาสั่งซื้อ/ขายก่อนส่งข้อความให้ local LLM. ไม่เพิ่ม agent orchestration, tools, API,
-  database หรือสิทธิ์ execution; ยังเป็น text-only explainer และ local model ปิดเป็นค่าเริ่มต้น.
+- U12 เพิ่ม deterministic, read-only officer cards ลงใน `/api/explain` โดย reuse facts, TradeExplainer,
+  auth/RBAC และ audit table เดิม; ไม่มี agent tools, API หรือ database ใหม่. Risk Officer แสดง
+  unavailable เพราะ route ยังไม่มี Risk Engine read model ที่ผูกสิทธิ์บัญชี; output ไม่ account-specific
+  และไม่มี execution capability. Structure/signal/chair ต้องได้ทั้ง quote สดและ `data_quality.ok=true`;
+  quote สดอย่างเดียวไม่รับรองคุณภาพของ analysis snapshot. Independent security review และ
+  account-boundary acceptance ยังไม่ผ่าน.
+- Explain ปฏิเสธคำขอที่มีเจตนาสั่งซื้อ/ขายก่อนส่งข้อความให้ local LLM. Local model ยังปิดเป็นค่าเริ่มต้น;
+  officer cards เป็น deterministic source projection ไม่ใช่คำตอบ LLM แยกตามตัวละคร และไม่เปลี่ยน Auto.
 - การตรวจเจตนาสั่งงานเป็นตัวกรองข้อความแบบ deterministic ไม่ใช่ระบบ authorization; คำสั่งจริงยังต้องผ่าน
   API/RBAC, Risk Engine และ ExecutionGateway ที่มีอยู่. การทดสอบนี้ไม่ใช่ Demo หรือ broker acceptance.
 
