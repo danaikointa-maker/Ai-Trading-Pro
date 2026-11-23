@@ -18,6 +18,7 @@ from packages.shared_schemas.models import BacktestRequest
 from services.backtest_engine.backtester import Backtester
 from services.backtest_engine.model_edge import Prediction, WalkForwardEdge
 from services.market_data.simulator import SyntheticFeed
+from services.strategy_engine.engine import StrategyEngine
 
 BARS = 6000
 
@@ -172,10 +173,23 @@ def test_a_segment_without_enough_history_degrades_to_the_proxy(settings, m5_fra
 
 
 # -------------------------------------------------------- reaches the decision
-def test_the_model_forecast_changes_what_the_engine_does(engine, proxy_report, monkeypatch):
-    """If swapping the forecast changed nothing, the whole exercise would be theatre."""
+def test_the_model_forecast_reaches_the_strategy_engine(engine, monkeypatch):
+    """Prove the walk-forward forecast actually reaches strategy evaluation.
+
+    Requiring this one synthetic series to produce more trades made the suite
+    depend on whether its separate structure, plan, and risk gates happened to
+    allow an entry. The contract under test is the forecast hand-off itself;
+    those gates must remain free to reject every order.
+    """
     backtester, candles, spec = engine
-    base = proxy_report
+    observed_forecasts = []
+    original_generate = StrategyEngine.generate
+
+    def capture_forecast(self, ctx, symbol, broker_id, mode, tick, broker_health,
+                         forecast, equity, now=None):
+        observed_forecasts.append(forecast)
+        return original_generate(self, ctx, symbol, broker_id, mode, tick,
+                                 broker_health, forecast, equity, now)
 
     def confident_bull(self, i):
         seg = self._segment_for(i)
@@ -185,11 +199,18 @@ def test_the_model_forecast_changes_what_the_engine_does(engine, proxy_report, m
         return Prediction(p_up=0.93, p_side=0.04, p_down=0.03, approved=True, segment=seg.index)
 
     monkeypatch.setattr(WalkForwardEdge, "predict", confident_bull)
-    forced = backtester.run(candles, spec,
-                            BacktestRequest(symbol="XAUUSD", bars=BARS, forecast_source="model"))
-    assert (forced.metrics.trades, forced.diagnostics["actionable"]) != \
-           (base.metrics.trades, base.diagnostics["actionable"]), \
-        "the forecast fed to the strategy did not affect a single decision"
+    monkeypatch.setattr(StrategyEngine, "generate", capture_forecast)
+    forced = backtester.run(
+        candles, spec,
+        BacktestRequest(symbol="XAUUSD", bars=BARS, forecast_source="model"))
+
+    model_forecasts = [forecast for forecast in observed_forecasts
+                       if forecast is not None and forecast.method == "walk-forward-model"]
+    assert model_forecasts, "the fitted model forecast never reached strategy evaluation"
+    assert all(forecast.model_approved
+               and forecast.horizons[0].p_up == pytest.approx(0.93)
+               for forecast in model_forecasts)
+    assert forced.diagnostics["model_edge"]["decisions_from_model"] == len(model_forecasts)
 
 
 def test_the_report_says_which_forecast_made_the_decisions(model_report):

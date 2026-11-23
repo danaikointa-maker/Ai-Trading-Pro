@@ -29,6 +29,8 @@ An existing event-order regression test lacked the complete Demo snapshot now re
 |---|---|---|
 | Durable intent focused tests | PASS | `pytest -q tests/test_position_modify_intents.py` — 35 passed |
 | Execution/account/position regression | PASS | `pytest tests/test_position_modify_intents.py tests/test_account_ownership.py tests/test_execution_recovery.py tests/test_bridge_readonly.py tests/test_atomic_execution_claim.py tests/test_smart_entry_continuation.py tests/test_signal_execution.py -q` — 156 passed, 1 pre-existing Starlette/httpx deprecation warning |
+| Full local suite (Windows) | PASS, with platform skip | `python -m pytest -q --ignore=tests/test_redis_real.py` — 1,562 passed, 19 skipped, 1 pre-existing warning. The real-Redis harness is omitted locally because PATH provides Redis 5.0, which cannot negotiate RESP3 `HELLO 3`; hosted CI runs it against a separately fetched Redis server. |
+| Dashboard production bundle | PASS | `npm ci && npm run build` — Vite 5.4.21, 624 modules |
 | Selected Ruff and whitespace checks | PASS | Ruff `--select F,E9` on changed Python files and `git diff --check` |
 | Hosted CI | PENDING | Run after the review corrections are pushed |
 | Staging parity after candidate rollout | NOT TESTED | Candidate was not deployed or restarted on VM100 |
@@ -70,6 +72,12 @@ U05 remains **PARTIAL / BLOCKED**. Local candidate implementation and automated 
   passed with `redis 8.1.0` but failed during test setup with `redis 8.2.0`.
   Development requirements now constrain Redis to the compatible `<8.2` range;
   production requirements remain unchanged.
+- The hosted run also exposed two brittle pre-existing assertions. The model-edge
+  backtest test now checks that a controlled walk-forward forecast reaches
+  `StrategyEngine.generate()` rather than requiring one synthetic series to open
+  an order past unrelated signal/risk gates. The attribution summary test uses a
+  synthetic symbol so the live test-session worker cannot race its exact-count
+  assertion. Neither change relaxes a trading gate or changes runtime behavior.
 - Focused intent tests pass **35**; the seven-file execution/account/bridge
   regression passes **156 tests**, with one pre-existing Starlette/httpx
   deprecation warning.

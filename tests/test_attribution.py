@@ -465,11 +465,15 @@ def test_buckets_are_pruned_so_a_long_session_cannot_grow_without_bound():
 
 def test_summary_reports_both_the_window_and_the_session(runtime):
     runtime.reset_attribution()
-    symbol = runtime.symbols()[0]
-    runtime._decide_symbol(symbol, 10_000.0, Health.connected,
-                           runtime.risk.state(runtime.adapter), time.time())
+    # Use a symbol that the live background worker never processes. The runtime
+    # worker runs during the test session and may otherwise add a second decision
+    # between the explicit decision and this exact-count assertion.
+    symbol = "TEST-ATTRIBUTION"
+    roll = RollingAttribution()
+    roll.add_signal(False, ["entry_conditions"], [], now=time.time())
+    runtime.attribution[symbol] = roll
 
-    body = runtime.attribution_summary()
+    body = runtime.attribution_summary(symbol=symbol)
     assert body["basis"] == "rolling" and body["requested_window_seconds"] == 3600
     assert body["overall"]["signal"]["decisions"] == 1
     assert body["session"]["signal"]["decisions"] == 1
