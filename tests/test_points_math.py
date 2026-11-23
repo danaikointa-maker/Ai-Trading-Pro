@@ -4,7 +4,11 @@ from __future__ import annotations
 import pytest
 
 from packages.shared_schemas.models import SymbolSpec
-from services.risk_engine.planner import points_calculator, TradePlanner
+from services.risk_engine.planner import (
+    TradePlanner,
+    points_calculator,
+    position_size_calculator,
+)
 
 GOLD = SymbolSpec(
     symbol="XAUUSD", digits=2, point=0.01, tick_size=0.01, contract_size=100.0,
@@ -51,6 +55,58 @@ def test_lot_grows_with_equity_not_lottery_sizes():
     small = TradePlanner.lot_for_risk(GOLD, 10_000, 0.5, 400)
     big = TradePlanner.lot_for_risk(GOLD, 20_000, 0.5, 400)
     assert big == pytest.approx(small * 2, rel=0.05)
+
+
+def test_manual_position_size_floors_to_step_and_includes_known_costs():
+    result = position_size_calculator(GOLD, equity=10_000, risk_pct=0.5, sl_points=400)
+
+    assert result["status"] == "ready"
+    assert result["risk_budget"] == 50.0
+    assert result["lot"] == 0.11
+    assert GOLD.lot_is_valid(result["lot"])
+    assert result["estimated_stop_cost"] == pytest.approx(47.52)
+    assert result["estimated_stop_cost"] <= result["risk_budget"]
+
+
+def test_manual_position_size_rejects_minimum_lot_above_budget():
+    result = position_size_calculator(GOLD, equity=100, risk_pct=0.1, sl_points=100)
+
+    assert result["status"] == "no_legal_lot"
+    assert result["lot"] == 0.0
+    assert result["minimum_lot"] == GOLD.min_lot
+    assert result["estimated_stop_cost"] > result["risk_budget"]
+
+
+@pytest.mark.parametrize("equity,risk_pct,sl_points", [
+    (0, 0.5, 100), (-10, 0.5, 100), (1000, 0, 100),
+    (1000, 101, 100), (1000, 0.5, 0), (float("nan"), 0.5, 100),
+])
+def test_manual_position_size_rejects_invalid_inputs(equity, risk_pct, sl_points):
+    result = position_size_calculator(GOLD, equity, risk_pct, sl_points)
+    assert result["status"] == "invalid_input"
+    assert result["lot"] == 0.0
+
+
+def test_manual_position_size_suppresses_unknown_account_currency_value():
+    result = position_size_calculator(
+        SymbolSpec(symbol="USDJPY", digits=3, point=0.001, tick_size=0.001,
+                   contract_size=100_000, min_lot=0.01, max_lot=50, lot_step=0.01,
+                   profit_currency="JPY", account_currency="USD",
+                   quote_to_account_rate=1.0, rate_source="unknown", spec_complete=False),
+        equity=10_000, risk_pct=0.5, sl_points=100,
+    )
+    assert result["status"] == "unavailable"
+    assert result["lot"] is None
+    assert result["estimated_stop_cost"] is None
+
+
+def test_manual_position_size_handles_extreme_finite_values_without_overflow():
+    result = position_size_calculator(
+        GOLD, equity=1e308, risk_pct=100, sl_points=1e-300,
+    )
+    assert result["status"] == "ready"
+    assert result["lot"] == GOLD.max_lot
+    assert result["max_lot_capped"] is True
 
 
 def test_points_calculator_converts_gross_profit_to_account_currency():

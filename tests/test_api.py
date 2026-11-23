@@ -4,7 +4,6 @@ from __future__ import annotations
 import json
 
 
-
 def test_login_returns_token_and_hides_secret(client):
     res = client.post("/api/auth/login", json={"email": "demo@no7.ai", "password": "no7demo1234"})
     assert res.status_code == 200
@@ -74,8 +73,13 @@ def test_trade_review_keeps_original_signal_and_labels_retrospective_outcome(cli
 
 
 def test_trade_review_prefers_immutable_preorder_plan_and_decision_zones(client, auth, runtime):
-    from packages.shared_schemas.models import (Direction, OrderRequest, OrderResult,
-                                                 OrderState, TradeRecord)
+    from packages.shared_schemas.models import (
+        Direction,
+        OrderRequest,
+        OrderResult,
+        OrderState,
+        TradeRecord,
+    )
 
     identity = runtime.gateway._assert_account(runtime.adapter)
     signal_id = "immutable-review-signal-1"
@@ -226,6 +230,8 @@ def test_trade_history_is_scoped_to_active_broker_account(client, auth, runtime)
 def test_ticker_endpoint_retains_quote_when_market_is_closed(client, auth, runtime, monkeypatch):
     from packages.shared_schemas.models import Tick
 
+    # The session runtime may be configured for a publisher in another test.
+    monkeypatch.setitem(runtime.market.publisher, "enabled", False)
     tick = Tick(t=1_700_000_000, bid=2000, ask=2001, spread_points=100, last=2000.5)
     runtime.market.on_ticks({"XAUUSD": tick})
     monkeypatch.setattr(runtime.market.adapter, "ticker", lambda _symbol: (_ for _ in ()).throw(RuntimeError("closed")))
@@ -348,6 +354,42 @@ def test_risk_calculator_uses_the_same_account_currency_core(client, auth):
     assert body["points"]["gross_profit"] == 5.0
     assert body["points"]["currency"] == body["spec"]["account_currency"]
     assert body["provenance"]["spec_source"] == body["spec"]["source"]
+
+
+def test_position_size_calculator_is_a_cost_aware_manual_sandbox(client, auth, runtime, monkeypatch):
+    from unittest.mock import Mock
+
+    monkeypatch.setattr(runtime.gateway, "submit", Mock(side_effect=AssertionError("trade call")))
+    response = client.get(
+        "/api/risk/calculator?symbol=XAUUSD&points=400&lot=0.01&balance=10000&risk_pct=0.5&sl_points=400",
+        headers=auth,
+    )
+
+    assert response.status_code == 200
+    body = response.json()
+    size = body["position_size"]
+    assert size["source"] == "manual_sandbox"
+    assert size["currency"] == body["spec"]["account_currency"]
+    assert size["status"] == "ready"
+    assert body["lot_for_risk"] == size["lot"]
+    assert size["estimated_stop_cost"] <= size["risk_budget"]
+    runtime.gateway.submit.assert_not_called()
+
+
+def test_position_size_calculator_refuses_below_minimum_and_partial_inputs(client, auth):
+    response = client.get(
+        "/api/risk/calculator?symbol=XAUUSD&points=100&lot=0.01&balance=100&risk_pct=0.1&sl_points=100",
+        headers=auth,
+    )
+    assert response.status_code == 200
+    assert response.json()["position_size"]["status"] == "no_legal_lot"
+    assert response.json()["lot_for_risk"] == 0.0
+
+    partial = client.get(
+        "/api/risk/calculator?symbol=XAUUSD&points=100&lot=0.01&balance=100&risk_pct=0.1",
+        headers=auth,
+    )
+    assert partial.status_code == 422
 
 
 def test_risk_settings_round_trip(client, auth):
