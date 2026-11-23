@@ -488,6 +488,9 @@ class ExecutionGateway:
                             and abs(latest[0].sl - normalized_sl) <= spec.tick_size * 1e-6
                             and abs(latest[0].tp - position.tp) <= spec.tick_size * 1e-6)
                 raise BrokerError("duplicate modify intent is unresolved; reconcile before retry")
+            ledger.append(broker_id=adapter.id, ticket=str(ticket), actor="position-manager",
+                          kind="modify", status="requested", account_identity=owner,
+                          detail={**detail, "idempotency_key": idempotency_key})
             if not ledger.transition_modify(broker_id=adapter.id, ticket=str(ticket),
                                             idempotency_key=idempotency_key,
                                             account_identity=owner, state="sending"):

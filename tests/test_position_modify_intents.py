@@ -279,7 +279,8 @@ def test_stale_reserved_intent_is_abandoned_and_retried_once(tmp_path):
         assert rows[1]["idempotency_key"] == key + "-r1"
         events = log.for_ticket(broker_id="demo", ticket="T-1", account_identity=owner)
         assert [event["status"] for event in events] == [
-            "reserved", "abandoned", "reserved", "sending", "accepted_unverified", "confirmed"]
+            "reserved", "abandoned", "reserved", "requested", "sending",
+            "accepted_unverified", "confirmed"]
     finally:
         db.close()
 
