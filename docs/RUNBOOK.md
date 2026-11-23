@@ -863,9 +863,11 @@ sqlite3 storage/db/no7.sqlite3 \
 ## U05 — Durable position modification (V4 candidate)
 
 V4 now carries an additive `position_modify_intents` ledger. Each position stop
-change is reserved and fenced by broker/account/ticket before adapter I/O; an
+change is reserved and fenced by broker/account/ticket/position lifetime before adapter I/O; an
 unresolved `reserved`, `sending`, `accepted_unverified`, or `unknown` intent
-blocks another modification for that account and ticket until reconciliation.
+blocks another modification for that account and position lifetime until
+reconciliation. Legacy rows without a lifetime fingerprint retain a conservative
+`legacy-unscoped` fence.
 The append-only `position_events` log records transitions. A broker acknowledgement
 is not confirmation: the gateway reads the position back and confirms the stop
 and target against the broker's tick size. A stale quote, switched account,

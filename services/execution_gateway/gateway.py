@@ -58,6 +58,25 @@ def _position_evidence(pos: Position | None) -> dict[str, Any] | None:
     return out
 
 
+def _position_lifetime_fingerprint(adapter: BrokerAdapter | None, position: Position) -> str:
+    direction = position.direction.value if isinstance(position.direction, Direction) else str(position.direction)
+    identity: dict[str, Any] = {
+        "open_time": int(position.open_time),
+        "symbol": str(position.symbol),
+        "direction": direction,
+        "entry": float(position.entry),
+    }
+    if adapter is not None and getattr(adapter, "adapter_type", "") == "simulated_mt5":
+        epoch = getattr(adapter, "position_lifetime_epoch", None)
+        if not isinstance(epoch, str) or not epoch.strip():
+            raise BrokerError("paper position lifetime identity unavailable")
+        identity["paper_adapter_epoch"] = epoch
+    try:
+        return PositionEventLog.position_lifetime_fingerprint(identity)
+    except (TypeError, ValueError) as exc:
+        raise BrokerError("position lifetime identity unavailable") from exc
+
+
 class ExecutionGateway:
     def __init__(self, settings: Settings, db: Database) -> None:
         self.settings = settings
@@ -76,6 +95,12 @@ class ExecutionGateway:
                 or v != v.strip() or v == "—" for v in values.values())):
             raise BrokerError("account identity unavailable")
         return values
+
+    @staticmethod
+    def position_lifetime_fingerprints(adapter: BrokerAdapter | None,
+                                       positions: list[Position]) -> dict[str, str]:
+        return {str(position.ticket): _position_lifetime_fingerprint(adapter, position)
+                for position in positions}
 
     def _assert_account(self, adapter: BrokerAdapter) -> dict[str, str]:
         identity = self._account(adapter)
@@ -436,7 +461,9 @@ class ExecutionGateway:
                             "stop is unchanged but requested target differs from broker readback")
                     PositionEventLog(self.db).reconcile_modify_intents(
                         broker_id=adapter.id, account_identity=owner,
-                        positions=positions, tick_size_by_symbol={position.symbol: spec.tick_size})
+                        positions=positions, tick_size_by_symbol={position.symbol: spec.tick_size},
+                        position_lifetime_fingerprints=self.position_lifetime_fingerprints(
+                            adapter, positions))
                     return True
                 raise BrokerError("requested stop would widen existing protection")
             quote = tick.bid if sign > 0 else tick.ask
@@ -450,9 +477,11 @@ class ExecutionGateway:
                     and distance <= spec.freeze_level_points * spec.point):
                 raise BrokerError("requested stop violates broker stops/freeze distance")
 
+            lifetime_fingerprint = _position_lifetime_fingerprint(adapter, position)
             detail = {"sl": normalized_sl, "tp": normalized_tp, "reason": reason,
                       "before_sl": position.sl, "before_tp": position.tp,
-                      "symbol": position.symbol, "tick_size": spec.tick_size}
+                      "symbol": position.symbol, "tick_size": spec.tick_size,
+                      "position_lifetime_fingerprint": lifetime_fingerprint}
             key_source = json.dumps({"owner": owner, "ticket": str(ticket),
                                      "detail": detail}, sort_keys=True,
                                     separators=(",", ":"), allow_nan=False)
@@ -460,7 +489,8 @@ class ExecutionGateway:
             ledger = PositionEventLog(self.db)
             intent = ledger.reserve_modify(broker_id=adapter.id, ticket=str(ticket),
                                            idempotency_key=idempotency_key,
-                                           account_identity=owner, detail=detail)
+                                           account_identity=owner, detail=detail,
+                                           position_lifetime_fingerprint=lifetime_fingerprint)
             base_idempotency_key = idempotency_key
             recovery_generation = 0
             while not intent.get("created") and recovery_generation < 5:
@@ -483,7 +513,8 @@ class ExecutionGateway:
                     intent = ledger.reserve_modify(
                         broker_id=adapter.id, ticket=str(ticket),
                         idempotency_key=idempotency_key,
-                        account_identity=owner, detail=detail)
+                        account_identity=owner, detail=detail,
+                        position_lifetime_fingerprint=lifetime_fingerprint)
                     continue
                 if intent.get("state") == "abandoned":
                     recovery_generation += 1
@@ -491,7 +522,8 @@ class ExecutionGateway:
                     intent = ledger.reserve_modify(
                         broker_id=adapter.id, ticket=str(ticket),
                         idempotency_key=idempotency_key,
-                        account_identity=owner, detail=detail)
+                        account_identity=owner, detail=detail,
+                        position_lifetime_fingerprint=lifetime_fingerprint)
                     continue
                 break
             if not intent.get("created"):
@@ -664,7 +696,9 @@ class ExecutionGateway:
                     continue
             PositionEventLog(self.db).reconcile_modify_intents(
                 broker_id=adapter.id, account_identity=identity,
-                positions=positions, tick_size_by_symbol=tick_sizes)
+                positions=positions, tick_size_by_symbol=tick_sizes,
+                position_lifetime_fingerprints=self.position_lifetime_fingerprints(
+                    adapter, positions))
             missing_at_broker = sorted(set(stored) - set(live))
             unknown_locally = sorted(set(live) - set(stored))
             changed_at_broker = sorted(ticket for ticket in set(live) & set(stored)
@@ -674,7 +708,10 @@ class ExecutionGateway:
                 broker = _position_evidence(live[ticket])
                 if PositionEventLog(self.db).confirmed_modify_matches(
                         broker_id=adapter.id, ticket=ticket,
-                        account_identity=identity, before=before, observed=broker):
+                        account_identity=identity,
+                        position_lifetime_fingerprint=self.position_lifetime_fingerprints(
+                            adapter, [live[ticket]]).get(ticket),
+                        before=before, observed=broker):
                     changed_at_broker.remove(ticket)
             events = PositionEventLog(self.db)
             new_observations: list[str] = []
@@ -782,7 +819,9 @@ class ExecutionGateway:
 
     def open_position_snapshot(self, positions: list[Position], broker_id: str | None = None, *,
                                account_identity: dict | None = None,
-                               retain_unverified: bool = False) -> list[dict[str, str]]:
+                               retain_unverified: bool = False,
+                               position_lifetime_fingerprints: dict[str, str] | None = None
+                               ) -> list[dict[str, str]]:
         """Replace the local mirror with the broker's current position list.
 
         Upsert-only snapshots leave rows behind after the last position closes,
@@ -796,6 +835,10 @@ class ExecutionGateway:
                                   or account_identity.get("broker_id") != broker_id
                                   or account_identity.get("workspace_id") != self.db.workspace_id):
             raise BrokerError("safe snapshot requires verified account/workspace identity")
+        if retain_unverified and position_lifetime_fingerprints is None:
+            # This fallback is sufficient for real broker positions. Paper
+            # callers pass the adapter epoch explicitly through this map.
+            position_lifetime_fingerprints = self.position_lifetime_fingerprints(None, positions)
         live_tickets = {pos.ticket for pos in positions}
         if len(live_tickets) != len(positions):
             raise BrokerError("duplicate position tickets; manual reconciliation required")
@@ -834,6 +877,7 @@ class ExecutionGateway:
                         and ledger.confirmed_modify_matches_in_transaction(
                             cur, broker_id=broker_id, ticket=ticket,
                             account_identity=account_identity,
+                            position_lifetime_fingerprint=(position_lifetime_fingerprints or {}).get(ticket),
                             before=before, observed=observed))
                     if expected_modify:
                         verified_modify_tickets.add(ticket)

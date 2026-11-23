@@ -9,6 +9,7 @@ from threading import Barrier
 import multiprocessing
 import hashlib
 import json
+import sqlite3
 
 from packages.shared_schemas.models import Direction, Health, Position, SymbolSpec, Tick
 from packages.persistence.db import Database
@@ -276,7 +277,8 @@ def test_stale_reserved_intent_is_abandoned_and_retried_once(tmp_path):
         adapter.modify_position.assert_called_once()
         rows = db.query("SELECT idempotency_key,state FROM position_modify_intents ORDER BY created_at")
         assert [row["state"] for row in rows] == ["abandoned", "confirmed"]
-        assert rows[1]["idempotency_key"] == key + "-r1"
+        assert rows[0]["idempotency_key"] == key
+        assert rows[1]["idempotency_key"].endswith("-r1")
         events = log.for_ticket(broker_id="demo", ticket="T-1", account_identity=owner)
         assert [event["status"] for event in events] == [
             "reserved", "abandoned", "reserved", "requested", "sending",
@@ -578,6 +580,7 @@ def test_paper_modify_quote_freshness_uses_injected_virtual_clock(
     db = Database(tmp_path / f"paper-virtual-clock-{tick_offset}.db")
     adapter, gateway = _gateway_case(db)
     adapter.adapter_type = "simulated_mt5"
+    adapter.position_lifetime_epoch = "paper-test-epoch"
     virtual_now = 1_000_000.0
     adapter.clock = lambda: virtual_now
     adapter.ticker.return_value = Tick(t=virtual_now + tick_offset, bid=2000, ask=2000.1,
@@ -607,5 +610,122 @@ def test_real_broker_modify_quote_freshness_uses_wall_clock(tmp_path):
 
         adapter.modify_position.assert_not_called()
         assert db.query("SELECT * FROM position_modify_intents") == []
+    finally:
+        db.close()
+
+
+@pytest.mark.parametrize("previous_state", ["confirmed", "unknown"])
+def test_reused_paper_ticket_is_scoped_to_new_position_lifetime(tmp_path, previous_state):
+    db = Database(tmp_path / f"paper-ticket-reuse-{previous_state}.db")
+    first_adapter, first_gateway = _gateway_case(db)
+    first_adapter.adapter_type = "simulated_mt5"
+    first_adapter.position_lifetime_epoch = "paper-epoch-1"
+    virtual_now = 1_000_000.0
+    first_adapter.clock = lambda: virtual_now
+    first_adapter.ticker.return_value = Tick(t=virtual_now, bid=2000, ask=2000.1,
+                                             spread_points=10, last=2000)
+    first_position = first_adapter.positions.return_value[0]
+    first_after = first_position.model_copy(update={"sl": 1995.0})
+    first_adapter.positions.side_effect = (
+        [[first_position], [first_after]] if previous_state == "confirmed"
+        else [[first_position], [first_position]])
+    if previous_state == "unknown":
+        first_adapter.modify_position.side_effect = TimeoutError("lost paper acknowledgement")
+
+    second_adapter, second_gateway = _gateway_case(db)
+    second_adapter.adapter_type = "simulated_mt5"
+    second_adapter.position_lifetime_epoch = "paper-epoch-2"
+    second_adapter.clock = lambda: virtual_now
+    second_adapter.ticker.return_value = Tick(t=virtual_now, bid=2000, ask=2000.1,
+                                              spread_points=10, last=2000)
+    # Identical ticket and position fields deliberately model a deterministic
+    # simulator restart; only the adapter lifetime epoch distinguishes the new
+    # simulated position from the old one.
+    second_position = first_position.model_copy()
+    second_after = second_position.model_copy(update={"sl": 1995.0})
+    second_adapter.positions.side_effect = [[second_position], [second_after]]
+    try:
+        first_result = first_gateway.modify(first_adapter, "T-1", sl=1995.0,
+                                            reason="trailing")
+        assert first_result is (previous_state == "confirmed")
+        first_intent_state = db.query_one(
+            "SELECT state FROM position_modify_intents ORDER BY created_at DESC")["state"]
+        assert first_intent_state == previous_state
+
+        assert second_gateway.modify(second_adapter, "T-1", sl=1995.0,
+                                     reason="trailing") is True
+        second_adapter.modify_position.assert_called_once()
+        intents = db.query(
+            "SELECT position_lifetime_fingerprint,state FROM position_modify_intents "
+            "ORDER BY created_at ASC")
+        assert len(intents) == 2
+        assert intents[0]["position_lifetime_fingerprint"] != \
+            intents[1]["position_lifetime_fingerprint"]
+        assert [row["state"] for row in intents] == [previous_state, "confirmed"]
+    finally:
+        db.close()
+
+
+def test_paper_modify_fails_closed_without_a_lifetime_epoch(tmp_path):
+    db = Database(tmp_path / "paper-missing-epoch.db")
+    adapter, gateway = _gateway_case(db)
+    adapter.adapter_type = "simulated_mt5"
+    try:
+        assert gateway.modify(adapter, "T-1", sl=1995.0, reason="trailing") is False
+
+        adapter.modify_position.assert_not_called()
+        assert db.query("SELECT * FROM position_modify_intents") == []
+    finally:
+        db.close()
+
+
+def test_legacy_unresolved_modify_intent_stays_globally_fenced_after_migration(tmp_path):
+    path = tmp_path / "legacy-modify-intent.db"
+    owner = {"broker_id": "demo", "login": "123", "server": "Connext-Demo",
+             "currency": "USD", "workspace_id": "local"}
+    account_fingerprint = PositionEventLog._account_fingerprint(owner)
+    legacy_detail = {"sl": 1995.0, "tp": None, "before_sl": 1990.0,
+                     "before_tp": 2020.0, "symbol": "XAUUSD", "tick_size": 0.01}
+    legacy_request_hash = hashlib.sha256(
+        json.dumps(legacy_detail, sort_keys=True, allow_nan=False).encode("utf-8")).hexdigest()
+    connection = sqlite3.connect(path)
+    try:
+        connection.execute(
+            "CREATE TABLE workspace_identity(singleton INTEGER PRIMARY KEY, workspace_id TEXT NOT NULL)")
+        connection.execute("INSERT INTO workspace_identity VALUES(1,'local')")
+        connection.execute(
+            "CREATE TABLE position_modify_intents (broker_id TEXT NOT NULL, "
+            "account_fingerprint TEXT NOT NULL, ticket TEXT NOT NULL, "
+            "idempotency_key TEXT NOT NULL, request_hash TEXT NOT NULL, "
+            "request_payload TEXT NOT NULL DEFAULT '{}', state TEXT NOT NULL, "
+            "created_at REAL NOT NULL, updated_at REAL NOT NULL, "
+            "PRIMARY KEY(broker_id,account_fingerprint,ticket,idempotency_key))")
+        connection.execute(
+            "CREATE UNIQUE INDEX idx_position_modify_one_unresolved "
+            "ON position_modify_intents(broker_id,account_fingerprint,ticket) "
+            "WHERE state IN ('reserved','sending','accepted_unverified','unknown')")
+        connection.execute(
+            "INSERT INTO position_modify_intents VALUES(?,?,?,?,?,?,'unknown',1,1)",
+            ("demo", account_fingerprint, "T-1", "legacy-key", legacy_request_hash,
+             json.dumps(legacy_detail, sort_keys=True)))
+        connection.commit()
+    finally:
+        connection.close()
+
+    db = Database(path)
+    try:
+        columns = {row["name"]: row for row in db.query("PRAGMA table_info(position_modify_intents)")}
+        assert columns["position_lifetime_fingerprint"]["dflt_value"] == "'legacy-unscoped'"
+        index_columns = [row["name"] for row in db.query(
+            "PRAGMA index_info(idx_position_modify_one_unresolved)")]
+        assert index_columns == ["broker_id", "account_fingerprint", "ticket",
+                                 "position_lifetime_fingerprint"]
+
+        result = PositionEventLog(db).reserve_modify(
+            broker_id="demo", ticket="T-1", idempotency_key="new-position-key",
+            account_identity=owner, detail={"sl": 1997.0},
+            position_lifetime_fingerprint="new-position-lifetime")
+        assert result["created"] is False and result["blocked"] is True
+        assert db.query_one("SELECT count(*) AS n FROM position_modify_intents")["n"] == 1
     finally:
         db.close()

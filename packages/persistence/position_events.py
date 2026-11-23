@@ -17,6 +17,8 @@ from packages.persistence.db import Database
 
 
 class PositionEventLog:
+    LEGACY_POSITION_LIFETIME = "legacy-unscoped"
+
     def __init__(self, db: Database):
         self.db = db
 
@@ -32,21 +34,37 @@ class PositionEventLog:
                                sort_keys=True, separators=(",", ":"))
         return hashlib.sha256(canonical.encode("utf-8")).hexdigest()
 
-    def reserve_modify(self, *, broker_id: str, ticket: str, idempotency_key: str,
-                       account_identity: dict[str, str], detail: dict[str, Any]) -> dict[str, Any]:
-        """Durably claim one account/ticket modify before broker I/O.
+    @staticmethod
+    def position_lifetime_fingerprint(identity: dict[str, Any]) -> str:
+        """Hash stable identity fields for one open-position lifetime."""
+        required = ("open_time", "symbol", "direction", "entry")
+        if (not isinstance(identity, dict)
+                or any(key not in identity or identity[key] is None for key in required)):
+            raise ValueError("position lifetime identity is incomplete")
+        canonical = json.dumps(identity, sort_keys=True, separators=(",", ":"),
+                               allow_nan=False)
+        return hashlib.sha256(canonical.encode("utf-8")).hexdigest()
 
-        Any unresolved intent fences later changes to the same position. The
-        caller must reconcile it; an ambiguous request is never retried here.
+    def reserve_modify(self, *, broker_id: str, ticket: str, idempotency_key: str,
+                       account_identity: dict[str, str], detail: dict[str, Any],
+                       position_lifetime_fingerprint: str | None = None) -> dict[str, Any]:
+        """Durably claim one account/position-lifetime modify before broker I/O.
+
+        Any unresolved intent fences later changes to the same position lifetime.
+        The caller must reconcile it; an ambiguous request is never retried here.
         """
+        lifetime = (position_lifetime_fingerprint
+                    or detail.get("position_lifetime_fingerprint")
+                    or self.LEGACY_POSITION_LIFETIME) if isinstance(detail, dict) else None
         if (not all(isinstance(value, str) and value.strip() and value == value.strip()
-                    for value in (broker_id, ticket, idempotency_key))
+                    for value in (broker_id, ticket, idempotency_key, lifetime))
                 or not isinstance(account_identity, dict)
                 or account_identity.get("broker_id") != broker_id
                 or account_identity.get("workspace_id") != self.db.workspace_id
                 or not isinstance(detail, dict)):
             raise ValueError("modify intent identity or payload is invalid")
         fingerprint = self._account_fingerprint(account_identity)
+        detail = {**detail, "position_lifetime_fingerprint": lifetime}
         serialized_detail = json.dumps(detail, sort_keys=True, allow_nan=False)
         request_hash = hashlib.sha256(serialized_detail.encode("utf-8")).hexdigest()
         now = time.time()
@@ -54,30 +72,35 @@ class PositionEventLog:
             cur.execute("BEGIN IMMEDIATE")
             existing = cur.execute(
                 "SELECT request_hash,state,updated_at FROM position_modify_intents "
-                "WHERE broker_id=? AND account_fingerprint=? AND ticket=? AND idempotency_key=?",
-                (broker_id, fingerprint, ticket, idempotency_key)).fetchone()
+                "WHERE broker_id=? AND account_fingerprint=? AND ticket=? "
+                "AND position_lifetime_fingerprint=? AND idempotency_key=?",
+                (broker_id, fingerprint, ticket, lifetime, idempotency_key)).fetchone()
             if existing:
                 if existing["request_hash"] != request_hash:
                     raise ValueError("modify idempotency key belongs to another request")
                 return {"created": False, "state": existing["state"],
                         "age_seconds": max(0.0, now - float(existing["updated_at"])),
-                        "account_fingerprint": fingerprint}
+                        "account_fingerprint": fingerprint,
+                        "position_lifetime_fingerprint": lifetime}
             unresolved = cur.execute(
                 "SELECT idempotency_key,state,updated_at FROM position_modify_intents "
                 "WHERE broker_id=? AND account_fingerprint=? AND ticket=? "
+                "AND position_lifetime_fingerprint IN (?,?) "
                 "AND state IN ('reserved','sending','accepted_unverified','unknown')",
-                (broker_id, fingerprint, ticket)).fetchone()
+                (broker_id, fingerprint, ticket, lifetime, self.LEGACY_POSITION_LIFETIME)).fetchone()
             if unresolved:
                 return {"created": False, "blocked": True,
                         "state": unresolved["state"],
                         "age_seconds": max(0.0, now - float(unresolved["updated_at"])),
                         "idempotency_key": unresolved["idempotency_key"],
-                        "account_fingerprint": fingerprint}
+                        "account_fingerprint": fingerprint,
+                        "position_lifetime_fingerprint": lifetime}
             cur.execute(
                 "INSERT INTO position_modify_intents"
-                "(broker_id,account_fingerprint,ticket,idempotency_key,request_hash,request_payload,state,created_at,updated_at) "
-                "VALUES(?,?,?,?,?,?,'reserved',?,?)",
-                (broker_id, fingerprint, ticket, idempotency_key, request_hash,
+                "(broker_id,account_fingerprint,ticket,position_lifetime_fingerprint,"
+                "idempotency_key,request_hash,request_payload,state,created_at,updated_at) "
+                "VALUES(?,?,?,?,?,?,?,'reserved',?,?)",
+                (broker_id, fingerprint, ticket, lifetime, idempotency_key, request_hash,
                  serialized_detail, now, now))
             event_id = "PE-" + uuid.uuid4().hex
             payload = {"schema_version": 1, "account_identity": account_identity,
@@ -89,7 +112,8 @@ class PositionEventLog:
                 "VALUES(?,NULL,?,?,?,'modify','reserved',?,?)",
                 (event_id, broker_id, ticket, "position-manager",
                  now, json.dumps(payload, sort_keys=True, allow_nan=False)))
-        return {"created": True, "state": "reserved", "account_fingerprint": fingerprint}
+        return {"created": True, "state": "reserved", "account_fingerprint": fingerprint,
+                "position_lifetime_fingerprint": lifetime}
 
     def transition_modify(self, *, broker_id: str, ticket: str, idempotency_key: str,
                           account_identity: dict[str, str], state: str,
@@ -139,7 +163,9 @@ class PositionEventLog:
         return True
 
     def reconcile_modify_intents(self, *, broker_id: str, account_identity: dict[str, str],
-                                 positions: list[Any], tick_size_by_symbol: dict[str, float]) -> list[str]:
+                                 positions: list[Any], tick_size_by_symbol: dict[str, float],
+                                 position_lifetime_fingerprints: dict[str, str] | None = None
+                                 ) -> list[str]:
         """Confirm unresolved intents only when a fresh exact position matches."""
         if (not isinstance(account_identity, dict)
                 or account_identity.get("broker_id") != broker_id
@@ -149,14 +175,18 @@ class PositionEventLog:
         by_ticket = {str(pos.ticket): pos for pos in positions
                      if getattr(pos, "broker_id", None) == broker_id}
         rows = self.db.query(
-            "SELECT ticket,idempotency_key,state,request_payload FROM position_modify_intents "
+            "SELECT ticket,position_lifetime_fingerprint,idempotency_key,state,request_payload "
+            "FROM position_modify_intents "
             "WHERE broker_id=? AND account_fingerprint=? "
             "AND state IN ('sending','accepted_unverified','unknown')",
             (broker_id, fingerprint))
         confirmed: list[str] = []
         for row in rows:
             pos = by_ticket.get(str(row["ticket"]))
-            if pos is None:
+            if (pos is None or not position_lifetime_fingerprints
+                    or position_lifetime_fingerprints.get(str(row["ticket"]))
+                    != row["position_lifetime_fingerprint"]
+                    or row["position_lifetime_fingerprint"] == self.LEGACY_POSITION_LIFETIME):
                 continue
             try:
                 request = json.loads(row["request_payload"])
@@ -186,12 +216,16 @@ class PositionEventLog:
     def confirmed_modify_matches_in_transaction(self, cur: sqlite3.Cursor, *,
                                                broker_id: str, ticket: str,
                                                account_identity: dict[str, str],
+                                               position_lifetime_fingerprint: str | None,
                                                before: dict[str, Any],
                                                observed: dict[str, Any]) -> bool:
         """Check whether only SL/TP changed to the latest confirmed intent."""
         if (not isinstance(account_identity, dict)
                 or account_identity.get("broker_id") != broker_id
-                or account_identity.get("workspace_id") != self.db.workspace_id):
+                or account_identity.get("workspace_id") != self.db.workspace_id
+                or not isinstance(position_lifetime_fingerprint, str)
+                or not position_lifetime_fingerprint.strip()
+                or position_lifetime_fingerprint == self.LEGACY_POSITION_LIFETIME):
             return False
         fingerprint = self._account_fingerprint(account_identity)
         try:
@@ -202,7 +236,9 @@ class PositionEventLog:
             rows = cur.execute(
                 "SELECT state,request_payload FROM position_modify_intents "
                 "WHERE broker_id=? AND account_fingerprint=? AND ticket=? "
-                "ORDER BY created_at ASC,rowid ASC", (broker_id, fingerprint, ticket)).fetchall()
+                "AND position_lifetime_fingerprint=? "
+                "ORDER BY created_at ASC,rowid ASC",
+                (broker_id, fingerprint, ticket, position_lifetime_fingerprint)).fetchall()
             if not rows:
                 return False
 
@@ -259,11 +295,14 @@ class PositionEventLog:
 
     def confirmed_modify_matches(self, *, broker_id: str, ticket: str,
                                   account_identity: dict[str, str],
+                                  position_lifetime_fingerprint: str | None,
                                   before: dict[str, Any], observed: dict[str, Any]) -> bool:
         with self.db.cursor() as cur:
             return self.confirmed_modify_matches_in_transaction(
                 cur, broker_id=broker_id, ticket=ticket,
-                account_identity=account_identity, before=before, observed=observed)
+                account_identity=account_identity,
+                position_lifetime_fingerprint=position_lifetime_fingerprint,
+                before=before, observed=observed)
 
     def linked_order(self, broker_id: str, ticket: str, account_identity: dict) -> str | None:
         if (account_identity.get("broker_id") != broker_id
