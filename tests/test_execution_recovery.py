@@ -15,6 +15,7 @@ from packages.shared_schemas.models import (
     OrderRequest,
     OrderResult,
     OrderState,
+    SymbolSpec,
 )
 from services.execution_gateway.gateway import ExecutionGateway
 
@@ -29,6 +30,8 @@ def execution(tmp_path):
     adapter.account_info.return_value = SimpleNamespace(broker_id=adapter.id, login="123", server="Demo", currency="USD")
     adapter.health.return_value = Health.connected
     adapter.positions.return_value = []
+    adapter.symbol_spec.return_value = SymbolSpec(
+        symbol="XAUUSD", point=0.01, tick_size=0.01, source="broker")
     adapter.order_send.side_effect = BrokerError("transport timeout")
     ExecutionGateway(settings, db)._assert_account(adapter)
     request = OrderRequest(symbol="XAUUSD", side="buy", volume=0.1, sl=1990, tp=2020,
@@ -105,7 +108,7 @@ def test_corrupt_existing_record_never_resends(execution, payload):
 def recovered_position(adapter, **patch):
     return SimpleNamespace(**({"ticket": "ticket-1", "symbol": "XAUUSD", "direction": Direction.up,
                                "volume": 0.1, "entry": 2000, "signal_id": "signal-1",
-                               "broker_id": adapter.id} | patch))
+                               "sl": 1990, "tp": 2020, "broker_id": adapter.id} | patch))
 
 
 @pytest.mark.parametrize("patch", [{"symbol": "EURUSD"}, {"direction": Direction.down},
@@ -223,6 +226,10 @@ def test_corrupt_result_cannot_be_replayed_or_resent(execution):
     ({}, {"fill_price": None}, False),
     ({}, {"fill_price": float("nan")}, False),
     ({}, {"ticket": None}, False),
+    ({"sl": 0}, {}, False),
+    ({"tp": 0}, {}, False),
+    ({"sl": 1990.01}, {}, False),
+    ({"tp": 2019.99}, {}, False),
     ({}, {}, True),
 ])
 def test_immediate_fill_requires_matching_evidence(execution, position_patch, result_patch, duplicate):
@@ -252,6 +259,36 @@ def test_immediate_matching_fill_is_verified(execution):
     )
     adapter.positions.return_value = [recovered_position(adapter)]
     assert ExecutionGateway(settings, db).submit(adapter, request).verified
+
+
+def test_fill_with_missing_protection_fences_new_entries(execution):
+    settings, db, adapter, request, _ = execution
+    adapter.order_send.side_effect = None
+    adapter.order_send.return_value = OrderResult(
+        order_id="adapter-id", idempotency_key="key-1", status=OrderState.filled,
+        ticket="ticket-1", filled_volume=0.1, fill_price=2000)
+    adapter.positions.return_value = [recovered_position(adapter, sl=0)]
+    gateway = ExecutionGateway(settings, db)
+
+    result = gateway.submit(adapter, request)
+    assert result.status == OrderState.filled
+    assert result.verified is False
+    assert "protective SL/TP" in result.message
+    with pytest.raises(BrokerError, match="unresolved"):
+        gateway.submit(adapter, request.model_copy(update={"idempotency_key": "key-2"}))
+    adapter.order_send.assert_called_once()
+
+
+def test_ambiguous_fill_recovery_requires_sl_tp_readback(execution):
+    settings, db, adapter, request, _ = execution
+    gateway = ExecutionGateway(settings, db)
+    assert gateway.submit(adapter, request).status == OrderState.pending
+    adapter.positions.return_value = [recovered_position(adapter, tp=0)]
+
+    replay = gateway.submit(adapter, request)
+    assert replay.status == OrderState.pending
+    assert replay.verified is False
+    assert adapter.order_send.call_count == 1
 
 
 @pytest.mark.parametrize("patch", [{"volume": 0.05}, {"entry": 2001},

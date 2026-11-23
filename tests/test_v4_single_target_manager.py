@@ -2,13 +2,20 @@
 from __future__ import annotations
 
 from types import SimpleNamespace
+from typing import ClassVar
 
+from integrations.brokers.paper import PaperBroker
+from packages.persistence.db import Database
 from packages.shared_schemas.models import (
     Direction,
+    OrderRequest,
+    OrderSide,
     PartialTarget,
     Position,
     SymbolSpec,
+    Tick,
 )
+from services.execution_gateway.gateway import ExecutionGateway
 from services.risk_engine.manager import PositionManager
 
 
@@ -155,12 +162,12 @@ def test_trailing_requires_strict_improvement_even_with_zero_or_negative_step():
     for step_points in (0, -10):
         class Settings:
             @staticmethod
-            def risk_cfg():
+            def risk_cfg(trail_step=step_points):
                 return {"management": {
                     "break_even": {"enabled": False},
                     "trailing": {"enabled": True, "start_after_points": 500,
                                  "mode": "fixed", "distance_points": 100,
-                                 "step_points": step_points},
+                                 "step_points": trail_step},
                     "time_exit": {"enabled": False},
                     "smart_exit": {"enabled": False},
                     "partials": {"enabled": False},
@@ -177,3 +184,53 @@ def test_trailing_requires_strict_improvement_even_with_zero_or_negative_step():
                                    now=2, atr_points=100)
 
         assert not [action for action in actions if action.kind == "modify"]
+
+
+def test_paper_protection_action_uses_gateway_and_confirms_broker_readback(tmp_path):
+    clock = [1000.0]
+
+    class Feed:
+        bid = 2000.0
+        ask = 2000.2
+
+        def ticker(self, _symbol):
+            return Tick(t=clock[0], bid=self.bid, ask=self.ask,
+                        spread_points=20, last=(self.bid + self.ask) / 2)
+
+    class RuntimeSettings:
+        execution: ClassVar[dict[str, int]] = {"position_modify_max_quote_age_seconds": 10}
+
+    spec = _spec()
+    profile = {"id": "paper-protection", "symbols": {
+        "XAUUSD": {name: getattr(spec, name) for name in (
+            "digits", "point", "tick_size", "contract_size", "min_lot", "max_lot",
+            "lot_step", "stops_level_points", "freeze_level_points", "profit_currency",
+            "account_currency", "spec_complete")}}}
+    feed = Feed()
+    adapter = PaperBroker(profile, feed, starting_balance=10_000, clock=lambda: clock[0])
+    db = Database(tmp_path / "paper-protection.sqlite3")
+    try:
+        opened = ExecutionGateway(RuntimeSettings(), db).submit(adapter, OrderRequest(
+            symbol="XAUUSD", side=OrderSide.buy, volume=0.1, sl=1990, tp=2020,
+            signal_id="paper-protection-1"))
+        assert opened.status.value == "filled"
+        assert opened.verified is True
+
+        feed.bid, feed.ask = 2008.0, 2008.2
+        positions = adapter.positions()
+        actions = _protection_manager().evaluate(
+            positions, {"XAUUSD": adapter.symbol_spec("XAUUSD")}, {}, None,
+            now=clock[0], atr_points=100)
+        modify = next(action for action in actions if action.kind == "modify")
+        assert modify.new_sl > positions[0].sl
+
+        assert ExecutionGateway(RuntimeSettings(), db).modify(
+            adapter, modify.ticket, sl=modify.new_sl, reason=modify.reason)
+        updated = adapter.positions()[0]
+        assert updated.sl == modify.new_sl
+        assert updated.tp == 2020
+        assert db.query_one(
+            "SELECT state FROM position_modify_intents WHERE broker_id=? AND ticket=?",
+            (adapter.id, modify.ticket))["state"] == "confirmed"
+    finally:
+        db.close()

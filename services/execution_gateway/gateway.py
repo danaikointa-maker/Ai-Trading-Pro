@@ -12,8 +12,8 @@ database, or ambiguous broker history still needs separate operator reconciliati
 """
 from __future__ import annotations
 
-import json
 import hashlib
+import json
 import math
 import time
 import uuid
@@ -286,7 +286,8 @@ class ExecutionGateway:
                 result.verified = self._verify_fill(adapter, result, request)
                 self._assert_account(adapter)
                 if not result.verified:
-                    result.message += " | fill evidence missing or mismatched (manual reconciliation required)"
+                    result.message += (" | fill or protective SL/TP evidence missing or mismatched; "
+                                       "execution protection required before any new entry")
             self._persist_result(order_id, result, request)
             self.db.audit(actor, "order.result", result.model_dump())
             return result
@@ -347,8 +348,41 @@ class ExecutionGateway:
                 and math.isclose(pos.volume, request.volume, rel_tol=1e-9, abs_tol=1e-9)
                 and math.isclose(pos.volume, result.filled_volume, rel_tol=1e-9, abs_tol=1e-9)
                 and math.isclose(pos.entry, result.fill_price, rel_tol=1e-9, abs_tol=1e-9)
+                and self._protection_matches(adapter, pos, request)
             )
         except Exception:  # noqa: BLE001
+            return False
+
+    @staticmethod
+    def _protection_matches(adapter: BrokerAdapter, position: Position,
+                            request: OrderRequest) -> bool:
+        """Confirm each requested protective level from broker position readback.
+
+        An accepted order/fill receipt does not prove the broker retained its
+        SL/TP. Missing or changed protection leaves the order unverified, which
+        the existing unresolved-order fence uses to stop subsequent entries.
+        Intentionally omitted legacy levels are not asserted here.
+        """
+        expected = (("sl", request.sl), ("tp", request.tp))
+        required = [(field, value) for field, value in expected if value is not None]
+        if not required:
+            return True
+        try:
+            spec = adapter.symbol_spec(request.symbol)
+            tick_size = float(spec.tick_size)
+            if not math.isfinite(tick_size) or tick_size <= 0:
+                return False
+            for field, requested in required:
+                actual = getattr(position, field, None)
+                if (type(actual) not in (int, float) or not math.isfinite(actual)
+                        or actual <= 0 or type(requested) not in (int, float)
+                        or not math.isfinite(requested) or requested <= 0):
+                    return False
+                normalized = spec.round_price(float(requested))
+                if abs(float(actual) - normalized) > tick_size * 1e-6:
+                    return False
+            return True
+        except Exception:  # noqa: BLE001 - unknown symbol metadata cannot verify protection
             return False
 
     def _verify_existing(self, adapter: BrokerAdapter, key: str) -> OrderResult | None:
@@ -377,6 +411,9 @@ class ExecutionGateway:
                    and pos.volume > 0 and math.isfinite(pos.entry) and pos.entry > 0]
         if len(matches) == 1:
             pos = matches[0]
+            request_model = OrderRequest(**request)
+            if not self._protection_matches(adapter, pos, request_model):
+                return None
             result = OrderResult(
                 order_id=row["id"], idempotency_key=key, status=OrderState.filled,
                 message="recovered by reconciliation (order was already live at the broker)",
