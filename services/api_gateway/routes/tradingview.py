@@ -9,18 +9,17 @@ import time
 from fastapi import APIRouter, Depends, HTTPException, Request
 from pydantic import ValidationError
 
-from integrations.tradingview.normalizer import normalize_lens_packet
+from integrations.tradingview.normalizer import (
+    TIMEFRAME_TO_NO7,
+    canonical_no7_timeframe,
+    normalize_lens_packet,
+)
 from services.api_gateway.deps import current_user, get_runtime
 from services.api_gateway.state import TradingRuntime
 
 router = APIRouter(prefix="/api/integrations/tradingview", tags=["tradingview"])
 MAX_BODY_BYTES = 65536
-_NO7_TIMEFRAMES = {
-    "1": "M1", "3": "M3", "5": "M5", "15": "M15", "30": "M30",
-    "60": "H1", "120": "H2", "240": "H4", "1440": "D1", "10080": "W1",
-    "D": "D1", "W": "W1",
-}
-_TV_TIMEFRAMES = {value: key for key, value in _NO7_TIMEFRAMES.items()}
+_TV_TIMEFRAMES = {value: key for key, value in TIMEFRAME_TO_NO7.items()}
 
 
 def _timeframe_seconds(value: str) -> int:
@@ -38,8 +37,7 @@ def _max_age_seconds(timeframe: str) -> int:
 
 
 def _canonical_no7_timeframe(value: str) -> str:
-    normalized = value.strip().upper()
-    return _NO7_TIMEFRAMES.get(normalized, normalized)
+    return canonical_no7_timeframe(value)
 
 
 async def _read_limited(request: Request) -> bytes:

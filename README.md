@@ -41,6 +41,7 @@
 | Execution gateway | มี atomic admission สำหรับ connections ที่ใช้ SQLite DB เดียวกัน; ไม่ใช่ multi-host fencing |
 | Backtest engine + walk-forward + cost model | ✅ |
 | AI Journal / Explainer (deterministic, LLM เป็นตัวเลือก, read-only provenance) | ✅ |
+| TradingView AI Agent Lens | ⚠️ shadow-only; offline outcome-study helper มี unit tests แต่ยังไม่มี corpus จริงหรือ release acceptance ([U16–U18 audit](docs/audits/U16-U18-followup-2026-11-23.th.md)) |
 | Dashboard (Vue 3 + Tailwind + ECharts + Lightweight Charts) | ✅ 10 หน้า |
 | MQL5 EA durable journal + bridge | claim/outcome replay และ fail-closed guards; ไม่รับรอง broker exactly-once หรือ power-loss durability |
 | Tick storage รายวัน (parquet, lazy) + intra-bar ordering | ✅ |

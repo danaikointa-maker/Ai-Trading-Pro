@@ -1,5 +1,10 @@
 # Limitations & Honest Status
 
+## TradingView AI Agent Lens
+
+- Adapter เป็น shadow-only และปิด ingress เป็นค่าเริ่มต้น. Offline helper U16 วัดความสอดคล้องและการเคลื่อนราคาหลังเวลารับข้อมูลด้วยต้นทุนคงที่จาก broker spec; ไม่ใช่ order simulator หรือการทดสอบกลยุทธ์เต็มรูปแบบ.
+- ยังไม่มี historical Lens corpus พร้อม No7 availability timestamps, historical spread/slippage, Pine compiler/Bar Replay, repaint chronology, authenticated responsive UI acceptance, load, Paper reconnect/failure หรือ rollback drill. U16/U17 จึงยัง PARTIAL และ U18 BLOCKED; ผลของ helper ใน synthetic unit tests ไม่ใช่หลักฐานกำไรหรือการยืนยันตลาด.
+
 ## AI Trader Team / Explainer
 
 - U12 เพิ่ม feed, quote และ clock provenance แบบ allowlist ให้ fact sheet ใน `/api/explain` และปฏิเสธ
