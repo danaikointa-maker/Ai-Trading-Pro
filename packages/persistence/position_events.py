@@ -194,27 +194,62 @@ class PositionEventLog:
                 or account_identity.get("workspace_id") != self.db.workspace_id):
             return False
         fingerprint = self._account_fingerprint(account_identity)
-        row = cur.execute(
-            "SELECT state,request_payload FROM position_modify_intents "
-            "WHERE broker_id=? AND account_fingerprint=? AND ticket=? "
-            "ORDER BY created_at DESC LIMIT 1", (broker_id, fingerprint, ticket)).fetchone()
-        if row is None or row["state"] != "confirmed":
-            return False
         try:
-            request = json.loads(row["request_payload"])
             changed = {key for key in before if before.get(key) != observed.get(key)}
-            if (not changed or not changed.issubset({"sl", "tp"})
-                    or request.get("symbol") != observed.get("symbol")
-                    or before.get("sl") != request.get("before_sl")
-                    or before.get("tp") != request.get("before_tp")):
+            if not changed or not changed.issubset({"sl", "tp"}):
                 return False
-            tick_size = float(request.get("tick_size", 0.0))
-            tolerance = tick_size * 1e-6
-            if tolerance <= 0 or not math.isfinite(tolerance):
+
+            rows = cur.execute(
+                "SELECT state,request_payload FROM position_modify_intents "
+                "WHERE broker_id=? AND account_fingerprint=? AND ticket=? "
+                "ORDER BY created_at ASC,rowid ASC", (broker_id, fingerprint, ticket)).fetchall()
+            if not rows:
                 return False
-            expected_tp = request.get("before_tp") if request.get("tp") is None else request.get("tp")
-            return (abs(float(observed["sl"]) - float(request["sl"])) <= tolerance
-                    and abs(float(observed["tp"]) - float(expected_tp)) <= tolerance)
+
+            # A management cycle can confirm more than one strictly improving
+            # stop before the next snapshot is taken. Reconcile the ordered
+            # before/after chain from the stored baseline instead of comparing
+            # only with the latest intent's intermediate before-state.
+            expected_sl = float(before["sl"])
+            expected_tp = float(before["tp"])
+            started = False
+            final_tolerance = 0.0
+            for row in rows:
+                if row["state"] != "confirmed":
+                    if started:
+                        return False
+                    continue
+                request = json.loads(row["request_payload"])
+                if request.get("symbol") != observed.get("symbol"):
+                    if started:
+                        return False
+                    continue
+                tick_size = float(request.get("tick_size", 0.0))
+                tolerance = tick_size * 1e-6
+                if tolerance <= 0 or not math.isfinite(tolerance):
+                    if started:
+                        return False
+                    continue
+                request_before_sl = float(request["before_sl"])
+                request_before_tp = float(request["before_tp"])
+                links_to_chain = (abs(expected_sl - request_before_sl) <= tolerance
+                                  and abs(expected_tp - request_before_tp) <= tolerance)
+                if not started:
+                    if not links_to_chain:
+                        continue
+                    started = True
+                elif not links_to_chain:
+                    return False
+
+                expected_sl = float(request["sl"])
+                expected_tp = (request_before_tp if request.get("tp") is None
+                               else float(request["tp"]))
+                final_tolerance = tolerance
+
+            if not started or final_tolerance <= 0:
+                return False
+            return (abs(float(observed["sl"]) - expected_sl) <= final_tolerance
+                    and abs(float(observed["tp"]) - expected_tp) <= final_tolerance)
         except (ValueError, TypeError, KeyError, AttributeError):
             return False
 

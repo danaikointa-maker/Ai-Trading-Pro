@@ -512,3 +512,41 @@ def test_confirmed_modify_updates_account_snapshot_without_false_external_change
         assert db.query("SELECT * FROM position_events WHERE kind='broker_observation'") == []
     finally:
         db.close()
+
+
+def test_reconcile_accepts_chained_confirmed_modifications_from_stored_baseline(tmp_path):
+    db = Database(tmp_path / "gateway-chained-modifies.db")
+    adapter, gateway = _gateway_case(db)
+    before = adapter.positions.return_value[0]
+    first = before.model_copy(update={"sl": 1995.0})
+    second = before.model_copy(update={"sl": 1997.0})
+    adapter.positions.side_effect = [[before], [first], [first], [second], [second]]
+    try:
+        gateway._assert_account(adapter)
+        db.execute("INSERT INTO open_positions(ticket,payload,updated_at) VALUES(?,?,?)",
+                   (before.ticket, json.dumps(before.model_dump()), time.time()))
+
+        assert gateway.modify(adapter, "T-1", sl=1995.0, reason="break-even") is True
+        assert gateway.modify(adapter, "T-1", sl=1997.0, reason="trailing") is True
+        result = gateway.reconcile(adapter)
+
+        assert result["ok"] is True
+        assert result["changed_at_broker"] == []
+        assert result["observation_transitions"] == []
+    finally:
+        db.close()
+
+
+def test_same_stop_with_different_requested_target_is_not_reported_as_success(tmp_path):
+    db = Database(tmp_path / "gateway-target-mismatch.db")
+    adapter, gateway = _gateway_case(db)
+    position = adapter.positions.return_value[0].model_copy(update={"sl": 1995.0})
+    adapter.positions.return_value = [position]
+    try:
+        assert gateway.modify(adapter, "T-1", sl=1995.0, tp=2030.0,
+                              reason="target-change") is False
+
+        adapter.modify_position.assert_not_called()
+        assert db.query("SELECT * FROM position_modify_intents") == []
+    finally:
+        db.close()

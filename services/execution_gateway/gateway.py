@@ -414,10 +414,19 @@ class ExecutionGateway:
             normalized_sl = spec.round_price(float(sl))
             if abs(normalized_sl - float(sl)) > spec.tick_size * 1e-6:
                 raise BrokerError("requested stop is not normalized to broker tick size")
+            normalized_tp = None
+            if tp is not None:
+                if type(tp) not in (int, float) or not math.isfinite(tp) or tp <= 0:
+                    raise BrokerError("requested target must be finite and positive")
+                normalized_tp = spec.round_price(float(tp))
+                if abs(normalized_tp - float(tp)) > spec.tick_size * 1e-6:
+                    raise BrokerError("requested target is not normalized to broker tick size")
             if (normalized_sl - position.sl) * sign <= 0:
-                # Already satisfied is a safe no-op; do not attempt an equal or
-                # riskier broker change.
                 if abs(normalized_sl - position.sl) <= spec.tick_size * 1e-6:
+                    effective_tp = position.tp if normalized_tp is None else normalized_tp
+                    if abs(effective_tp - position.tp) > spec.tick_size * 1e-6:
+                        raise BrokerError(
+                            "stop is unchanged but requested target differs from broker readback")
                     PositionEventLog(self.db).reconcile_modify_intents(
                         broker_id=adapter.id, account_identity=owner,
                         positions=positions, tick_size_by_symbol={position.symbol: spec.tick_size})
@@ -434,7 +443,7 @@ class ExecutionGateway:
                     and distance <= spec.freeze_level_points * spec.point):
                 raise BrokerError("requested stop violates broker stops/freeze distance")
 
-            detail = {"sl": normalized_sl, "tp": tp, "reason": reason,
+            detail = {"sl": normalized_sl, "tp": normalized_tp, "reason": reason,
                       "before_sl": position.sl, "before_tp": position.tp,
                       "symbol": position.symbol, "tick_size": spec.tick_size}
             key_source = json.dumps({"owner": owner, "ticket": str(ticket),
@@ -497,7 +506,7 @@ class ExecutionGateway:
                 raise BrokerError("could not advance durable modify intent; no command sent")
 
             try:
-                ok = adapter.modify_position(str(ticket), sl=normalized_sl, tp=tp)
+                ok = adapter.modify_position(str(ticket), sl=normalized_sl, tp=normalized_tp)
             except Exception as exc:  # an exception may follow a broker-side change
                 ok = False
                 send_error = str(exc)
@@ -513,7 +522,7 @@ class ExecutionGateway:
             self._assert_account(adapter)
             verified = [pos for pos in verified_positions
                         if str(pos.ticket) == str(ticket) and pos.broker_id == adapter.id]
-            expected_tp = position.tp if tp is None else tp
+            expected_tp = position.tp if normalized_tp is None else normalized_tp
             confirmed = (len(verified) == 1
                          and abs(verified[0].sl - normalized_sl) <= spec.tick_size * 1e-6
                          and abs(verified[0].tp - expected_tp) <= spec.tick_size * 1e-6)
@@ -525,7 +534,7 @@ class ExecutionGateway:
                                              "broker_tp": verified[0].tp if len(verified) == 1 else None,
                                              "adapter_ack": bool(ok), "error": send_error})
             self.db.audit("position-manager", "position.modify",
-                          {"ticket": ticket, "sl": normalized_sl, "tp": tp,
+                          {"ticket": ticket, "sl": normalized_sl, "tp": normalized_tp,
                            "ack": bool(ok), "confirmed": confirmed, "reason": reason})
             return confirmed
         except Exception as exc:  # noqa: BLE001 - fail closed; ambiguity is not rejection
