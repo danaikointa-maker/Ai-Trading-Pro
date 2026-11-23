@@ -54,6 +54,7 @@ export const permissions = computed(() => {
     role,
     canTrade: rank >= 2,
     canManageUsers: rank >= 3,
+    canControlFullAuto: rank >= 3,
     reason: rank >= 2 ? '' : 'บัญชีนี้เป็น viewer — อ่านได้อย่างเดียว',
   }
 })

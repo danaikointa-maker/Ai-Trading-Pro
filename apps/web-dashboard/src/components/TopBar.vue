@@ -53,9 +53,10 @@
             class="rounded-md px-2.5 py-1 text-[10.5px] font-semibold transition"
             :class="mode === m.id ? 'bg-gold-500/15 text-gold-400 ring-1 ring-gold-500/30' : 'text-muted hover:text-slate-200'"
             :title="m.hint"
+            :disabled="!permissions.canTrade || (m.id === 'full_auto' && !canControlFullAuto)"
             @click="changeMode(m.id)"
           >
-            {{ m.label }}<span v-if="m.id === 'full_auto' && !fullAutoAllowed" class="ml-1 opacity-60">🔒</span>
+            {{ m.label }}<span v-if="m.id === 'full_auto' && !canControlFullAuto" class="ml-1 opacity-60">🔒</span>
           </button>
         </div>
 
@@ -84,7 +85,7 @@ import { computed } from 'vue'
 import { useRouter } from 'vue-router'
 import { api } from '../lib/api'
 import { clock, fmt, money, signed } from '../lib/format'
-import { logout, setSymbol, setTimeframe, state, toast } from '../lib/store'
+import { logout, permissions, setSymbol, setTimeframe, state, toast } from '../lib/store'
 
 const router = useRouter()
 const timeframes = ['M1', 'M5', 'M15', 'H1', 'H4']
@@ -105,6 +106,7 @@ const healthTone = computed(() => (health.value === 'connected' ? 'bg-up' : heal
 const fullAutoAllowed = computed(
   () => Boolean(state.config?.security?.allow_full_auto && state.config?.security?.full_auto_enabled),
 )
+const canControlFullAuto = computed(() => permissions.value.canControlFullAuto && fullAutoAllowed.value)
 const initials = computed(() => (state.user?.email || 'N7').slice(0, 2).toUpperCase())
 // The account's role decides what the server will accept; the UI says so rather
 // than letting a viewer discover it through 403s.
@@ -138,6 +140,14 @@ async function switchSymbol(symbol) {
 }
 
 async function changeMode(id) {
+  if (!permissions.value.canTrade) {
+    toast(permissions.value.reason, 'error')
+    return
+  }
+  if (id === 'full_auto' && !canControlFullAuto.value) {
+    toast('Full Auto ต้องเปิดสิทธิ์โดย admin และต้องผ่านสวิตช์ความปลอดภัยทั้งสองชั้น', 'error')
+    return
+  }
   try {
     await api.post('/api/trading/mode', { mode: id })
     toast(`Trading mode → ${id.replace('_', ' ')}`, 'success')
