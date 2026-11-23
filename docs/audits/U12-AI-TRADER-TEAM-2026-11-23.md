@@ -62,7 +62,59 @@ agent tool was introduced. LLM output cannot approve, submit, retry, modify, or 
 
 1. Keep U11 Demo acceptance BLOCKED pending the fresh publisher quote and a separate
    explicit operator authorization; do not send an order in this task.
-2. Keep U12 PARTIAL until a reviewed AI-officer design defines non-execution roles,
-   data boundaries, audit behavior, and proves no duplicated trading engines.
+2. Keep U12 PARTIAL until this design receives an independent security review and
+   any implementation proves the data boundaries and no-duplicate-engine contract.
 3. Continue only with the next unblocked item in the Unified Task Register; do not
    invent additional phases outside V4.
+
+## U12 design follow-up — proposed boundary, not implemented
+
+This proposal would reuse the existing authenticated `/api/explain`,
+`TradeExplainer`, `AnalysisSnapshot`, `Signal`, `TradePlan` and forecast. The
+current explain route does not pass a Risk Engine read model; a future Risk
+Officer may read one only through an existing authorized read-only interface,
+and must report it unavailable until that interface is verified. It does not
+add a second signal/risk/position engine, broker connector, execution API, model
+tool, persistence table or Auto switch.
+
+| Officer role | Reads and reports | Must not do |
+|---|---|---|
+| Market Data Steward | Existing quote source, freshness, timestamp basis and missing-data state | Replace MT5 price/specs or relabel stale/simulated data as live |
+| Structure Analyst | Existing trend, indicators, confirmed zones and structure from the canonical analysis snapshot | Recompute a second indicator/structure engine or promote candidate zones |
+| Signal Analyst | Explain the existing StrategyEngine action, score, reasons and blockers | Create/change a signal, signal score, entry, lot or target |
+| Risk Officer | Explain the existing account-scoped Risk Engine result and blockers when that read model is available | Approve, waive or edit a veto, risk limit, account or position |
+| Desk Chair | Summarize agreement, disagreement, uncertainty and cited fact IDs from the same snapshot | Average officer votes into a new trade score or authorize an order |
+
+The orchestrator should be deterministic and pass one immutable, bounded fact
+packet to the existing text-only model. Each officer response is advisory text
+with role ID, model/prompt version, source fact references, source timestamp and
+freshness. Missing Risk Engine/account context must be reported as unavailable;
+the model must not infer it. Every request is resolved server-side for the
+authenticated user's authorized workspace and selected account. Do not put raw
+login, credentials, terminal paths, private position tickets or another
+account's balance/history into model context. If account scope cannot be verified,
+do not generate an account-specific officer response.
+
+Manual and Semi-Auto officer output is advisory and does not remove the existing
+user confirmation step. In Auto mode, only an already configured deterministic
+rule may enter the existing StrategyEngine → confirmation/freshness → RiskEngine
+→ ExecutionGateway → Windows MT5 path. Officer text, disagreement, or an LLM
+response cannot create/alter that rule, enable Auto, call execution, retry an
+ambiguous command, or override RiskEngine. Auto remains OFF by default and Live
+remains separately locked.
+
+Before implementation, extend or reuse the existing audit trail with a sanitized
+request ID, actor, opaque account-scope reference, snapshot/freshness reference,
+officer-set and prompt version, model version, output hash, and safety outcome.
+Do not persist raw prompts or secrets by default. If the existing audit table is
+insufficient, propose an additive migration and retention/rollback plan before
+writing code.
+
+Required acceptance tests: account A/B isolation; feed-stale and missing-risk
+context refusal; prompt-injection and order-intent handling before model calls;
+model-disabled/timeout deterministic fallback; output source-reference validation;
+secret and identifier redaction; role/RBAC access; and spies proving no
+ExecutionGateway submit/modify/close method is called. A separate reviewer must
+review prompt injection, data minimization, output handling and the runtime's
+account scoping. This section is a design proposal only: officers are not yet
+implemented or independently security-reviewed, so U12 remains PARTIAL.
