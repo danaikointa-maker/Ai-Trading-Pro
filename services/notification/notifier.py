@@ -33,6 +33,7 @@ Design rules, learned the hard way:
 """
 from __future__ import annotations
 
+import hashlib
 import json
 import os
 import queue
@@ -490,11 +491,33 @@ class Notifier:
                 self.outbox.mark_delivered(row["id"])
                 self.outbox.reschedule_channel(channel, moment)
                 sent += 1
+                if row.get("alert_id"):
+                    pending_for_alert = self.db.query_one(
+                        "SELECT 1 FROM notify_outbox WHERE alert_id=? LIMIT 1",
+                        (row["alert_id"],)) is not None
+                    self._record_outbox_alert_delivery(
+                        str(row["alert_id"]),
+                        {"channel": channel, "ok": True,
+                         "status": int(result.get("status") or 0),
+                         "delivery_id": str(row["id"])}, pending_for_alert)
+                self._record_status([{"channel": channel, "ok": True,
+                                      "status": int(result.get("status") or 0),
+                                      "error": ""}])
             else:
                 failed += 1
-                self.outbox.mark_attempt(row["id"], status=int(result.get("status") or 0),
-                                         error=self._redact(result.get("error") or ""),
-                                         now=moment)
+                pending = self.outbox.mark_attempt(
+                    row["id"], status=int(result.get("status") or 0),
+                    error=self._redact(result.get("error") or ""), now=moment)
+                if row.get("alert_id"):
+                    self._record_outbox_alert_delivery(
+                        str(row["alert_id"]),
+                        {"channel": channel, "ok": False,
+                         "status": int(result.get("status") or 0),
+                         "error": self._redact(result.get("error") or ""),
+                         "delivery_id": str(row["id"])}, pending)
+                self._record_status([{"channel": channel, "ok": False,
+                                      "status": int(result.get("status") or 0),
+                                      "error": self._redact(result.get("error") or "")}])
         return {"sent": sent, "failed": failed, "paced": paced, "expired": expired,
                 "pending": self.outbox.pending()}
 
@@ -554,6 +577,76 @@ class Notifier:
         self.db.kv_set(STATUS_KEY, persisted)
 
     # -------------------------------------------------------------------- public
+    def _reserve_durable_dedupe(self, *, alert_id: str, timestamp: int,
+                                level: str, title: str, message: str,
+                                fingerprint: str, window: int,
+                                symbol: str | None = None,
+                                alert_payload: dict[str, Any] | None = None) -> bool:
+        """Atomically claim a keyed event and persist its outbound work.
+
+        Both the claim and outbox records share one SQLite transaction. This
+        closes the crash window between claiming an alert and queueing its delivery.
+        """
+        cutoff = float(timestamp) - max(0, int(window))
+        payload = json.dumps(alert_payload or {"dedupe_fingerprint": fingerprint},
+                             sort_keys=True, default=str)
+        with self.db.cursor() as cur:
+            cur.execute("BEGIN IMMEDIATE")
+            row = cur.execute(
+                "SELECT id FROM alerts WHERE dedupe_fingerprint=? AND t>=? "
+                "ORDER BY t DESC LIMIT 1", (fingerprint, cutoff)).fetchone()
+            if row:
+                return False
+            cur.execute(
+                "INSERT INTO alerts(id,t,level,title,message,channel,payload,dedupe_fingerprint) "
+                "VALUES(?,?,?,?,?,?,?,?)",
+                (alert_id, timestamp, level, title, message, ",".join(self.channels),
+                 payload, fingerprint),
+            )
+            if self.outbox.enabled:
+                for channel in self.external_channels:
+                    count = int(cur.execute(
+                        "SELECT COUNT(*) FROM notify_outbox").fetchone()[0])
+                    extra = count - self.outbox.capacity + 1
+                    if extra > 0:
+                        evicted = cur.execute(
+                            "SELECT id FROM notify_outbox ORDER BY created_at ASC LIMIT ?",
+                            (extra,),
+                        ).fetchall()
+                        cur.executemany("DELETE FROM notify_outbox WHERE id=?",
+                                        [(row[0],) for row in evicted])
+                        self.outbox.overflowed += len(evicted)
+                    cur.execute(
+                        "INSERT INTO notify_outbox(id,channel,title,message,level,symbol,"
+                        "created_at,next_attempt_at,attempts,last_status,last_error,alert_id) "
+                        "VALUES(?,?,?,?,?,?,?,?,?,?,?,?)",
+                        (f"OB{uuid.uuid4().hex[:12]}", channel, title, message, level,
+                         symbol or "", float(timestamp), float(timestamp), 0, 0, "", alert_id),
+                    )
+        return True
+
+    def _record_outbox_alert_delivery(self, alert_id: str, delivery: dict[str, Any],
+                                      pending: bool) -> None:
+        row = self.db.query_one("SELECT payload FROM alerts WHERE id=?", (alert_id,))
+        if row is None:
+            return
+        try:
+            payload = json.loads(row["payload"] or "{}")
+        except (TypeError, json.JSONDecodeError):
+            payload = {}
+        deliveries = payload.get("delivery")
+        if not isinstance(deliveries, list):
+            deliveries = []
+        deliveries = [item for item in deliveries
+                      if not isinstance(item, dict) or item.get("channel") != delivery.get("channel")]
+        deliveries.append(delivery)
+        payload["delivery"] = deliveries
+        payload["delivery_state"] = "queued" if pending else (
+            "completed" if all(item.get("ok") is True for item in deliveries
+                                if isinstance(item, dict)) else "failed")
+        self.db.execute("UPDATE alerts SET payload=? WHERE id=?",
+                        (json.dumps(payload, default=str), alert_id))
+
     def emit(self, level: str, title: str, message: str, symbol: str | None = None,
              meta: dict[str, Any] | None = None, dedupe_seconds: int | None = None,
              dedupe_key: str | None = None) -> Alert:
@@ -561,13 +654,38 @@ class Notifier:
                else f"{level}:{title}:{symbol}")
         now = time.time()
         window = self.dedupe_seconds if dedupe_seconds is None else dedupe_seconds
-        if window and now - self._last.get(key, 0) < window:
-            return Alert(id=f"D{int(now)}", t=int(now), level=level, title=title,
-                         message=message, channel="deduped", symbol=symbol,
-                         meta={**(meta or {}), "deduped": True})  # type: ignore[arg-type]
+        fingerprint = None
+        alert_id = f"A{uuid.uuid4().hex[:8]}"
+        level_out = level if level in {"info", "success", "warning", "critical"} else "warning"
+        if level_out != level:
+            payload = {**(meta or {}), "level_coerced_from": level}
+        else:
+            payload = {**(meta or {})}
 
-        self._last[key] = now
-        deliveries = ([] if self.background else
+        durable_claim = bool(dedupe_key and window and int(window) > 0
+                             and (not self.external_channels or self.outbox.enabled))
+        durable_outbox = False
+        if durable_claim:
+            fingerprint = hashlib.sha256(key.encode("utf-8")).hexdigest()
+            durable_outbox = bool(self.outbox.enabled and self.external_channels)
+            payload["dedupe_fingerprint"] = fingerprint
+            if durable_outbox:
+                payload["delivery_state"] = "queued"
+            if not self._reserve_durable_dedupe(
+                    alert_id=alert_id, timestamp=int(now), level=level_out,
+                    title=title, message=message, fingerprint=fingerprint,
+                    window=int(window), symbol=symbol, alert_payload=payload):
+                return Alert(id=f"D{int(now)}", t=int(now), level=level, title=title,
+                             message=message, channel="deduped", symbol=symbol,
+                             meta={**payload, "deduped": True})  # type: ignore[arg-type]
+        else:
+            if window and now - self._last.get(key, 0) < window:
+                return Alert(id=f"D{int(now)}", t=int(now), level=level, title=title,
+                             message=message, channel="deduped", symbol=symbol,
+                             meta={**payload, "deduped": True})  # type: ignore[arg-type]
+            self._last[key] = now
+
+        deliveries = ([] if self.background or durable_outbox else
                       [self._send(ch, title, message, level=level, symbol=symbol)
                        for ch in self.external_channels])
         self.last_delivery = deliveries
@@ -575,22 +693,19 @@ class Notifier:
         # Flush the backlog *after* the live alert: a fresh "cooldown engaged" must
         # not wait behind ten stale messages pointed at a host that is still down.
         # Each delivery carries `X-No7-Queued-At`, so the order remains readable.
-        if not self.background and self.outbox.pending():
+        if not self.background and self.outbox.pending() and not durable_outbox:
             self.drain_async()
 
         # Levels are a small set; a caller typo must degrade to a visible warning
         # rather than raise *after* the external channels already fired.
-        known = {"info", "success", "warning", "critical"}
-        level_out = level if level in known else "warning"
-        payload = {**(meta or {})}
-        if level_out != level:
-            payload["level_coerced_from"] = level
         if deliveries:
             payload["delivery"] = deliveries
         if self.background and self.external_channels:
             payload["delivery_state"] = "queued"
+        elif durable_outbox:
+            payload["delivery_state"] = "queued"
         alert = Alert(
-            id=f"A{uuid.uuid4().hex[:8]}",
+            id=alert_id,
             t=int(now),
             level=level_out,  # type: ignore[arg-type]
             title=title,
@@ -599,13 +714,33 @@ class Notifier:
             symbol=symbol,
             meta=payload,
         )
-        self.db.execute(
-            "INSERT OR REPLACE INTO alerts(id, t, level, title, message, channel, payload) "
-            "VALUES(?,?,?,?,?,?,?)",
-            (alert.id, alert.t, alert.level.value if hasattr(alert.level, "value") else alert.level,
-             title, message, alert.channel, json.dumps(payload, default=str)),
-        )
-        if self.background and self.external_channels:
+        if durable_claim:
+            if not durable_outbox:
+                self.db.execute(
+                    "UPDATE alerts SET channel=?, payload=? WHERE id=? AND dedupe_fingerprint=?",
+                    (alert.channel, json.dumps(payload, default=str), alert.id, fingerprint),
+                )
+        else:
+            self.db.execute(
+                "INSERT OR REPLACE INTO alerts(id, t, level, title, message, channel, payload) "
+                "VALUES(?,?,?,?,?,?,?)",
+                (alert.id, alert.t,
+                 alert.level.value if hasattr(alert.level, "value") else alert.level,
+                 title, message, alert.channel, json.dumps(payload, default=str)),
+            )
+        if durable_outbox:
+            if self.background:
+                self.drain_async()
+            else:
+                self.drain()
+                persisted = self.db.query_one("SELECT payload FROM alerts WHERE id=?",
+                                              (alert.id,))
+                if persisted:
+                    try:
+                        alert.meta = json.loads(persisted["payload"] or "{}")
+                    except (TypeError, json.JSONDecodeError):
+                        pass
+        elif self.background and self.external_channels:
             with self._lifecycle:
                 state = "queued"
                 if self._closing.is_set():
