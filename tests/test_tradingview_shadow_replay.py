@@ -138,3 +138,14 @@ def test_replay_excludes_no7_rows_with_nonmatching_symbol_or_timeframe():
     assert result["comparison"]["exact_unique_matches"] == 0
     assert result["coverage"]["filtered_no7_symbol_or_timeframe"] == 2
     assert result["horizons"]["1"]["no7"]["samples"] == 0
+
+
+def test_no_trade_is_a_valid_neutral_no7_decision():
+    decision = ShadowNo7Decision("XAUUSD", "M5", 600, 650, "NO_TRADE", 20)
+    result = _replay(
+        evidence=[_evidence(long_score=30, short_score=20)], decisions=[decision])
+
+    assert result["comparison"]["exact_unique_matches"] == 1
+    assert result["comparison"]["agreements"] == 1
+    assert result["comparison"]["neutral_agreements"] == 1
+    assert result["horizons"]["1"]["no7"]["samples"] == 0

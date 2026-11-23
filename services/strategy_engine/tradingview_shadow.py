@@ -38,7 +38,7 @@ class ShadowNo7Decision:
             raise ValueError("No7 timestamps must be integer UTC seconds")
         if self.available_at_utc < self.bar_close_utc:
             raise ValueError("No7 decision cannot be available before its closed bar")
-        if self.action.strip().upper() not in {"BUY", "SELL", "WAIT", "HOLD"}:
+        if self.action.strip().upper() not in {"BUY", "SELL", "WAIT", "NO_TRADE"}:
             raise ValueError("unsupported No7 action for shadow comparison")
         if self.score is not None and (
             isinstance(self.score, bool) or not math.isfinite(float(self.score))
