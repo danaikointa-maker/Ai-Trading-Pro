@@ -44,6 +44,7 @@ def test_ingress_stores_only_deduped_shadow_evidence(client, runtime, monkeypatc
     packet = _packet()
     body = {"token": "test-tradingview-token-0123456789", "packet": packet}
     orders_before = runtime.db.query_one("SELECT COUNT(*) AS n FROM orders")["n"]
+    audit_before = runtime.db.query_one("SELECT COALESCE(MAX(id), 0) AS n FROM audit")["n"]
     first = client.post("/api/integrations/tradingview/ai-agent-lens", json=body)
     second = client.post("/api/integrations/tradingview/ai-agent-lens", json=body)
     assert first.status_code == second.status_code == 202
@@ -53,6 +54,12 @@ def test_ingress_stores_only_deduped_shadow_evidence(client, runtime, monkeypatc
     assert len(rows) == 1
     assert "test-tradingview-token" not in rows[0]["payload"]
     assert "stop" not in rows[0]["payload"]
+    audit_rows = runtime.db.query(
+        "SELECT detail FROM audit WHERE action='tradingview.evidence' AND id>?", (audit_before,))
+    assert len(audit_rows) == 2
+    assert all("test-tradingview-token" not in row["detail"] for row in audit_rows)
+    assert all('"hash"' in row["detail"] for row in audit_rows)
+    assert "test-tradingview-token" not in first.text + second.text
     assert runtime.db.query_one("SELECT COUNT(*) AS n FROM orders")["n"] == orders_before
 
     view = client.get("/api/integrations/tradingview/ai-agent-lens/latest",
