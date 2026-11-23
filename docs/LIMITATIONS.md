@@ -1,5 +1,13 @@
 # Limitations & Honest Status
 
+## AI Trader Team / Explainer
+
+- U12 เพิ่ม feed, quote และ clock provenance แบบ allowlist ให้ fact sheet ใน `/api/explain` และปฏิเสธ
+  คำขอที่มีเจตนาสั่งซื้อ/ขายก่อนส่งข้อความให้ local LLM. ไม่เพิ่ม agent orchestration, tools, API,
+  database หรือสิทธิ์ execution; ยังเป็น text-only explainer และ local model ปิดเป็นค่าเริ่มต้น.
+- การตรวจเจตนาสั่งงานเป็นตัวกรองข้อความแบบ deterministic ไม่ใช่ระบบ authorization; คำสั่งจริงยังต้องผ่าน
+  API/RBAC, Risk Engine และ ExecutionGateway ที่มีอยู่. การทดสอบนี้ไม่ใช่ Demo หรือ broker acceptance.
+
 เอกสารนี้เขียนขึ้นเพื่อกันความเข้าใจผิดก่อนเอาเงินจริงเข้าไปเกี่ยวข้อง
 ทุกข้อคือสิ่งที่ **ยังไม่จริง** หรือ **ยังไม่ครบ** ใน V1 นี้
 

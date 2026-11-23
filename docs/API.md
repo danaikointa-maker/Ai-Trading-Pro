@@ -221,6 +221,12 @@ H080 reload ใช้ approval ของ payload และ DB ร่วมกั
 |---|---|---|
 | POST | `/api/explain` | `{question,symbol}` → `{answer,bullets,citations,model_used,facts}`; ห้ามสั่งออร์เดอร์ |
 
+`facts.observability` (เมื่อ route อ่าน metadata ได้) มีเฉพาะ `feed_mode`, `quote_status`,
+`quote_source`, `display_basis` และ `server_utc_offset_seconds`; ป้ายที่ไม่รู้จักถูกแทนด้วย
+`unknown`/`unavailable`. ไม่มี account ID, credential, position หรือ command payload ในส่วนนี้.
+คำถามที่ตรวจพบเจตนาสั่งซื้อ/ขายจะได้คำตอบปฏิเสธแบบ deterministic และไม่ถูกส่งให้ local LLM.
+Endpoint นี้เป็น read-only explanation; ไม่เรียก ExecutionGateway.
+
 ## WebSocket
 
 ```

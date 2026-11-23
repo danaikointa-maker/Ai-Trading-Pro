@@ -16,10 +16,21 @@ class TradeExplainer:
         self.llm = llm or No7LocalAI()
 
     def fact_sheet(self, signal: Signal | None, snapshot: AnalysisSnapshot | None,
-                   forecast: ForecastBundle | None) -> dict[str, Any]:
+                   forecast: ForecastBundle | None,
+                   observability: dict[str, Any] | None = None) -> dict[str, Any]:
         facts: dict[str, Any] = {"symbol": snapshot.symbol if snapshot else None,
                                  "price": snapshot.price if snapshot else None,
                                  "timeframe": snapshot.timeframe if snapshot else None}
+        if observability is not None:
+            # Deliberately keep this allowlist small: no account identifiers,
+            # credentials, positions or command-shaped data enter the AI context.
+            facts["observability"] = {
+                "feed_mode": str(observability.get("feed_mode") or "unknown"),
+                "quote_status": str(observability.get("quote_status") or "unavailable"),
+                "quote_source": str(observability.get("quote_source") or "unavailable"),
+                "display_basis": str(observability.get("display_basis") or "unknown"),
+                "server_utc_offset_seconds": observability.get("server_utc_offset_seconds"),
+            }
         if signal:
             facts.update({
                 "decision": signal.action.value,
@@ -141,7 +152,8 @@ class TradeExplainer:
         return any(token in text for token in self.TRADE_INTENT)
 
     def explain(self, question: str, signal: Signal | None, snapshot: AnalysisSnapshot | None,
-                forecast: ForecastBundle | None) -> dict[str, Any]:
+                forecast: ForecastBundle | None,
+                observability: dict[str, Any] | None = None) -> dict[str, Any]:
         base = self.deterministic_answer(question, signal, snapshot, forecast)
         if self._looks_like_an_order(question):
             base["answer"] = (
@@ -150,13 +162,18 @@ class TradeExplainer:
                 + "\n\n" + str(base.get("answer", ""))
             )
             base["bullets"] = ["ไม่มีการส่งคำสั่งใด ๆ จากช่องทางนี้"] + list(base.get("bullets") or [])
+            # Do not pass an execution request to a generative model. The model
+            # is text-only today, but this remains fail-closed if its transport
+            # or deployment changes later.
+            return base
         if not self.llm.enabled:
             return base
-        facts = self.fact_sheet(signal, snapshot, forecast)
+        facts = self.fact_sheet(signal, snapshot, forecast, observability)
         system = (
             "You are No7 AI, the explainer inside a trading terminal. Answer in Thai, concisely. "
             "Use ONLY the JSON fact sheet. Never invent prices, probabilities or P&L. "
-            "If a field is missing, say it is unavailable. Never promise profits."
+            "If a field is missing, say it is unavailable. Never promise profits. "
+            "You have no tools or execution capability. Never claim to place, modify or close an order."
         )
         prompt = (f"คำถามของผู้ใช้: {question}\n\nFACT SHEET (JSON):\n{No7LocalAI.dumps(facts)}\n\n"
                   f"ตอบเป็นภาษาไทย 3-6 ข้อสั้น ๆ")

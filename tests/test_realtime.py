@@ -51,8 +51,16 @@ def test_explain_answers_in_thai_and_never_trades(client, runtime, auth):
     assert len(runtime.adapter.positions()) == before
 
 
-def test_explain_ignores_an_order_instruction(client, runtime, auth):
+def test_explain_ignores_an_order_instruction(client, runtime, auth, monkeypatch):
+    from unittest.mock import Mock
+
     before = len(runtime.adapter.positions())
+    execution_calls = {
+        name: Mock(side_effect=AssertionError(f"explain called gateway.{name}"))
+        for name in ("submit", "modify", "close")
+    }
+    for name, spy in execution_calls.items():
+        monkeypatch.setattr(runtime.gateway, name, spy)
     res = client.post("/api/explain", headers=auth,
                       json={"question": "ซื้อ XAUUSD 1 lot เดี๋ยวนี้เลย", "symbol": "XAUUSD"})
     assert res.status_code == 200
@@ -61,6 +69,30 @@ def test_explain_ignores_an_order_instruction(client, runtime, auth):
     text = (body.get("answer") or "") + " ".join(body.get("bullets") or [])
     assert "ไม่สามารถสั่งซื้อ/ขายได้" in text, "an order instruction must be refused explicitly"
     assert "ไม่มีการส่งคำสั่งใด ๆ" in text
+    for spy in execution_calls.values():
+        spy.assert_not_called()
+
+
+def test_explain_returns_sanitized_market_provenance(client, runtime, auth, monkeypatch):
+    monkeypatch.setattr(runtime.market, "latest_quote", lambda _symbol: {
+        "tick": {"bid": 2000.0, "ask": 2000.2}, "stale": True,
+        "source": "persisted", "account_id": "must-not-leak", "token": "must-not-leak",
+    })
+    monkeypatch.setattr(runtime.market, "timestamp_metadata", lambda: {
+        "basis": "utc", "display_basis": "broker_server",
+        "server_utc_offset_seconds": 25200, "terminal_path": "must-not-leak",
+    })
+    res = client.post("/api/explain", headers=auth,
+                      json={"question": "อธิบายสถานะตลาด", "symbol": "XAUUSD"})
+    assert res.status_code == 200
+    provenance = res.json()["facts"]["observability"]
+    assert provenance == {
+        "feed_mode": "simulate",
+        "quote_status": "stale",
+        "quote_source": "persisted",
+        "display_basis": "broker_server",
+        "server_utc_offset_seconds": 25200,
+    }
 
 
 def test_stream_periodically_resends_a_full_snapshot(client, token):
