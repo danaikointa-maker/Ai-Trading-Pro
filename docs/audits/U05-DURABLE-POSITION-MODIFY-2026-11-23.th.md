@@ -27,8 +27,8 @@ An existing event-order regression test lacked the complete Demo snapshot now re
 
 | Check | Result | Evidence |
 |---|---|---|
-| Durable intent focused tests | PASS | `pytest -q tests/test_position_modify_intents.py` — 25 passed |
-| Execution/account/position regression | PASS | `pytest tests/test_position_modify_intents.py tests/test_account_ownership.py tests/test_execution_recovery.py tests/test_bridge_readonly.py tests/test_atomic_execution_claim.py tests/test_smart_entry_continuation.py tests/test_signal_execution.py -q` — 146 passed, 1 pre-existing Starlette/httpx deprecation warning |
+| Durable intent focused tests | PASS | `pytest -q tests/test_position_modify_intents.py` — 27 passed |
+| Execution/account/position regression | PASS | `pytest tests/test_position_modify_intents.py tests/test_account_ownership.py tests/test_execution_recovery.py tests/test_bridge_readonly.py tests/test_atomic_execution_claim.py tests/test_smart_entry_continuation.py tests/test_signal_execution.py -q` — 148 passed, 1 pre-existing Starlette/httpx deprecation warning |
 | Selected Ruff and whitespace checks | PASS | Ruff `--select F,E9` on changed Python files and `git diff --check` |
 | Hosted CI | PENDING | Run after the review corrections are pushed |
 | Staging parity after candidate rollout | NOT TESTED | Candidate was not deployed or restarted on VM100 |
@@ -51,9 +51,11 @@ U05 remains **PARTIAL / BLOCKED**. Local candidate implementation and automated 
 
 - Reconciliation follows the ordered confirmed SL transition chain from the
   stored position baseline in both `reconcile()` and the read-only position
-  snapshot path. Tests cover two confirmed stop improvements before the next
-  snapshot.
+  snapshot path, skipping reservations abandoned before broker I/O. Tests cover
+  two confirmed stop improvements both with and without an abandoned reservation.
 - Repeating the current SL while requesting a different TP now fails closed;
   explicit TP values must be finite, positive, and aligned to broker tick size.
-- The focused seven-file execution/account/bridge regression now passes **146
+- Non-abandoned unresolved intents continue to stop attribution across ambiguous
+  broker state.
+- The focused seven-file execution/account/bridge regression now passes **148
   tests**, with one pre-existing Starlette/httpx deprecation warning.

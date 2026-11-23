@@ -215,10 +215,14 @@ class PositionEventLog:
             started = False
             final_tolerance = 0.0
             for row in rows:
-                if row["state"] != "confirmed":
-                    if started:
-                        return False
+                if row["state"] == "abandoned":
+                    # A stale reservation is abandoned only before the atomic
+                    # transition to `sending`, so it cannot represent broker I/O.
                     continue
+                if row["state"] != "confirmed":
+                    # Sending or ambiguous intents may have changed the broker;
+                    # never attribute a later snapshot across them.
+                    return False
                 request = json.loads(row["request_payload"])
                 if request.get("symbol") != observed.get("symbol"):
                     if started:

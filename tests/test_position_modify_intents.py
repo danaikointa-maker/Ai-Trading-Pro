@@ -515,9 +515,10 @@ def test_confirmed_modify_updates_account_snapshot_without_false_external_change
 
 
 @pytest.mark.parametrize("use_snapshot", [False, True])
+@pytest.mark.parametrize("include_abandoned", [False, True])
 def test_reconcile_accepts_chained_confirmed_modifications_from_stored_baseline(
-        tmp_path, use_snapshot):
-    db = Database(tmp_path / f"gateway-chained-modifies-{use_snapshot}.db")
+        tmp_path, use_snapshot, include_abandoned):
+    db = Database(tmp_path / f"gateway-chained-modifies-{use_snapshot}-{include_abandoned}.db")
     adapter, gateway = _gateway_case(db)
     before = adapter.positions.return_value[0]
     first = before.model_copy(update={"sl": 1995.0})
@@ -529,6 +530,18 @@ def test_reconcile_accepts_chained_confirmed_modifications_from_stored_baseline(
                    (before.ticket, json.dumps(before.model_dump()), time.time()))
 
         assert gateway.modify(adapter, "T-1", sl=1995.0, reason="break-even") is True
+        if include_abandoned:
+            owner = gateway._assert_account(adapter)
+            abandoned_detail = {"sl": 1996.0, "tp": None, "reason": "interrupted",
+                                "before_sl": 1995.0, "before_tp": 2020.0,
+                                "symbol": "XAUUSD", "tick_size": 0.01}
+            ledger = PositionEventLog(db)
+            ledger.reserve_modify(broker_id="demo", ticket="T-1",
+                                  idempotency_key="abandoned-reservation",
+                                  account_identity=owner, detail=abandoned_detail)
+            assert ledger.transition_modify(
+                broker_id="demo", ticket="T-1", idempotency_key="abandoned-reservation",
+                account_identity=owner, state="abandoned")
         assert gateway.modify(adapter, "T-1", sl=1997.0, reason="trailing") is True
         if use_snapshot:
             observations = gateway.open_position_snapshot(
