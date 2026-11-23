@@ -63,7 +63,7 @@
       </div>
       <div v-if="positionSize?.status === 'ready'" class="grid gap-2 rounded-lg border border-ink-700 bg-ink-900/60 p-3 sm:grid-cols-3">
         <div class="kv"><dt>งบเสี่ยง</dt><dd>{{ accountMoney(positionSize.risk_budget) }}</dd></div>
-        <div class="kv"><dt>Lot ที่ไม่เกินงบ</dt><dd class="text-gold-300">{{ fmt(positionSize.lot, 2) }}</dd></div>
+        <div class="kv"><dt>Lot ที่ไม่เกินงบ</dt><dd class="text-gold-300">{{ fmt(positionSize.lot, lotPrecision(positionSize.lot_step)) }}</dd></div>
         <div class="kv"><dt>ขาดทุนประเมินที่ SL*</dt><dd class="text-down">{{ accountMoney(positionSize.estimated_stop_cost) }}</dd></div>
       </div>
       <p v-else-if="positionSize" class="rounded-lg border border-amber-400/30 bg-amber-400/5 px-3 py-2 text-[10.5px] leading-relaxed text-amber-200">
@@ -90,6 +90,7 @@
 import { computed, ref, watch } from 'vue'
 import { api } from '../lib/api'
 import { fmt } from '../lib/format'
+import { lotPrecision } from '../lib/lotPrecision'
 import { state } from '../lib/store'
 
 const points = ref(750)

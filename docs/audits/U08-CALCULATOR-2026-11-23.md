@@ -51,8 +51,8 @@ the execution gateway. The UI labels this `MANUAL · SANDBOX`.
 Evidence: `tests/test_points_math.py tests/test_api.py tests/test_invariants.py`
 — 75 passed (one existing Starlette/httpx deprecation warning); the shared U06–U10
 regression set passed 289 tests (same warning). Ruff E9/F/I,
-compileall, and `git diff --check` passed; Vite 5.4.21 production build passed
-with 626 modules. Broker-side comparison, remaining tools, exports, and lessons
+compileall, and `git diff --check` passed; the latest Vite 5.4.21 production build passed
+with 627 modules. Broker-side comparison, remaining tools, exports, and lessons
 remain NOT TESTED / NOT IMPLEMENTED. See
 `docs/audits/U06-U10-position-size-followup-2026-11-23.th.md`.
 
