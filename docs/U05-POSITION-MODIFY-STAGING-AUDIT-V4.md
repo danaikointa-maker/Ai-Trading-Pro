@@ -23,7 +23,7 @@ no ticket, account fingerprint, payload, credential, or position data was read.
 U05 remains **PARTIAL / BLOCKED**. The empty table does not prove broker state is
 empty. The V4 candidate now adds an additive intent table and integrates durable
 reserve/send/readback/reconciliation in the existing `ExecutionGateway`; focused
-local tests pass (27 intent tests; 148 combined execution/account regressions).
+local tests pass (31 intent tests; 152 combined execution/account regressions).
 This does not establish VM100 runtime parity or broker behavior. A separate,
 explicitly approved Demo acceptance is still required for broker receipts. The
 stale feed also prevents using this staging session for execution acceptance.

@@ -570,3 +570,42 @@ def test_same_stop_with_different_requested_target_is_not_reported_as_success(tm
         assert db.query("SELECT * FROM position_modify_intents") == []
     finally:
         db.close()
+
+
+@pytest.mark.parametrize("tick_offset,expected", [(0.0, True), (3.0, False), (-3600.0, False)])
+def test_paper_modify_quote_freshness_uses_injected_virtual_clock(
+        tmp_path, tick_offset, expected):
+    db = Database(tmp_path / f"paper-virtual-clock-{tick_offset}.db")
+    adapter, gateway = _gateway_case(db)
+    adapter.adapter_type = "simulated_mt5"
+    virtual_now = 1_000_000.0
+    adapter.clock = lambda: virtual_now
+    adapter.ticker.return_value = Tick(t=virtual_now + tick_offset, bid=2000, ask=2000.1,
+                                       spread_points=10, last=2000)
+    before = adapter.positions.return_value[0]
+    after = before.model_copy(update={"sl": 1995.0})
+    adapter.positions.side_effect = [[before], [after]]
+    try:
+        assert gateway.modify(adapter, "T-1", sl=1995.0, reason="trailing") is expected
+        if expected:
+            adapter.modify_position.assert_called_once()
+            assert db.query_one("SELECT state FROM position_modify_intents")["state"] == "confirmed"
+        else:
+            adapter.modify_position.assert_not_called()
+            assert db.query("SELECT * FROM position_modify_intents") == []
+    finally:
+        db.close()
+
+
+def test_real_broker_modify_quote_freshness_uses_wall_clock(tmp_path):
+    db = Database(tmp_path / "real-wall-clock-stale-quote.db")
+    adapter, gateway = _gateway_case(db)
+    adapter.ticker.return_value = Tick(t=time.time() - 3600, bid=2000, ask=2000.1,
+                                       spread_points=10, last=2000)
+    try:
+        assert gateway.modify(adapter, "T-1", sl=1995.0, reason="trailing") is False
+
+        adapter.modify_position.assert_not_called()
+        assert db.query("SELECT * FROM position_modify_intents") == []
+    finally:
+        db.close()

@@ -27,8 +27,8 @@ An existing event-order regression test lacked the complete Demo snapshot now re
 
 | Check | Result | Evidence |
 |---|---|---|
-| Durable intent focused tests | PASS | `pytest -q tests/test_position_modify_intents.py` — 27 passed |
-| Execution/account/position regression | PASS | `pytest tests/test_position_modify_intents.py tests/test_account_ownership.py tests/test_execution_recovery.py tests/test_bridge_readonly.py tests/test_atomic_execution_claim.py tests/test_smart_entry_continuation.py tests/test_signal_execution.py -q` — 148 passed, 1 pre-existing Starlette/httpx deprecation warning |
+| Durable intent focused tests | PASS | `pytest -q tests/test_position_modify_intents.py` — 31 passed |
+| Execution/account/position regression | PASS | `pytest tests/test_position_modify_intents.py tests/test_account_ownership.py tests/test_execution_recovery.py tests/test_bridge_readonly.py tests/test_atomic_execution_claim.py tests/test_smart_entry_continuation.py tests/test_signal_execution.py -q` — 152 passed, 1 pre-existing Starlette/httpx deprecation warning |
 | Selected Ruff and whitespace checks | PASS | Ruff `--select F,E9` on changed Python files and `git diff --check` |
 | Hosted CI | PENDING | Run after the review corrections are pushed |
 | Staging parity after candidate rollout | NOT TESTED | Candidate was not deployed or restarted on VM100 |
@@ -57,5 +57,8 @@ U05 remains **PARTIAL / BLOCKED**. Local candidate implementation and automated 
   explicit TP values must be finite, positive, and aligned to broker tick size.
 - Non-abandoned unresolved intents continue to stop attribution across ambiguous
   broker state.
-- The focused seven-file execution/account/bridge regression now passes **148
+- Paper quote freshness uses the adapter's injected virtual clock; real broker
+  adapters continue to use wall-clock freshness. The checks retain stale and
+  future quote rejection in both modes.
+- The focused seven-file execution/account/bridge regression now passes **152
   tests**, with one pre-existing Starlette/httpx deprecation warning.

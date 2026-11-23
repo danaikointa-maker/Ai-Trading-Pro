@@ -405,8 +405,15 @@ class ExecutionGateway:
                 raise BrokerError("fresh broker symbol constraints are unavailable")
             tick = adapter.ticker(position.symbol)
             max_age = float(adapter_modify_max_quote_age(self.settings))
-            if (not math.isfinite(tick.t) or time.time() - tick.t > max_age
-                    or tick.t - time.time() > 2 or not math.isfinite(tick.bid)
+            quote_clock = time.time()
+            if paper:
+                virtual_clock = getattr(adapter, "clock", None)
+                if not callable(virtual_clock):
+                    raise BrokerError("paper virtual clock unavailable; modify blocked")
+                quote_clock = float(virtual_clock())
+            if (not math.isfinite(quote_clock) or not math.isfinite(tick.t)
+                    or quote_clock - tick.t > max_age or tick.t - quote_clock > 2
+                    or not math.isfinite(tick.bid)
                     or not math.isfinite(tick.ask) or tick.bid <= 0 or tick.ask < tick.bid):
                 raise BrokerError("fresh bid/ask unavailable; modify blocked")
 
