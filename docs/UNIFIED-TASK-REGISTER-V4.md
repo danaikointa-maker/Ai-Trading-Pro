@@ -125,6 +125,12 @@ Status definitions: EXISTS_CODE = seen in repository but not live certified; NEE
 - Do not route Cloudflare to 8000, 18081 or 18082: they are development/older staging/Trading Pro simulation API services, not a verified dedicated VM100 Office API. No public-route, service, firewall, DNS, account, order, Auto or Live state was changed.
 - Windows-to-VM100 application service identity remains unprovisioned. `/api/explain` is local read-only functionality, not an Office API client. Cloudflare Access policy and origin authentication are NOT TESTED. Keep U12 and U15 PARTIAL/BLOCKED until the named acceptance checks pass.
 
+### U06–U10 continuation recheck (2026-11-24)
+
+- On V4 merge base `198c333625fc082a37cddba7b06520aefea8cc53`, a selected 16-file U06–U10 Python regression passed **300 tests**, with one existing Starlette/httpx deprecation warning. Vite 8.3.8 build passed (664 modules), chart viewport passed **7/7**, `npm ci` audited 117 packages with 0 vulnerabilities, Ruff E9/F and `git diff --check` passed. Detailed evidence is appended to `docs/audits/U06-U10-REGRESSION-RECHECK-2026-11-23.th.md`.
+- A test-order race was repaired in `tests/test_api.py` by freezing the simulated tick for the API assertion; production code and trading behavior are unchanged. Initial two worktree failures were missing frontend build/dependencies; after installation, the only remaining failure was the background tick race and the final suite passed.
+- U06/U07/U08/U09 remain PARTIAL for the acceptance gaps in the audit report; U10 remains DONE. U05/MT5 Demo, live feed, authenticated visual review, Auto, account and broker state were not changed.
+
 ## Anti-duplication ledger
 - Do NOT let TradingView/Lens/LLM/webhook create executable signals, alter MT5 canonical prices/specs, approve risk, toggle Auto, or call execution. Use U14?U18 as the only TradingView queue; do not add a parallel plan/backlog.
 - Do NOT create a second RiskEngine or PositionManager. Existing: `services/risk_engine/engine.py`, `manager.py`.

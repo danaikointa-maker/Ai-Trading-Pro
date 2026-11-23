@@ -233,6 +233,9 @@ def test_ticker_endpoint_retains_quote_when_market_is_closed(client, auth, runti
     # The session runtime may be configured for a publisher in another test.
     monkeypatch.setitem(runtime.market.publisher, "enabled", False)
     tick = Tick(t=1_700_000_000, bid=2000, ask=2001, spread_points=100, last=2000.5)
+    # The session-scoped TestClient keeps the simulated market loop running in a
+    # background thread. Hold its tick constant so it cannot race this assertion.
+    monkeypatch.setattr(runtime.feed, "tick", lambda: {"XAUUSD": tick})
     runtime.market.on_ticks({"XAUUSD": tick})
     monkeypatch.setattr(runtime.market.adapter, "ticker", lambda _symbol: (_ for _ in ()).throw(RuntimeError("closed")))
     response = client.get("/api/market/ticker?symbol=XAUUSD", headers=auth)

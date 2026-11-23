@@ -33,3 +33,10 @@ Both ECharts components now explicitly use the V5 theme so the V6 default palett
 ## Safety
 
 This change set does not activate Auto, alter Risk Engine settings, deploy to VM100, connect/switch broker accounts, or send trade/position/notification commands. U06/U07/U08/U09 stay PARTIAL pending the acceptance listed above. U10 remains DONE based on existing acceptance evidence.
+
+## 2026-11-24 follow-up on V4 merge base `198c333625fc082a37cddba7b06520aefea8cc53`
+
+- Rechecked the U06–U10 focused regression on a clean worktree. After `npm ci` (116 packages; 0 vulnerabilities), Vite 8.3.8 production build passed (664 modules) and `npm run test:chart-viewport` passed (7 tests).
+- The selected 16-file Python suite first exposed an environment issue (no `dist`/`node_modules`) and then a flaky assertion in `test_ticker_endpoint_retains_quote_when_market_is_closed`: the session-scoped API runtime continued producing simulated ticks in a background thread while the test asserted one fixed tick. The test passes in isolation. Updated the test to hold the simulated tick constant during that assertion; no production code or runtime behavior changed.
+- After the test-only isolation fix, the same selected regression passed: **300 passed**, one pre-existing Starlette/httpx deprecation warning. Ruff E9/F on `tests/test_api.py` and `git diff --check` passed.
+- This does not satisfy external acceptance: U06 still needs U05 stage parity and broker Demo protection/reconciliation; U07 protection modes remain incomplete; U08 remaining calculators/learning/export remain unimplemented; U09 authenticated desktop/mobile and fresh-feed/reconnect visual acceptance remain NOT TESTED. U10 remains DONE. No VM, account, Auto, order or position was changed.
