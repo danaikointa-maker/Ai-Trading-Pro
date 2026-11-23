@@ -36,6 +36,14 @@ duplicate or weakening candidates when `step_points` is zero or negative.
 Regression coverage checks both settings. The updated local regression set has
 146 passing tests; hosted CI must rerun against the revised PR head.
 
+Latest V4 follow-up adds a Paper integration case for a lost modify acknowledgement:
+the simulated broker applies the stop, the adapter reports an exception, and the
+existing `ExecutionGateway` confirms only after reading the broker-held SL/TP.
+Repeating the same protection level is a no-op and does not issue a second
+modification. `pytest tests/test_v4_single_target_manager.py -q` — **9 passed**.
+This tests the Paper adapter path only; it is not proof of MT5 restart, power-loss,
+stops/freeze, or Demo behavior.
+
 ## Remaining gates and rollback
 
 U06 remains **PARTIAL / NOT ACCEPTED**. U05 durable modification intents are

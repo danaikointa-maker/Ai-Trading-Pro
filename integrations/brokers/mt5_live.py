@@ -346,6 +346,107 @@ class MT5Broker(BrokerAdapter):
             return mt5.ORDER_FILLING_IOC
         return mt5.ORDER_FILLING_RETURN
 
+    @staticmethod
+    def _preflight_rejection(request: OrderRequest, reason: str,
+                             retcode: int = -1) -> OrderResult:
+        """Return a known no-send rejection for local/broker preflight failures."""
+        return OrderResult(
+            order_id=request.idempotency_key or "preflight-rejected",
+            idempotency_key=request.idempotency_key or "",
+            status=OrderState.rejected,
+            retcode=retcode,
+            message=f"preflight rejected; no order sent: {reason}",
+            created_at=time.time(),
+        )
+
+    @staticmethod
+    def _protective_level_error(request: OrderRequest, price: float,
+                                spec: SymbolSpec) -> str | None:
+        """Validate required SL/TP geometry against broker stop/freeze distances."""
+        if (request.sl is None or request.tp is None
+                or not math.isfinite(float(request.sl))
+                or not math.isfinite(float(request.tp))
+                or request.sl <= 0 or request.tp <= 0):
+            return "both protective SL and TP are required"
+        if not math.isfinite(price) or price <= 0 or not math.isfinite(spec.point) or spec.point <= 0:
+            return "current execution price or broker point is invalid"
+
+        sl = spec.round_price(float(request.sl))
+        tp = spec.round_price(float(request.tp))
+        if request.side == OrderSide.buy:
+            distances = ((price - sl) / spec.point, (tp - price) / spec.point)
+        else:
+            distances = ((sl - price) / spec.point, (price - tp) / spec.point)
+        if any(not math.isfinite(distance) or distance <= 0 for distance in distances):
+            return "SL/TP must be on the protective side of the execution price"
+
+        # Use the stricter broker-reported distance. order_check below remains
+        # authoritative for broker-specific validation and current account funds.
+        minimum = max(float(spec.stops_level_points), float(spec.freeze_level_points), 0.0)
+        if any(distance + 1e-9 < minimum for distance in distances):
+            return f"SL/TP is inside broker stops/freeze distance ({minimum:g} points)"
+        return None
+
+    def _preflight_order(self, request: OrderRequest, payload: dict[str, Any],
+                         broker_symbol: str, price: float, volume: float,
+                         spec: SymbolSpec) -> OrderResult | None:
+        """Fail closed on invalid protection, broker P/L, margin or order_check."""
+        level_error = self._protective_level_error(request, price, spec)
+        if level_error:
+            return self._preflight_rejection(request, level_error)
+
+        # Use MT5's account-currency P/L calculation for the proposed stop. This
+        # is a broker-aware sanity check; the Risk Engine remains responsible
+        # for comparing the loss against the configured risk budget.
+        stop_price = spec.round_price(float(request.sl))
+        try:
+            stop_pnl = mt5.order_calc_profit(
+                payload["type"], broker_symbol, volume, float(price), stop_price)
+            stop_pnl = float(stop_pnl)
+        except Exception:  # noqa: BLE001 - preflight errors must never fall through to send
+            stop_pnl = math.nan
+        if not math.isfinite(stop_pnl) or stop_pnl >= 0:
+            return self._preflight_rejection(
+                request, "broker stop-loss P/L estimate is unavailable or not a loss")
+
+        try:
+            required_margin = mt5.order_calc_margin(
+                payload["type"], broker_symbol, volume, float(price))
+            required_margin = float(required_margin)
+        except Exception:  # noqa: BLE001 - preflight errors must never fall through to send
+            required_margin = math.nan
+        if not math.isfinite(required_margin) or required_margin < 0:
+            return self._preflight_rejection(request, "broker margin estimate is unavailable")
+
+        account = self._account_identity()
+        try:
+            free_margin = float(getattr(account, "margin_free"))
+        except (AttributeError, TypeError, ValueError, OverflowError):
+            free_margin = math.nan
+        if not math.isfinite(free_margin) or free_margin < 0:
+            return self._preflight_rejection(request, "account free margin is unavailable")
+        if required_margin > free_margin + max(0.01, free_margin * 1e-9):
+            return self._preflight_rejection(request, "estimated margin exceeds current free margin")
+
+        try:
+            checked = mt5.order_check(payload)
+        except Exception:  # noqa: BLE001 - a failed preflight must not send an order
+            checked = None
+        retcode = getattr(checked, "retcode", None)
+        if type(retcode) is not int or retcode != 0:
+            return self._preflight_rejection(
+                request, "broker order_check did not approve the request",
+                retcode if type(retcode) is int else -1)
+        try:
+            projected_free_margin = float(getattr(checked, "margin_free"))
+        except (AttributeError, TypeError, ValueError, OverflowError):
+            projected_free_margin = math.nan
+        if not math.isfinite(projected_free_margin) or projected_free_margin < 0:
+            return self._preflight_rejection(
+                request, "broker order_check returned invalid projected free margin")
+        self._account_identity()
+        return None
+
     def order_send(self, request: OrderRequest, ticket_hint: str = "") -> OrderResult:
         self._require()
         self._account_identity()
@@ -372,6 +473,10 @@ class MT5Broker(BrokerAdapter):
             payload["sl"] = spec.round_price(request.sl)
         if request.tp:
             payload["tp"] = spec.round_price(request.tp)
+        rejected = self._preflight_order(request, payload, broker_symbol,
+                                         float(price), volume, spec)
+        if rejected is not None:
+            return rejected
         self._account_identity()
         result = mt5.order_send(payload)
         if result is None:
