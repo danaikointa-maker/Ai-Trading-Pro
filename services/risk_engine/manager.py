@@ -113,7 +113,9 @@ class PositionManager:
             distance = max(distance, spec.spread_typical_points * 3)
             candidate = spec.round_price(pos.current_price - sign * spec.points_to_price(distance))
             step = spec.points_to_price(float(self.trailing.get("step_points", 50)))
-            if ((candidate - pos.sl) * sign >= step
+            directional_improvement = (candidate - pos.sl) * sign
+            if (directional_improvement > 0
+                    and directional_improvement >= step
                     and (pos.current_price - candidate) * sign > 0):
                 candidates.append((candidate, "trailing_stop",
                                    f"trail {distance:.0f} pts behind price, locking {pos.points - distance:+.0f} pts"))

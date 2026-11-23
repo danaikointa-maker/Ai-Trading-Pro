@@ -22,13 +22,19 @@ values or activate a new profile.
 
 | Check | Result |
 |---|---|
-| Position protection and regression set | PASS — `pytest tests/test_v4_single_target_manager.py tests/test_smart_entry_continuation.py tests/test_runtime_position_ownership.py tests/test_risk_engine.py -q` — 145 passed |
+| Position protection and regression set | PASS — `pytest tests/test_v4_single_target_manager.py tests/test_smart_entry_continuation.py tests/test_runtime_position_ownership.py tests/test_risk_engine.py -q` — 146 passed after review follow-up |
 | Selected Ruff checks | PASS — changed Python files, `--select F,E9` |
 | Whitespace | PASS — `git diff --check` |
 | Broker stop/freeze constraints and accepted readback | NOT TESTED |
 | Paper replay, restart and ambiguous acknowledgement | NOT TESTED |
 | Connext-Demo modification receipt | NOT TESTED; no broker command was sent |
 | Live modification | NOT TESTED / DISABLED |
+
+Review follow-up: trailing candidates now require a strict directional SL
+improvement independently of the configured step threshold. This prevents
+duplicate or weakening candidates when `step_points` is zero or negative.
+Regression coverage checks both settings. The updated local regression set has
+146 passing tests; hosted CI must rerun against the revised PR head.
 
 ## Remaining gates and rollback
 

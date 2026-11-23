@@ -149,3 +149,31 @@ def test_protection_fails_closed_when_current_stop_is_missing():
         [position], {"XAUUSD": _spec()}, {}, None, now=2, atr_points=100)
 
     assert not [action for action in actions if action.kind == "modify"]
+
+
+def test_trailing_requires_strict_improvement_even_with_zero_or_negative_step():
+    for step_points in (0, -10):
+        class Settings:
+            @staticmethod
+            def risk_cfg():
+                return {"management": {
+                    "break_even": {"enabled": False},
+                    "trailing": {"enabled": True, "start_after_points": 500,
+                                 "mode": "fixed", "distance_points": 100,
+                                 "step_points": step_points},
+                    "time_exit": {"enabled": False},
+                    "smart_exit": {"enabled": False},
+                    "partials": {"enabled": False},
+                }}
+
+        manager = PositionManager(Settings())
+        position = Position(
+            ticket=f"same-sl-{step_points}", symbol="XAUUSD",
+            direction=Direction.up, volume=0.1, entry=2000, sl=2007,
+            tp=2020, open_time=1, current_price=2008, points=800,
+        )
+
+        actions = manager.evaluate([position], {"XAUUSD": _spec()}, {}, None,
+                                   now=2, atr_points=100)
+
+        assert not [action for action in actions if action.kind == "modify"]
