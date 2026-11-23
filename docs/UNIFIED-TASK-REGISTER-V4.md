@@ -101,6 +101,16 @@ Status definitions: EXISTS_CODE = seen in repository but not live certified; NEE
 - U10: notification dedupe/outbox, restart, delivery and ownership regression tests pass; prior Gate #156/PR #53 evidence remains valid. U10 remains DONE; no notification was sent to an external user.
 - No browser was authenticated for a new visual review. No VM, staging runtime, broker account, Auto setting, order, or position was changed. U06/U07/U08/U09 remain PARTIAL until their recorded acceptance evidence is collected; no Demo/Live gate was bypassed.
 
+### U11–U15 regression and acceptance recheck (2026-11-23)
+
+- Sequential focused suite across TradingView contract/ingress/persistence, read-only AI explain, security, rate limiting, and MT5 read-only fixtures: **115 passed**, one existing Starlette/httpx deprecation warning.
+- U11 remains **BLOCKED**: this was local safety-fixture coverage only. No real MT5 account, Paper runtime cycle, Demo order/partial fill, restart/power-loss, or broker receipt was tested; no command was sent.
+- U12 remains **PARTIAL**: `/api/explain` stays text-only and read-only; the design proposal is in `docs/audits/U12-AI-TRADER-TEAM-2026-11-23.md`. Officer orchestration is still NOT IMPLEMENTED and independent prompt/data/account-boundary security review is still NOT TESTED. No agent, execution API or database was added.
+- U13 remains **DONE** from the existing documentation-sync evidence; no content or runtime config changed in this recheck.
+- U14 contract tests pass; upstream corpus expansion, Pine compilation, TradingView Bar Replay and release certification remain NOT TESTED.
+- U15 local ingress/security tests pass, including credential redaction, dedupe and rate-limit coverage. HTTPS/proxy body-log redaction, actual secret-manager rotation, multi-worker shared limiter and public threat-model acceptance remain NOT TESTED; the adapter was not enabled or deployed.
+- No Cloudflare/DNS, VM, account, order, Auto or Live state changed. See `docs/audits/U11-U15-STATUS-RECHECK-2026-11-23.th.md`.
+
 ## Anti-duplication ledger
 - Do NOT let TradingView/Lens/LLM/webhook create executable signals, alter MT5 canonical prices/specs, approve risk, toggle Auto, or call execution. Use U14?U18 as the only TradingView queue; do not add a parallel plan/backlog.
 - Do NOT create a second RiskEngine or PositionManager. Existing: `services/risk_engine/engine.py`, `manager.py`.
