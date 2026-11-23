@@ -7,7 +7,7 @@ from packages.shared_schemas.models import TradeMode
 from services.api_gateway.deps import current_user, get_runtime
 from services.api_gateway.roles import ADMIN, at_least
 from services.api_gateway.state import TradingRuntime
-from services.risk_engine.planner import points_calculator
+from services.risk_engine.planner import points_calculator, position_size_calculator
 
 router = APIRouter(prefix="/api/risk", tags=["risk"])
 
@@ -102,14 +102,24 @@ def calculator(symbol: str = "XAUUSD", points: float = 750, lot: float = 0.01,
                balance: float | None = None, risk_pct: float | None = None,
                sl_points: float | None = None,
                runtime: TradingRuntime = Depends(get_runtime), user=Depends(current_user)):
-    spec = runtime.adapter.symbol_spec(symbol)
+    # Use the same selected market-data specification as chart and points math.
+    # This includes a fresh, allowlisted MT5 Demo publisher spec when configured.
+    spec = runtime.market.spec(symbol)
     out = {"points": points_calculator(spec, points, lot), "spec": spec.model_dump(),
            "provenance": {"market_feed": runtime.market.effective_mode,
                           "spec_source": spec.source, "rate_source": spec.rate_source,
                           "account_currency": spec.account_currency,
                           "spec_complete": spec.spec_complete}}
-    if balance is not None and risk_pct is not None and sl_points:
-        out["lot_for_risk"] = runtime.planner.lot_for_risk(spec, balance, risk_pct, sl_points)
+    sizing_inputs = (balance, risk_pct, sl_points)
+    if any(value is not None for value in sizing_inputs):
+        if not all(value is not None for value in sizing_inputs):
+            raise HTTPException(status_code=422,
+                                detail="balance, risk_pct, and sl_points must be supplied together")
+        size = position_size_calculator(spec, balance, risk_pct, sl_points)
+        # Keep the legacy response key while making its value safe for display:
+        # a below-minimum budget is reported as zero, never rounded up to min lot.
+        out["position_size"] = {**size, "source": "manual_sandbox"}
+        out["lot_for_risk"] = size["lot"]
     out["disclaimer"] = ("Gross and net are estimates in account currency. Net after known costs "
                          "subtracts typical spread and commission; swap and slippage are excluded. "
                          "The result is not a profit guarantee.")

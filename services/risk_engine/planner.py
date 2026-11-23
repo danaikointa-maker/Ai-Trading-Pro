@@ -557,6 +557,93 @@ def points_calculator(spec: SymbolSpec, points: float, lot: float) -> dict[str, 
     }
 
 
+def position_size_calculator(spec: SymbolSpec, equity: float, risk_pct: float,
+                             sl_points: float) -> dict[str, Any]:
+    """Return a read-only, cost-aware lot estimate that never exceeds the budget.
+
+    Unlike execution sizing, this function reports ``no_legal_lot`` rather than
+    rounding a sub-minimum request up to the broker minimum. It is for calculator
+    previews only; execution still uses the existing TradePlanner and RiskEngine.
+    """
+    try:
+        values = (float(equity), float(risk_pct), float(sl_points))
+    except (TypeError, ValueError, OverflowError):
+        values = (math.nan, math.nan, math.nan)
+    equity_value, risk_value, stop_value = values
+    common = {
+        "equity": equity_value if math.isfinite(equity_value) else None,
+        "risk_pct": risk_value if math.isfinite(risk_value) else None,
+        "sl_points": stop_value if math.isfinite(stop_value) else None,
+        "currency": spec.account_currency,
+        "spec_source": spec.source,
+        "rate_source": spec.rate_source,
+    }
+    if (any(isinstance(value, bool) for value in (equity, risk_pct, sl_points))
+            or not all(math.isfinite(value) for value in values)
+            or equity_value <= 0 or risk_value <= 0 or risk_value > 100 or stop_value <= 0):
+        return {**common, "status": "invalid_input", "lot": 0.0,
+                "risk_budget": None, "estimated_stop_cost": None,
+                "reason": "equity, risk percentage, and stop distance must be valid positive values"}
+
+    risk_budget = equity_value * (risk_value / 100.0)
+    if not math.isfinite(risk_budget) or risk_budget <= 0:
+        return {**common, "status": "invalid_input", "lot": 0.0,
+                "risk_budget": None, "estimated_stop_cost": None,
+                "reason": "risk budget is outside the supported numeric range"}
+    if spec.sizing_blocked:
+        return {**common, "status": "unavailable", "lot": None,
+                "risk_budget": round(risk_budget, 2), "estimated_stop_cost": None,
+                "reason": "symbol specification or account-currency conversion is unavailable"}
+
+    unit_value = spec.value_per_point_per_lot
+    costs = (float(spec.commission_per_lot_round_turn), float(spec.spread_typical_points))
+    if (not math.isfinite(unit_value) or unit_value <= 0
+            or any(not math.isfinite(value) or value < 0 for value in costs)):
+        return {**common, "status": "unavailable", "lot": None,
+                "risk_budget": round(risk_budget, 2), "estimated_stop_cost": None,
+                "reason": "broker cost inputs are unavailable"}
+
+    cost_per_lot = stop_value * unit_value + costs[0] + costs[1] * unit_value
+    if not math.isfinite(cost_per_lot) or cost_per_lot <= 0:
+        return {**common, "status": "unavailable", "lot": None,
+                "risk_budget": round(risk_budget, 2), "estimated_stop_cost": None,
+                "reason": "stop-loss cost cannot be valued from the available specification"}
+
+    raw_lot = risk_budget / cost_per_lot
+    capped = raw_lot > spec.max_lot
+    # Avoid overflowing normalize_lot's step calculation for extreme finite inputs.
+    lot = spec.max_lot if not math.isfinite(raw_lot) or capped else spec.normalize_lot(raw_lot)
+    if lot < spec.min_lot - 1e-12:
+        lot = 0.0
+    if lot <= 0:
+        return {**common, "status": "no_legal_lot", "lot": 0.0,
+                "risk_budget": round(risk_budget, 2), "estimated_stop_cost": None,
+                "minimum_lot": spec.min_lot, "reason": "no legal lot fits the risk budget"}
+
+    estimate = points_calculator(spec, stop_value, lot)
+    if not estimate["valuation_valid"]:
+        return {**common, "status": "unavailable", "lot": None,
+                "risk_budget": round(risk_budget, 2), "estimated_stop_cost": None,
+                "reason": estimate["valuation_reason"]}
+    stop_cost = (float(estimate["gross_profit"]) + float(estimate["commission"])
+                 + float(estimate["spread_cost"]))
+    exact_stop_cost = cost_per_lot * lot
+    tolerance = max(math.ulp(risk_budget) * 4, 1e-12)
+    if (not math.isfinite(stop_cost) or not math.isfinite(exact_stop_cost)
+            or exact_stop_cost > risk_budget + tolerance):
+        return {**common, "status": "no_legal_lot", "lot": 0.0,
+                "risk_budget": round(risk_budget, 2),
+                "estimated_stop_cost": round(stop_cost, 2) if math.isfinite(stop_cost) else None,
+                "minimum_lot": spec.min_lot, "reason": "minimum legal volume exceeds the risk budget"}
+
+    return {**common, "status": "ready", "lot": lot,
+            "risk_budget": round(risk_budget, 2),
+            "estimated_stop_cost": round(stop_cost, 2),
+            "minimum_lot": spec.min_lot, "maximum_lot": spec.max_lot,
+            "lot_step": spec.lot_step, "max_lot_capped": capped,
+            "reason": "estimate includes typical spread and round-turn commission; slippage and swap are excluded"}
+
+
 def zone_blockers_for_stop(zones: list[Zone], direction: Direction, entry: float) -> list[Zone]:
     if direction == Direction.up:
         return [z for z in zones if z.kind == ZoneKind.support and z.high <= entry]
