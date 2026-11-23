@@ -1,0 +1,8 @@
+# Candidate profile only. It is intentionally not loaded by runtime settings.
+# Enablement requires the V4 review/acceptance path and Demo evidence.
+signal_confirmation_v4:
+  enabled: false
+  confirmation_points: 100
+  max_chase_points: 30
+  expiry_seconds: 300
+  max_closed_m1_age_seconds: 75
