@@ -9,6 +9,7 @@ trading and vice versa.
 """
 from __future__ import annotations
 
+import hashlib
 import json
 import math
 import os
@@ -55,8 +56,12 @@ from services.market_data.replay import build_feed
 from services.notification.notifier import Notifier
 from services.risk_engine.engine import RiskEngine, default_risk_state
 from services.risk_engine.manager import PositionAction, PositionManager
-from services.risk_engine.planner import PlanInputs, TradePlanner
-from services.strategy_engine.analysis import AnalysisContext, AnalysisService, decision_candles
+from services.risk_engine.planner import TradePlanner, build_plan_inputs
+from services.strategy_engine.analysis import (
+    AnalysisContext,
+    AnalysisService,
+    decision_candles,
+)
 from packages.persistence.position_candles import PositionCandleLog
 from services.strategy_engine.attribution import BlockerTally, RollingAttribution, merge
 
@@ -68,6 +73,10 @@ from services.strategy_engine.engine import StrategyEngine
 from services.strategy_engine.readiness import assess_readiness
 from services.strategy_engine.proposals import entry_proposals
 from services.strategy_engine.momentum_veto import preview_stochastic_veto
+from services.strategy_engine.confirmation import (
+    CONFIRMED as CONFIRMATION_CONFIRMED,
+    SignalConfirmationGate,
+)
 
 def _truthy(value: Any) -> bool:
     return str(value or "").strip().lower() in ("1", "true", "yes", "on")
@@ -237,6 +246,17 @@ class TradingRuntime:
         self.analysis = AnalysisService(self.settings, self.market, self.news)
         self.planner = TradePlanner(self.settings.risk_cfg(), self.settings.strategy_cfg())
         self.strategy = StrategyEngine(self.settings, self.risk, self.predictor, self.planner)
+        confirmation_cfg = self.settings.strategy_cfg().get("signal_confirmation_v4", {})
+        self.confirmation_gate = (
+            SignalConfirmationGate(
+                self.db,
+                confirmation_points=float(confirmation_cfg.get("confirmation_points", 100)),
+                max_chase_points=float(confirmation_cfg.get("max_chase_points", 30)),
+                expiry_seconds=int(confirmation_cfg.get("expiry_seconds", 300)),
+                max_closed_m1_age_seconds=int(
+                    confirmation_cfg.get("max_closed_m1_age_seconds", 75)),
+            ) if confirmation_cfg.get("enabled") is True else None
+        )
         self.manager = PositionManager(self.settings)
         self.gateway = ExecutionGateway(self.settings, self.db)
         self.notifier = Notifier(self.db, min_score=float(self.settings.strategy_cfg()
@@ -644,6 +664,55 @@ class TradingRuntime:
         tick = self.market.ticker(symbol)
         signal = self.strategy.generate(
             ctx, symbol, self.adapter.id, self.mode, tick, health, forecast, equity, now=now)
+        if self.confirmation_gate and signal.action in (SignalAction.buy, SignalAction.sell):
+            direction = Direction.up if signal.action == SignalAction.buy else Direction.down
+            try:
+                account_identity = self.gateway._account(self.adapter)
+            except Exception as exc:  # noqa: BLE001 - identity loss must fail closed
+                self._log_error("confirmation_account_identity", exc)
+                account_identity = None
+            m5_direction = next((item.direction for item in ctx.snapshot.trend
+                                 if item.timeframe.upper() == "M5"), Direction.sideways)
+            m1_frame = ctx.frames.get("M1")
+            m1_bars = (m1_frame[["t", "c"]].to_dict("records")
+                       if m1_frame is not None and {"t", "c"}.issubset(m1_frame.columns) else [])
+            execution_price = float(tick.ask if direction == Direction.up else tick.bid)
+            confirmation = self.confirmation_gate.advance(
+                broker_id=signal.broker_id, symbol=symbol, direction=direction,
+                strategy=signal.strategy, zone_ids=signal.zones_used,
+                now=now, point=float(spec.point),
+                reference_price=execution_price, execution_price=execution_price,
+                m1_bars=m1_bars, m5_direction=m5_direction,
+                data_fresh=ctx.snapshot.data_quality.get("ok") is True,
+                broker_healthy=health == Health.connected,
+                account_identity=account_identity,
+            )
+            if confirmation.state == CONFIRMATION_CONFIRMED:
+                confirmation = self.confirmation_gate.validate_execution(
+                    broker_id=signal.broker_id, symbol=symbol,
+                    candidate_id=confirmation.candidate_id or "", direction=direction,
+                    now=now, point=float(spec.point), execution_price=execution_price,
+                    m1_bars=m1_bars, m5_direction=m5_direction,
+                    data_fresh=ctx.snapshot.data_quality.get("ok") is True,
+                    broker_healthy=health == Health.connected,
+                    account_identity=account_identity,
+                )
+            signal.explanation["signal_confirmation_v4"] = confirmation.__dict__
+            signal.id = confirmation.candidate_id or signal.id
+            if confirmation.expires_at:
+                signal.expires_at = confirmation.expires_at
+            if confirmation.state != CONFIRMATION_CONFIRMED:
+                signal.blockers = list(dict.fromkeys(signal.blockers + [confirmation.reason]))
+                signal.blocker_codes = list(dict.fromkeys(signal.blocker_codes + [
+                    "confirmation_100pt_" + confirmation.state.lower()
+                ]))
+                signal.action = SignalAction.wait
+                signal.status = SignalStatus.weak if signal.score >= 50 else SignalStatus.no_trade
+            else:
+                # Preserve the first released plan after the candidate is confirmed.
+                previous = self.plans.get(signal.id)
+                if previous and previous.action in (SignalAction.buy, SignalAction.sell):
+                    signal.plan = previous.plan
         atr_pct = (ctx.snapshot.indicators.atr14 / ctx.snapshot.price * 100) if ctx.snapshot.price else 0.0
         gate = self.strategy.evaluate_gate(
             signal, spec, tick, risk_state, ctx.snapshot.data_quality, ctx.snapshot.news_lockout,
@@ -928,7 +997,9 @@ class TradingRuntime:
                 # together; mutation entry must not slip between these steps.
                 observations = self.gateway.open_position_snapshot(
                     positions, broker_id=adapter.id, account_identity=identity,
-                    retain_unverified=True)
+                    retain_unverified=True,
+                    position_lifetime_fingerprints=self.gateway.position_lifetime_fingerprints(
+                        adapter, positions))
                 self.positions_cache = positions
                 self._positions_identity = dict(identity)
                 self._positions_adapter = adapter
@@ -1026,10 +1097,36 @@ class TradingRuntime:
                                    "rejected" if result.get("ok") is False else "unknown")
         finally:
             try:
-                self.notifier.emit("info" if outcome == "accepted" else "warning",
-                                   f"Management {action.kind} request: {outcome}",
-                                   f"Ticket {action.ticket}. Execution and remaining exposure have not been verified; "
-                                   "reconcile before further action or resending.", dedupe_seconds=0)
+                dedupe_key = None
+                dedupe_seconds = 0
+                try:
+                    identity = self.gateway._assert_account(adapter)
+                    position = next((p for p in self.positions_cache
+                                     if str(p.ticket) == str(action.ticket)), None)
+                    event = {
+                        "broker_id": adapter.id, "account_identity": identity,
+                        "ticket": str(action.ticket), "kind": action.kind,
+                        "reason": str(getattr(action, "reason", "")),
+                        "new_sl": getattr(action, "new_sl", None),
+                        "volume": getattr(action, "volume", None), "outcome": outcome,
+                        "position": ({"symbol": position.symbol, "direction": position.direction.value,
+                                      "entry": position.entry, "open_time": position.open_time}
+                                     if position else None),
+                    }
+                    canonical = json.dumps(event, sort_keys=True, separators=(",", ":"),
+                                           allow_nan=False, default=str)
+                    dedupe_key = hashlib.sha256(canonical.encode("utf-8")).hexdigest()
+                    dedupe_seconds = 300
+                except Exception:
+                    # Missing account identity must not cause one account's alert
+                    # to suppress another account's event. Emit without dedupe.
+                    pass
+                self.notifier.emit(
+                    "info" if outcome == "accepted" else "warning",
+                    f"Management {action.kind} request: {outcome}",
+                    f"Ticket {action.ticket}. Execution and remaining exposure have not been verified; "
+                    "reconcile before further action or resending.",
+                    dedupe_seconds=dedupe_seconds, dedupe_key=dedupe_key)
             except Exception:
                 # Do not mask an action exception or suggest that resending is safe.
                 self._log_error("management_notification", RuntimeError("management request notification failed"))
@@ -1048,18 +1145,15 @@ class TradingRuntime:
         equity = self.adapter.account_info().equity
         entry_price = tick.ask if direction == Direction.up else tick.bid
         settings = self.risk.settings_view()
-        result = self.planner.build(PlanInputs(
+        result = self.planner.build(build_plan_inputs(
+            risk_cfg=self.settings.risk_cfg(), effective=settings,
             direction=direction, entry=entry_price, spec=spec,
-            atr_points=max(1.0, ctx.snapshot.indicators.atr_points), equity=equity,
-            risk_pct=self.risk.limits().risk_per_trade_pct, spread_points=float(tick.spread_points),
+            atr_points=max(1.0, ctx.snapshot.indicators.atr_points),
+            equity=equity, spread_points=float(tick.spread_points),
             supports=ctx.snapshot.supports, resistances=ctx.snapshot.resistances,
-            swings=[{"kind": s.kind, "price": s.price} for s in ctx.snapshot.swings if s.confirmed],
-            target_mode=settings.targets_mode, min_points=settings.min_points, max_points=settings.max_points,
-            fixed_points=settings.fixed_points,
-            sl_min_points=float(self.settings.risk_cfg().get("stops", {}).get("sl_min_points", 150)),
-            sl_max_points=float(self.settings.risk_cfg().get("stops", {}).get("sl_max_points", 1200)),
-            min_rr_net=self.risk.limits().min_reward_risk,
-            closes_pct=list(self.settings.risk_cfg().get("targets", {}).get("ladder", {}).get("closes_pct", [40, 30, 30])),
+            swings=[{"kind": s.kind, "price": s.price, "idx": s.idx}
+                    for s in ctx.snapshot.swings if s.confirmed],
+            m5_bar_count=len(ctx.frames["M5"]),
         ))
         if result.plan is None:
             return None, "; ".join(result.blockers)
@@ -1109,6 +1203,16 @@ class TradingRuntime:
             return {"ok": False, "error": "signal expired — wait for a fresh one"}
         if signal.action not in (SignalAction.buy, SignalAction.sell):
             return {"ok": False, "error": "signal is not actionable"}
+        if self.confirmation_gate:
+            with self.lock:
+                current = self.signals.get(signal.symbol)
+            if (current is None or current.id != signal.id
+                    or current.action != signal.action):
+                return {"ok": False, "error": "signal is no longer the current actionable setup"}
+            proof = signal.explanation.get("signal_confirmation_v4")
+            if (not isinstance(proof, dict) or proof.get("state") != CONFIRMATION_CONFIRMED
+                    or proof.get("candidate_id") != signal.id):
+                return {"ok": False, "error": "signal has no current 100-point confirmation"}
         # A hand-approval must not lower the bar the signal was generated against:
         # anything under the execution threshold is weak by the strategy's own rule,
         # and the risk gate only enforces the score floor in full-auto mode.
@@ -1138,6 +1242,33 @@ class TradingRuntime:
             quality = (ctx.snapshot.data_quality if ctx else self.market.data_quality(signal.symbol))
             news_lock = (ctx.snapshot.news_lockout if ctx else self.news.lockout(now))
             atr_pct = (ctx.snapshot.indicators.atr14 / ctx.snapshot.price * 100) if ctx else 0.0
+            if self.confirmation_gate:
+                if ctx is None:
+                    return {"ok": False, "error": "current M1/M5 confirmation context is unavailable"}
+                direction = Direction.up if signal.action == SignalAction.buy else Direction.down
+                try:
+                    account_identity = self.gateway._account(self.adapter)
+                except Exception:  # noqa: BLE001 - no verified account, no order
+                    return {"ok": False,
+                            "error": "verified broker account identity is unavailable"}
+                m5_direction = next((item.direction for item in ctx.snapshot.trend
+                                     if item.timeframe.upper() == "M5"), Direction.sideways)
+                m1_frame = ctx.frames.get("M1")
+                m1_bars = (m1_frame[["t", "c"]].to_dict("records")
+                           if m1_frame is not None and {"t", "c"}.issubset(m1_frame.columns) else [])
+                execution_price = float(tick.ask if direction == Direction.up else tick.bid)
+                confirmation = self.confirmation_gate.validate_execution(
+                    broker_id=signal.broker_id, symbol=signal.symbol,
+                    candidate_id=signal.id, direction=direction, now=now,
+                    point=float(spec.point), execution_price=execution_price,
+                    m1_bars=m1_bars, m5_direction=m5_direction,
+                    data_fresh=quality.get("ok") is True,
+                    broker_healthy=self.adapter.health() == Health.connected,
+                    account_identity=account_identity,
+                )
+                if confirmation.state != CONFIRMATION_CONFIRMED:
+                    return {"ok": False, "error": confirmation.reason,
+                            "confirmation_state": confirmation.state}
             gate = self.strategy.evaluate_gate(signal, spec, tick, risk_state, quality, news_lock,
                                               self.adapter.health(), self.predictor.approved, atr_pct)
             if not gate.allow:
@@ -1246,6 +1377,17 @@ class TradingRuntime:
         signal = self.plans.get(signal_id)
         if signal is None:
             return {"ok": False, "error": "signal not found"}
+        if self.confirmation_gate:
+            try:
+                account_identity = self.gateway._account(self.adapter)
+            except Exception:  # noqa: BLE001 - rejection still removes actionability
+                account_identity = None
+            if account_identity is not None:
+                self.confirmation_gate.invalidate(
+                    broker_id=signal.broker_id, symbol=signal.symbol,
+                    candidate_id=signal_id, reason=reason,
+                    account_identity=account_identity,
+                )
         signal.rejected_reason = reason
         signal.action = SignalAction.wait
         self.db.audit("user", "signal.reject", {"signal_id": signal_id, "reason": reason})

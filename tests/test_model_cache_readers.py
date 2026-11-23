@@ -40,7 +40,13 @@ def test_explain_route_does_not_reuse_revoked_cache(monkeypatch):
     monkeypatch.setattr('services.api_gateway.routes.explain.TradeExplainer', lambda *args: explainer)
     monkeypatch.setattr('services.api_gateway.routes.explain.No7LocalAI', Mock())
     explain(ExplainRequest(), runtime, {})
-    assert explainer.explain.call_args.args[-1] is None
+    assert explainer.explain.call_args.args[-1] == {
+        'feed_mode': 'unknown',
+        'quote_status': 'unavailable',
+        'quote_source': 'unavailable',
+        'display_basis': 'unknown',
+        'server_utc_offset_seconds': None,
+    }
 
 
 def test_live_payload_does_not_reuse_revoked_cache():

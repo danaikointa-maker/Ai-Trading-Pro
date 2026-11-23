@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import itertools
 import time
+import uuid
 from dataclasses import dataclass, field
 from typing import Any
 
@@ -97,6 +98,10 @@ class PaperBroker(BrokerAdapter):
         self.live_allowed = bool(profile.get("live_allowed", False))
         self.regulated_note = (profile.get("regulated_note") or "").strip()
         self.feed = feed
+        # Paper tickets restart at 1001 with each adapter instance. This epoch
+        # prevents a retained modify intent from being attributed to a later
+        # simulated position that happens to reuse the same ticket and prices.
+        self.position_lifetime_epoch = uuid.uuid4().hex
         self.balance = float(starting_balance)
         self.starting_balance = float(starting_balance)
         self.slippage_points = slippage_points

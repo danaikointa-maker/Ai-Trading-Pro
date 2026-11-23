@@ -146,6 +146,15 @@ def test_strategy_blockers_carry_codes_one_for_one(runtime):
     assert seen, "no symbol produced a blocker, so nothing was actually checked"
 
 
+def test_candidate_planner_blocker_codes_are_registered():
+    candidate_codes = {
+        "invalid_stop_policy", "structure_missing", "stop_distance_max",
+        "broker_stop_distance", "invalid_target_policy", "target_distance_max",
+        "broker_target_distance", "opposing_zone",
+    }
+    assert candidate_codes <= {code for code, _ in BLOCKER_CODES}
+
+
 def test_planner_blockers_carry_codes(runtime):
     from packages.shared_schemas.models import Direction
 
@@ -456,11 +465,15 @@ def test_buckets_are_pruned_so_a_long_session_cannot_grow_without_bound():
 
 def test_summary_reports_both_the_window_and_the_session(runtime):
     runtime.reset_attribution()
-    symbol = runtime.symbols()[0]
-    runtime._decide_symbol(symbol, 10_000.0, Health.connected,
-                           runtime.risk.state(runtime.adapter), time.time())
+    # Use a symbol that the live background worker never processes. The runtime
+    # worker runs during the test session and may otherwise add a second decision
+    # between the explicit decision and this exact-count assertion.
+    symbol = "TEST-ATTRIBUTION"
+    roll = RollingAttribution()
+    roll.add_signal(False, ["entry_conditions"], [], now=time.time())
+    runtime.attribution[symbol] = roll
 
-    body = runtime.attribution_summary()
+    body = runtime.attribution_summary(symbol=symbol)
     assert body["basis"] == "rolling" and body["requested_window_seconds"] == 3600
     assert body["overall"]["signal"]["decisions"] == 1
     assert body["session"]["signal"]["decisions"] == 1

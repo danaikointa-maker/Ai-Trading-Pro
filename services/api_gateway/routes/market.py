@@ -106,8 +106,14 @@ def calculator(symbol: str = "XAUUSD", points: float = 750, lot: float = 0.01,
                runtime: TradingRuntime = Depends(get_runtime), user=Depends(current_user)):
     spec_obj = runtime.market.spec(symbol)
     return {"result": points_calculator(spec_obj, points, lot), "spec": spec_obj.model_dump(),
-            "disclaimer": ("Gross estimate from the live contract specification. Excludes spread, "
-                           "commission, swap and slippage. Not a profit guarantee.")}
+            "provenance": {"market_feed": runtime.market.effective_mode,
+                           "spec_source": spec_obj.source,
+                           "rate_source": spec_obj.rate_source,
+                           "account_currency": spec_obj.account_currency,
+                           "spec_complete": spec_obj.spec_complete},
+            "disclaimer": ("Gross and net are estimates in account currency. Net after known costs "
+                           "subtracts typical spread and commission; swap and slippage are excluded. "
+                           "The result is not a profit guarantee.")}
 
 
 @router.get("/specs")

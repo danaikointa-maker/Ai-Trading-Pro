@@ -46,6 +46,13 @@ Broker Manager บันทึก Demo/Live เป็นคนละ managed-acc
 > จะ **แก้โค้ด** ไม่ใช่แค่ดูแลระบบ: `./scripts/dev_setup.sh` ติดตั้งทุกอย่างให้ในคำสั่งเดียว
 > และ [`DEVELOPMENT.md`](DEVELOPMENT.md) อธิบายแผนที่โค้ด/เกต/งานถัดไป
 
+### Local AI explainer
+
+`NO7_LOCAL_AI_ENABLED` ปิดเป็นค่าเริ่มต้น (`false`). เมื่อเปิดใช้ จะเรียก Ollama-compatible
+text generation เพื่อเรียบเรียงคำอธิบายจาก fact sheet เท่านั้น; ไม่มี tools หรือ broker credentials.
+คำถามลักษณะคำสั่งซื้อ/ขายถูกปฏิเสธก่อนเรียกโมเดล. การตั้งค่านี้ไม่เปิด Auto Trading และไม่เปลี่ยน feed,
+Risk Engine หรือ ExecutionGateway.
+
 ```bash
 # ติดตั้งหรือกู้สภาพแวดล้อมพัฒนา (venv + deps + .env + dashboard bundle)
 ./scripts/dev_setup.sh
@@ -371,7 +378,11 @@ curl -s -X POST localhost:8000/api/brokers/mt5-bridge-demo/activate \
 
 V4 เพิ่ม `scripts/mt5_market_publisher.py` และ `POST /api/market/publish/mt5` สำหรับ quote/rates/specs ของ MT5 Demo เท่านั้น. Token แยกจาก `NO7_BRIDGE_TOKEN`; route นี้ไม่มี command/position schema และไม่แตะคิว EA. ฝั่ง API ใช้ `NO7_MT5_MARKET_PUBLISHER_ENABLED`, `NO7_MT5_MARKET_PUBLISHER_TOKEN`, `NO7_MT5_MARKET_EXPECTED_LOGIN`, `NO7_MT5_MARKET_EXPECTED_SERVER`, `NO7_MT5_MARKET_ACCOUNT_ID`; ฝั่ง PC ใช้ `NO7_MT5_MARKET_API_URL`, `NO7_MT5_MARKET_SYMBOL_MAP` (เช่น `XAUUSD=XAUUSD.s`) และ poll/rates intervals. Script ตรวจ Demo login/server ปัจจุบัน; ไม่รับรหัสผ่านและไม่สลับบัญชี.
 
-PC publisher ต้องมี environment settings ใน PowerShell process ที่ใช้รัน script: `NO7_MT5_MARKET_API_URL` (loopback tunnel เช่น `http://127.0.0.1:18181/api/market/publish/mt5`), `NO7_MT5_MARKET_PUBLISHER_TOKEN` (ค่าต้องตรงกับฝั่ง VM100), `NO7_MT5_MARKET_EXPECTED_LOGIN`, `NO7_MT5_MARKET_EXPECTED_SERVER` และ `NO7_MT5_MARKET_SYMBOL_MAP`. ค่าฝั่ง VM ใน `/home/danai/no7-ai-trading-pro-v4-staging/.env` ไม่ได้ถูกโหลดเข้าฝั่ง Windows อัตโนมัติ; ให้จัดเก็บ/ป้อน token ผ่าน secret mechanism ในเครื่อง และห้ามใช้ `NO7_BRIDGE_TOKEN` แทน. เมื่อค่า required ขาด script จะแจ้งชื่อ key ที่ขาดทั้งหมดโดยไม่แสดง value.
+PC publisher อ่านค่า required และ optional เฉพาะกลุ่ม `NO7_MT5_MARKET_*` จาก environment ของ process ก่อน แล้วจึงเติมค่าที่ขาดจาก `.env` ใน root ของ checkout; ค่า process มีลำดับความสำคัญสูงกว่า. Loader อ่านเฉพาะ allowlist ของ publisher และไม่ import `NO7_BRIDGE_TOKEN`, broker password หรือ secrets อื่นจาก `.env`. ต้องตั้ง `NO7_MT5_MARKET_API_URL` (ตัวอย่าง loopback tunnel `http://127.0.0.1:18181/api/market/publish/mt5` หลังตรวจ tunnel), `NO7_MT5_MARKET_PUBLISHER_TOKEN` (secret เฉพาะที่ provision ฝั่ง API แล้วเก็บค่าเดียวกันอย่างปลอดภัยบน PC), `NO7_MT5_MARKET_EXPECTED_LOGIN`, `NO7_MT5_MARKET_EXPECTED_SERVER` และ `NO7_MT5_MARKET_SYMBOL_MAP`. ค่าใน VM100 ไม่ถูกส่งหรืออ่านจาก PC โดยอัตโนมัติ; ห้ามใช้ `NO7_BRIDGE_TOKEN` แทน. เมื่อตั้งค่า required ไม่ครบ script แจ้งชื่อ key ที่ขาดโดยไม่แสดงค่า.
+
+ตัวอย่าง key ที่ใส่ใน local `.env` อยู่ใน `.env.example` แบบ comment ไว้. ห้าม commit `.env` หรือวางค่าจริงใน prompt/เอกสาร. หาก token ยังไม่ได้ provision ฝั่ง API ให้หยุดที่ขั้นตั้งค่า; อย่าสร้าง token ฝั่ง PC เองหรือเดาค่า.
+
+หลังตรวจ tunnel, ตั้งค่า local `.env` และยืนยันว่า MT5 เปิดบัญชี Connext Demo ที่ตรงกับ expected login/server แล้ว ให้รันจาก root ของ checkout บน Windows ด้วย `& '.\.venv\Scripts\python.exe' scripts\mt5_market_publisher.py`. หยุดด้วย `Ctrl+C`. Publisher จะส่งเฉพาะ quote/rates/specs; ถ้า tick เก่ากว่า limit จะไม่ส่ง snapshot และจะแสดงเหตุผลราย symbol. ห้ามเพิ่ม freshness limit เพื่อให้ข้อมูลเก่าผ่าน.
 
 ยังไม่เปิด publisher จนกว่าจะตั้ง token แยกและ symbol allowlist ให้ตรงกับ broker. Script ปฏิเสธ bearer token ผ่าน HTTP ไปยัง host เครือข่ายทั่วไป; ใช้ HTTPS หรือ SSH loopback tunnel เท่านั้น. การตั้งค่ารุ่นนี้ผูก publisher identity เดียวต่อ runtime จึงไม่ใช่การรองรับหลายบัญชี. Python publisher ส่งได้เฉพาะเวลา UTC; หากมีเพียง broker-server time จะหยุดส่งจนกว่าจะมี conversion ที่ตรวจสอบได้. ค่า `NO7_MT5_MARKET_MAX_TICK_AGE_SECONDS` รับ 1–15 วินาที (default 10) และ publisher จะไม่ส่ง tick เก่า. ค่าเปิดใช้งาน API เป็น false โดยปริยาย.
 
@@ -431,6 +442,15 @@ curl -s localhost:8000/api/system/notify -H "Authorization: Bearer $TOK" | jq '.
 | ข้อความถี่เกิน `alerts.min_interval_seconds` (ค่าเริ่มต้น 1s/channel) | **ข้าม** ข้อความนั้น (in-app ยังบันทึกครบ) และนับใน `dropped` — กันบอทโดน mute |
 | ข้อความยาวเกิน | ตัดให้พอดีลิมิต (Telegram 4096 / LINE 5000) ไม่ให้ผู้ให้บริการตอบ 400 |
 | ส่งไม่สำเร็จ | บันทึกใน `alerts` + `notify_status` (`failures`), `state: "failing"` ใน health |
+
+แจ้งเตือน management ที่มี account/action dedupe key จะเก็บ fingerprint แบบ
+SHA-256 ใน `alerts.dedupe_fingerprint` พร้อมแถว `notify_outbox` ภายใน SQLite
+transaction เดียว ก่อนส่ง เพื่อป้องกัน alert ซ้ำจากหลาย Notifier หรือหลัง restart
+ภายในช่วงที่กำหนด (ปัจจุบัน 300 วินาที) การ migration เพิ่มคอลัมน์และ index แบบ
+additive; ห้ามลบคอลัมน์นี้ขณะ rollback แอป Outbox เป็น at-least-once: หาก provider
+รับข้อความแล้วแต่ response หาย ระบบอาจส่งซ้ำหลัง retry ได้ การ dedupe
+แจ้งเตือนไม่ใช่ idempotency ของ order/modify/close — คำสั่งเทรดใช้ ExecutionGateway
+และต้อง reconcile ผลที่ยังไม่ชัดเจน
 
 **Token ไม่รั่ว**: token ของ Telegram อยู่ใน URL จึงอาจโผล่ในข้อความ error — ทุกสตริงที่ออกจาก
 notifier (status, alert payload, error) ถูกแทนด้วย `***` ก่อนเก็บ/ส่ง และ `status()` แสดงแค่
@@ -867,3 +887,24 @@ sqlite3 storage/db/no7.sqlite3 \
   `jwt_secret_from_env: false` ถ้ายังใช้ secret สำรองในโค้ด (เท่ากับใครรู้โค้ดก็ปลอม token ได้)
 - MT5 password อยู่ใน `.env` เท่านั้น (ห้าม hardcode ใน MQL5 หรือ Python)
 - ทุกคำสั่งถูก audit (`actor`, `action`, `detail`) — ตรวจได้ที่หน้า System
+
+## U05 — Durable position modification (V4 candidate)
+
+V4 now carries an additive `position_modify_intents` ledger. Each position stop
+change is reserved and fenced by broker/account/ticket/position lifetime before adapter I/O; an
+unresolved `reserved`, `sending`, `accepted_unverified`, or `unknown` intent
+blocks another modification for that account and position lifetime until
+reconciliation. Legacy rows without a lifetime fingerprint retain a conservative
+`legacy-unscoped` fence.
+The append-only `position_events` log records transitions. A broker acknowledgement
+is not confirmation: the gateway reads the position back and confirms the stop
+and target against the broker's tick size. A stale quote, switched account,
+missing broker constraints, read-only bridge, or ambiguous result fails closed.
+
+The candidate's local unit and regression tests passed, but this is not a staging
+or broker acceptance. Before staging, take a verified database backup and retain
+the current `06642a0` artifact. Rollback means restore the prior application
+artifact while leaving `position_modify_intents` and its rows intact; do not drop
+the additive table. Stage rollout and a Connext-Demo modify/readback require the
+separate acceptance gates in the U05 Task Register. Live modification remains
+disabled by policy.

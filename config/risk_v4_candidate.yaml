@@ -1,0 +1,48 @@
+# INACTIVE DESIGN CANDIDATE — NOT LOADED BY Settings or RiskEngine.
+# Activation requires a reviewed migration and separate operator approval.
+schema_version: conservative_v4_candidate
+status: inactive
+activation_requires_review: true
+
+limits:
+  risk_per_trade_pct: 0.50
+  max_aggregate_risk_pct: 1.00
+  max_daily_loss_pct: 2.00
+  max_weekly_loss_pct: 4.00
+  max_drawdown_pct: 8.00
+  max_open_trades: 1
+  max_open_per_symbol: 1
+  max_trades_per_day: 5
+  min_reward_risk: 1.50
+
+stops:
+  mode: atr_structure
+  timeframe: M5
+  atr_period: 14
+  atr_multiplier: 1.50
+  structure_buffer_atr: 0.20
+  swing_lookback_bars: 10
+  sl_required: true
+  never_widen_stop_loss: true
+
+targets:
+  mode: single_2r
+  target_r: 2.00
+  partial_close_enabled: false
+  minimum_net_reward_risk: 1.50
+  reject_if_obstructed: true
+
+# Planner switches are proposals for the inactive candidate only. Runtime
+# continues to load config/risk.yaml until an explicit reviewed migration.
+plan_options:
+  sl_policy: atr_structure
+  sl_structure_buffer_atr: 0.20
+  swing_lookback_bars: 10
+  directional_tick_rounding: true
+  single_target_r: 2.00
+  enforcement_status: candidate_only
+
+execution:
+  full_auto_enabled: false
+  live_auto_enabled: false
+  demo_acceptance_required: true

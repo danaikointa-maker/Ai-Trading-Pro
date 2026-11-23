@@ -1,5 +1,8 @@
 # สูตรคำนวณทั้งหมด (และจุดที่ยังเป็นการประมาณ)
 
+> AI Explainer ไม่ได้คำนวณหรือเปลี่ยนสูตรตัวเลข: มันอ่าน fact sheet ที่สร้างจากผลของระบบเดิมเท่านั้น
+> และส่ง feed/quote/clock provenance ที่ผ่าน allowlist เพื่อช่วยระบุบริบท ไม่มีผลต่อ Risk Engine หรือการส่งคำสั่ง.
+
 เอกสารนี้ตอบคำถามว่า "ตัวเลขบนหน้าจอมาจากสูตรอะไร" และ "สูตรไหนยังไม่เป๊ะ"
 ทุกข้อที่มีเครื่องหมาย ✅ มี test ครอบอยู่ใน `tests/test_invariants.py` และ `tests/test_currency.py`
 
@@ -18,12 +21,17 @@ pnl_account = Δprice_signed × contract_size × lot × quote_to_account_rate
 - `point`, `tick_size`, `contract_size`, `min_lot`, `lot_step`, `stops_level` **อ่านจากโบรกเกอร์**
 - ราคาทุกจุดถูก snap ลงกริด `tick_size` ✅ (`SymbolSpec.round_price`)
 - `quote_to_account_rate` แปลงกำไรจากสกุล quote → สกุลบัญชี และ **ถูกใช้เหมือนกันทุกเอนจิน** ✅
-  (`SymbolSpec.pnl_in_account_currency` → backtest, paper, MT5 offline estimate, risk notional)
+  (`SymbolSpec.pnl_in_account_currency` → points calculator, backtest, paper, MT5 offline estimate, risk notional)
 - ตัวอย่าง USDJPY (quote = JPY, rate = 1/157.2): ราคา +0.5 บน 0.1 lot
   = 0.5 × 100,000 × 0.1 = 5,000 JPY = **31.81 USD** (ไม่ใช่ 5,000 USD)
 - ⚠️ ถ้า resolve rate ไม่ได้ (`rate_source = "unknown"`) ระบบ **ไม่เดาเป็น 1.0**:
   `spec.sizing_blocked` หยุดการคำนวณ lot, MT5 offline estimate โยน `BrokerError`,
-  และ position นั้นถูกตัดออกจาก notional exposure แทนการประเมินค่าผิด
+  position นั้นถูกตัดออกจาก notional exposure และ points calculator ไม่คืนตัวเลขเงิน
+  แทนการประเมินค่าผิด
+
+Points calculator รายงาน `gross_profit` ในสกุลบัญชี, `net_profit` หลังหัก commission,
+`spread_cost` ตาม spread ปกติจาก spec และ `net_after_known_costs` หลังหัก spread กับ
+commission. Swap และ slippage ยังไม่รวม และแหล่ง spec/FX แสดงแยกให้เห็น.
 
 ## 1b. Swap (ค่าถือข้ามคืน)
 

@@ -111,7 +111,7 @@ import RiskPanel from '../components/RiskPanel.vue'
 import Stat from '../components/Stat.vue'
 import { api } from '../lib/api'
 import { fmt, money } from '../lib/format'
-import { riskState as risk, state, toast } from '../lib/store'
+import { refreshSystemConfig, riskState as risk, state, toast } from '../lib/store'
 
 const saving = ref(false)
 const view = ref(null)
@@ -174,6 +174,7 @@ async function save() {
   try {
     const payload = { limits: { ...form } }
     await api.put('/api/risk/settings', payload)
+    await refreshSystemConfig()
     toast('บันทึกการตั้งค่า risk แล้ว', 'success')
     await load()
   } catch (err) {

@@ -9,6 +9,7 @@ from packages.shared_schemas.models import Direction, EquityPoint, TradeMode, Tr
 from packages.persistence.position_events import PositionEventLog
 from packages.persistence.position_candles import PositionCandleLog
 from services.api_gateway.deps import current_user, get_runtime
+from services.api_gateway.roles import ADMIN, at_least
 from services.api_gateway.state import TradingRuntime
 from services.backtest_engine.metrics import compute_metrics
 
@@ -80,6 +81,9 @@ def close_all(runtime: TradingRuntime = Depends(get_runtime), user=Depends(curre
 @router.post("/mode")
 def set_mode(payload: ModeRequest, runtime: TradingRuntime = Depends(get_runtime),
              user=Depends(current_user)):
+    if payload.mode == TradeMode.full_auto and not at_least(user.get("role"), ADMIN):
+        raise HTTPException(status_code=403,
+                            detail="switching to Full Auto requires admin role")
     result = runtime.set_mode(payload.mode, actor=user["email"])
     if not result.get("ok"):
         raise HTTPException(status_code=400, detail=result)

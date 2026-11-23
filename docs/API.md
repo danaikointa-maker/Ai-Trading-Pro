@@ -108,12 +108,17 @@ CORS เป็น **allowlist**: ค่าเริ่มต้นไม่ใ�
 |---|---|
 | `viewer` | ทุก GET — POST/PUT/PATCH/DELETE ทุกเส้นทาง (ยกเว้น `/api/auth/login`) ได้ **403** |
 | `trader` | ทุกอย่างของผู้ใช้จริง: ออเดอร์, ปิดไม้, kill switch, เทรน, backtest, dataset, สลับ symbol |
-| `admin` | เพิ่มจาก trader: จัดการผู้ใช้ (`/api/users`) และเปลี่ยน security posture |
+| `admin` | เพิ่มจาก trader: จัดการผู้ใช้ (`/api/users`) และเปลี่ยน security posture รวมถึงสวิตช์ Full Auto |
 
 กติกาที่บังคับในโค้ด:
 
 - **สิทธิ์มาจากฐานข้อมูล ไม่ใช่ token** — token บอกว่าเป็นใคร; `users.role` บอกว่าทำอะไรได้
   → ปิดบัญชีหรือลด role มีผลกับ request ถัดไปทันที (ไม่ต้องรอ token หมดอายุ)
+- สวิตช์ Full Auto ใน `PUT /api/risk/settings` และการเลือก `full_auto` ใน
+  `POST /api/trading/mode` เป็น **admin เท่านั้น**; `manual`/`semi_auto` ยังใช้สิทธิ์ trader
+  ตามปกติ. การปฏิเสธสิทธิ์เกิดก่อนเขียน risk limits เพื่อไม่ให้ payload ผสมเปลี่ยนบางส่วน.
+  Full Auto ต้องผ่านทั้ง `NO7_ALLOW_FULL_AUTO=true` และ Risk Engine switch; gate ตรวจซ้ำทุกครั้ง
+  และการเริ่มระบบจะลด mode ที่ค้างอยู่กลับเป็น Manual หากสวิตช์ใดปิด.
 - role ที่ไม่รู้จัก/ว่างเปล่า → **viewer** (fail closed) · `owner` (ของเดิม) → `admin`
 - ปิด/ลด role/ลบ **admin ที่ยังใช้งานคนสุดท้าย** ไม่ได้ (กัน lockout)
 - ทุกการเปลี่ยนผู้ใช้ถูกบันทึกใน audit (`users.create`, `users.update`, `users.delete`)
@@ -150,7 +155,7 @@ CORS เป็น **allowlist**: ค่าเริ่มต้นไม่ใ�
 | GET | `/api/market/ticker?symbol=` | last/bid/ask/spread |
 | POST | `/api/market/publish/mt5` | dedicated `Bearer` market-publisher token; Demo quotes/rates/specs only, separate from EA bridge poll/command queue |
 | GET | `/api/market/specs?symbol=` | digits/point/tick/contract/lot step/stops level |
-| GET | `/api/market/calculator?symbol=&points=&lot=` | points → profit (ไม่รวม spread/commission/swap/slippage) |
+| GET | `/api/market/calculator?symbol=&points=&lot=` | read-only estimate ในสกุลบัญชี; คืน `gross_profit`, `net_profit` หลัง commission, `spread_cost`, `net_after_known_costs`, แหล่ง market/spec/FX และ `valuation_valid`; ไม่คืนยอดเงินเมื่อสเปกหรือ FX ยังไม่ครบ; swap/slippage ไม่รวม |
 | GET | `/api/analysis/{symbol}` | snapshot เต็ม (trend, structure, zones, indicators, regime) |
 | GET | `/api/analysis/{symbol}/zones` | supports/resistances พร้อม evidence |
 
@@ -190,7 +195,7 @@ H080 reload ใช้ approval ของ payload และ DB ร่วมกั
 | GET | `/api/trading/state` | account/positions/risk/mode/reconcile/broker |
 | POST | `/api/trading/order` | `{symbol,direction}` manual; ผ่าน gate เท่านั้น |
 | POST | `/api/trading/close` \| `/close-all` | ปิดไม้ |
-| POST | `/api/trading/mode` | `manual` \| `semi_auto` \| `full_auto` |
+| POST | `/api/trading/mode` | `manual` \| `semi_auto` ใช้สิทธิ์ trader; `full_auto` ต้อง admin และสวิตช์ความปลอดภัยทั้งสองเปิด |
 | GET | `/api/trading/trades?limit=` | ไม้ที่ปิดแล้ว |
 | GET | `/api/trading/journal?limit=` | journal entries (worked/failed/lesson/tags) |
 | GET | `/api/trading/performance` | metrics + equity curve + by_exit_reason |
@@ -201,9 +206,9 @@ H080 reload ใช้ approval ของ payload และ DB ร่วมกั
 | Method | Path | Notes |
 |---|---|---|
 | GET | `/api/risk/settings` | limits + targets + stops + full_auto requirements |
-| PUT | `/api/risk/settings` | `{limits:{...}}` patch (audit ทุกครั้ง) |
+| PUT | `/api/risk/settings` | `{limits:{...}}` patch (audit ทุกครั้ง); `full_auto_enabled` เปลี่ยนได้โดย admin เท่านั้น และปิดแล้วจะกลับ Manual หาก Full Auto กำลังเลือกอยู่ |
 | POST | `/api/risk/kill-switch` \| `DELETE` | เปิด/ปิดด้วยมือ |
-| GET | `/api/risk/calculator?symbol=&points=&lot=` | เหมือน market calculator |
+| GET | `/api/risk/calculator?symbol=&points=&lot=` | ใช้ math core เดียวกับ market calculator; read-only และคืน provenance สเปก/FX |
 
 ## Brokers & backtest
 
@@ -224,6 +229,12 @@ H080 reload ใช้ approval ของ payload และ DB ร่วมกั
 | Method | Path | Notes |
 |---|---|---|
 | POST | `/api/explain` | `{question,symbol}` → `{answer,bullets,citations,model_used,facts}`; ห้ามสั่งออร์เดอร์ |
+
+`facts.observability` (เมื่อ route อ่าน metadata ได้) มีเฉพาะ `feed_mode`, `quote_status`,
+`quote_source`, `display_basis` และ `server_utc_offset_seconds`; ป้ายที่ไม่รู้จักถูกแทนด้วย
+`unknown`/`unavailable`. ไม่มี account ID, credential, position หรือ command payload ในส่วนนี้.
+คำถามที่ตรวจพบเจตนาสั่งซื้อ/ขายจะได้คำตอบปฏิเสธแบบ deterministic และไม่ถูกส่งให้ local LLM.
+Endpoint นี้เป็น read-only explanation; ไม่เรียก ExecutionGateway.
 
 ## WebSocket
 

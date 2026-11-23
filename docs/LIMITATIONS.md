@@ -1,5 +1,13 @@
 # Limitations & Honest Status
 
+## AI Trader Team / Explainer
+
+- U12 เพิ่ม feed, quote และ clock provenance แบบ allowlist ให้ fact sheet ใน `/api/explain` และปฏิเสธ
+  คำขอที่มีเจตนาสั่งซื้อ/ขายก่อนส่งข้อความให้ local LLM. ไม่เพิ่ม agent orchestration, tools, API,
+  database หรือสิทธิ์ execution; ยังเป็น text-only explainer และ local model ปิดเป็นค่าเริ่มต้น.
+- การตรวจเจตนาสั่งงานเป็นตัวกรองข้อความแบบ deterministic ไม่ใช่ระบบ authorization; คำสั่งจริงยังต้องผ่าน
+  API/RBAC, Risk Engine และ ExecutionGateway ที่มีอยู่. การทดสอบนี้ไม่ใช่ Demo หรือ broker acceptance.
+
 เอกสารนี้เขียนขึ้นเพื่อกันความเข้าใจผิดก่อนเอาเงินจริงเข้าไปเกี่ยวข้อง
 ทุกข้อคือสิ่งที่ **ยังไม่จริง** หรือ **ยังไม่ครบ** ใน V1 นี้
 
@@ -27,6 +35,9 @@
 
 - ค่าเริ่มต้นใช้ **simulated feed** (GBM + regime switch + news shock, seed 7)
   ตัวเลขทุกตัวในภาพรวมจึงเป็นตัวอย่าง ไม่ใช่ราคาตลาดจริง
+- `config/risk_v4_candidate.yaml` เป็น candidate สำหรับ V4 ที่ยังไม่ active; runtime โหลด
+  `config/risk.yaml` เดิมเท่านั้น. ค่า risk 5% weekly loss, 10% drawdown และ net RR 1.30
+  จึงยังเป็นค่าที่ใช้งานอยู่ และ candidate ห้ามใช้เป็นการอนุมัติคำสั่ง Demo หรือ Live.
 - เมื่อตั้ง `NO7_FEED_MODE=mt5` จะอ่านราคาจากเทอร์มินัลจริง แต่ยังไม่ได้ทดสอบกับ Connext
   ในสภาพตลาดจริง (ต้องมี Windows + terminal + บัญชี Demo)
 - **Freshness ของเวลา MT5 ยังไม่ผ่านการรับรอง**: บันทึก read-only ของ Connext-Demo
