@@ -908,3 +908,21 @@ artifact while leaving `position_modify_intents` and its rows intact; do not dro
 the additive table. Stage rollout and a Connext-Demo modify/readback require the
 separate acceptance gates in the U05 Task Register. Live modification remains
 disabled by policy.
+
+## U04 — MT5 entry preflight (V4 local candidate)
+
+Before the existing `MT5Broker.order_send` reaches MT5 `order_send`, the adapter
+requires both SL and TP, checks their direction and reported broker stop/freeze
+distance, estimates stop-loss P/L with `order_calc_profit`, estimates required
+margin with `order_calc_margin`, and requires `order_check` to return success and
+non-negative projected free margin. Missing, non-finite, rejected, or insufficient
+preflight data produces a persisted **known rejection; no order sent**. A broker
+account identity change still fails closed and the Execution Gateway retains its
+existing reconciliation fence.
+
+This local preflight does not replace the Risk Engine risk-budget decision,
+Execution Gateway idempotency, or post-fill SL/TP position readback. `order_calc_margin`
+is only a calculation; the broker `order_check` is the final pre-send validator.
+Unit tests use a fake MT5 module and do not connect to or send orders to a terminal.
+Real broker receipt, Connext-Demo acceptance, profile activation, and Live trading
+remain NOT TESTED / DISABLED.

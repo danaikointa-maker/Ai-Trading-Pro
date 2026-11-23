@@ -234,3 +234,72 @@ def test_paper_protection_action_uses_gateway_and_confirms_broker_readback(tmp_p
             (adapter.id, modify.ticket))["state"] == "confirmed"
     finally:
         db.close()
+
+
+def test_paper_protection_lost_ack_is_readback_confirmed_without_resend(tmp_path):
+    clock = [1000.0]
+
+    class Feed:
+        bid = 2000.0
+        ask = 2000.2
+
+        def ticker(self, _symbol):
+            return Tick(t=clock[0], bid=self.bid, ask=self.ask,
+                        spread_points=20, last=(self.bid + self.ask) / 2)
+
+    class RuntimeSettings:
+        execution: ClassVar[dict[str, int]] = {"position_modify_max_quote_age_seconds": 10}
+
+    spec = _spec()
+    profile = {"id": "paper-lost-ack", "symbols": {
+        "XAUUSD": {name: getattr(spec, name) for name in (
+            "digits", "point", "tick_size", "contract_size", "min_lot", "max_lot",
+            "lot_step", "stops_level_points", "freeze_level_points", "profit_currency",
+            "account_currency", "spec_complete")}}}
+    feed = Feed()
+    paper = PaperBroker(profile, feed, starting_balance=10_000, clock=lambda: clock[0])
+    db = Database(tmp_path / "paper-protection-lost-ack.sqlite3")
+
+    class AckLostAdapter:
+        adapter_type = "simulated_mt5"
+        id = paper.id
+
+        def __getattr__(self, name):
+            return getattr(paper, name)
+
+        def modify_position(self, ticket, sl=None, tp=None):
+            ok = paper.modify_position(ticket, sl=sl, tp=tp)
+            if ok:
+                raise RuntimeError("simulated acknowledgement lost after broker update")
+            return ok
+
+    adapter = AckLostAdapter()
+    try:
+        opened = ExecutionGateway(RuntimeSettings(), db).submit(paper, OrderRequest(
+            symbol="XAUUSD", side=OrderSide.buy, volume=0.1, sl=1990, tp=2020,
+            signal_id="paper-protection-lost-ack-1"))
+        assert opened.verified is True
+
+        feed.bid, feed.ask = 2008.0, 2008.2
+        positions = paper.positions()
+        action = next(action for action in _protection_manager().evaluate(
+            positions, {"XAUUSD": paper.symbol_spec("XAUUSD")}, {}, None,
+            now=clock[0], atr_points=100) if action.kind == "modify")
+        gateway = ExecutionGateway(RuntimeSettings(), db)
+
+        assert gateway.modify(adapter, action.ticket, sl=action.new_sl, reason=action.reason)
+        assert paper.positions()[0].sl == action.new_sl
+        intent = db.query_one(
+            "SELECT state FROM position_modify_intents WHERE broker_id=? AND ticket=?",
+            (paper.id, action.ticket))
+        assert intent["state"] == "confirmed"
+
+        # Replaying the identical protective level is a readback no-op, not a
+        # second broker modification after the lost acknowledgement.
+        assert gateway.modify(adapter, action.ticket, sl=action.new_sl, reason=action.reason)
+        confirmed = db.query(
+            "SELECT state FROM position_modify_intents WHERE broker_id=? AND ticket=?",
+            (paper.id, action.ticket))
+        assert [row["state"] for row in confirmed] == ["confirmed"]
+    finally:
+        db.close()

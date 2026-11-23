@@ -43,10 +43,13 @@ maintained.
 4. **DONE:** Automatic and manual entry code now share `build_plan_inputs(...)`.
    Regression tests confirm the effective legacy profile and unchanged default
    nearest-tick mode.
-5. The planner estimates spread and commission, but slippage, broker margin,
-   stops/freeze constraints and post-fill accepted levels are not all verified
-   there. These belong to the existing execution gateway / broker reconciliation
-   contract and must remain a hard pre-send/post-fill gate.
+5. The planner estimates spread and commission. The existing MT5 adapter now
+   checks side-correct required SL/TP against the broker's reported stop/freeze
+   distance, verifies adverse stop P/L with `order_calc_profit`, checks estimated
+   margin against current free margin with `order_calc_margin`, and requires
+   `order_check` to approve before `order_send`. Any unavailable/invalid result
+   is a known no-send rejection. This is an additional broker preflight, not a
+   replacement for Risk Engine budget checks or the gateway's post-fill readback.
 6. Candidate planner support now produces one 2R broker TP, one 100% target
    record, disables manager partials for that plan and rejects opposing zones.
    Runtime profile remains inactive; post-fill broker acceptance remains
@@ -72,6 +75,13 @@ They do not establish broker Demo acceptance or validate an SL/TP order.
 Candidate-only tick-normalization tests cover BUY and SELL geometry with a
 0.05 tick size and verify the unchanged nearest-tick path when the flag is off.
 
+MT5 preflight regression uses a fake terminal only:
+`pytest tests/test_mt5_order_preflight.py tests/test_mt5_account_continuity.py
+tests/test_v4_plan_candidate.py tests/test_execution_recovery.py -q` —
+**134 passed**. It covers BUY/SELL protective geometry, stop/freeze distances,
+broker P/L/margin calculation failures, insufficient margin, rejected/invalid
+`order_check`, and proves that failed preflight never calls `order_send`.
+
 ## Safe implementation order
 
 1. **DONE:** Candidate-only plan option exists with legacy-preserving defaults.
@@ -82,13 +92,17 @@ Candidate-only tick-normalization tests cover BUY and SELL geometry with a
    rejection and point/price conversion tests.
 5. **DONE:** Candidate 2R target, partial-off, opposing-zone rejection and
    net-RR behavior are covered.
-6. Verify `order_check`, margin, stops/freeze levels and post-fill SL/TP only
-   through the existing ExecutionGateway and an explicitly approved Demo.
+6. **DONE locally only:** fake-terminal tests prove the existing MT5 adapter
+   runs P/L, margin and `order_check` preflight before send. Verify actual broker
+   acceptance, margin values and post-fill SL/TP only through the existing
+   ExecutionGateway on explicitly approved Demo.
 
 The candidate profile is represented only by `config/risk_v4_candidate.yaml`.
 The older duplicate `config/candidates/conservative_v4_risk.yaml` was removed;
 candidate isolation is regression-tested and `config/risk.yaml` remains the
 runtime source.
 
-No LIVE order, broker action, profile activation or migration occurred. U04 is
-not complete; this audit merely clarifies the implementation boundary.
+No LIVE/Demo order or broker action, profile activation or migration occurred.
+The preflight is local source/test evidence only; actual Connext-Demo `order_check`,
+margin and post-fill SL/TP receipts remain NOT TESTED, so U04 remains PARTIAL /
+NOT ACCEPTED.

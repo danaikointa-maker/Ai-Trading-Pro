@@ -1,8 +1,8 @@
 # บันทึกทำงานต่อเนื่อง 5 งาน: U04–U08
 
 วันที่: 2026-11-23 (Asia/Bangkok)  
-Planning baseline: `22ef3fb`  
-Work branch: `feature/u04-acceptance-audit-v4`  
+Planning baseline: `f0b66f4e0e96b071f6b67840e9d34db34bcd469c` (U14–U18 PR #54 merged)
+Work branch: `feature/u04-u08-five-task-v4`
 ช่วงงาน: ตรวจและพัฒนาตาม Unified Task Register V4 โดยไม่เปลี่ยน runtime profile
 
 ## ผลงานรายงาน
@@ -14,7 +14,8 @@ Work branch: `feature/u04-acceptance-audit-v4`
 - เส้นที่หายไป ผิดค่า หรือหา symbol spec ไม่ได้ ทำให้ fill คงสถานะ unverified; gateway `unresolved_orders` จะปิดกั้น entry ใหม่จนกว่าจะ reconcile
 - การตรวจตอน recovery ใช้กฎเดียวกัน และไม่ยืนยัน order จาก ticket/volume/entry เพียงอย่างเดียว
 - `config/risk.yaml` และ candidate activation ไม่เปลี่ยน
-- ยังขาด `order_check`/margin preflight และใบยืนยัน post-fill จากบัญชี Connext-Demo จริง จึงคงสถานะ PARTIAL / NOT ACCEPTED
+- เพิ่ม MT5 adapter preflight สำหรับ side-correct SL/TP, broker stop/freeze distance, broker `order_calc_profit`, `order_calc_margin` และ `order_check`; ผลตรวจไม่ผ่านเป็น known no-send rejection และไม่เรียก `order_send`
+- หลักฐานยังเป็น fake-terminal unit tests เท่านั้น; ไม่มี Connext-Demo order_check/margin/post-fill receipt จึงคงสถานะ PARTIAL / NOT ACCEPTED
 
 ### U05 — Execution/modify
 
@@ -38,14 +39,14 @@ Work branch: `feature/u04-acceptance-audit-v4`
 ### U08 — Calculators
 
 - ตรวจ calculator shared core ที่มีอยู่และชุดทดสอบ account-currency/FX provenance; ไม่ทำ math ซ้ำใน UI หรือ backend
-- ยังต้องกำหนด catalog เครื่องมือ read-only 16 รายการ และเทียบผลเงินกับ MT5 account/spec จริง
+- นิยาม catalog เครื่องมือ read-only 16 รายการจาก Master Task ที่ผู้ใช้ให้ไว้ใน `docs/calculators/TRADING-CALCULATOR-16-TOOL-CATALOG-V4.md`; ยังต้อง implement tools/UI/export/lessons และเทียบผลเงินกับ MT5 account/spec จริง
 - คง PARTIAL; การเทียบเงินจริง NOT TESTED
 
 ## หลักฐานการตรวจ
 
-- U04–U08 focused regression command ครอบคลุม planner, risk, manager, execution ledger, account ownership, bridge, roles, calculator และ API: **445 passed, 1 pre-existing Starlette/httpx deprecation warning**
-- หลังสร้าง dashboard bundle แล้ว deep-link smoke `/`, `/forecast`, `/risk`: **1 passed** (รวมอยู่ในการทดสอบ 445 รายการ)
-- Dashboard production build: Vite 5.4.21, **625 modules transformed**, build ผ่าน
+- U04–U08 focused regression command ครอบคลุม MT5 preflight/account continuity, planner, execution/recovery, position protection, modify intents, roles, risk, points/spec safety, invariants และ API: **304 passed, 1 pre-existing Starlette/httpx deprecation warning**
+- API deep-link smoke `/`, `/forecast`, `/risk` อยู่ใน `tests/test_api.py` และรวมอยู่ในผล 304 tests แล้ว
+- Dashboard production build: Vite 5.4.21, **626 modules transformed**, build ผ่าน
 - `ruff --select E9,F`, `compileall` และ `git diff --check`: ผ่าน
 - `npm ci` รายงาน dependency advisories **2 moderate และ 1 high**; ไม่ได้รัน auto-fix หรือแก้ lockfile ในงานนี้
 
@@ -63,3 +64,11 @@ Work branch: `feature/u04-acceptance-audit-v4`
 
 - Rollback งานนี้โดย revert เฉพาะ commit ใน branch นี้; ไม่มี config migration, schema change หรือการเขียนฐานข้อมูล VM
 - เดินคิวถัดไป U09–U13: dashboard acceptance, alert idempotency, Demo gate (รอ U01 และการอนุมัติแยก), AI Trader Team gap, และ doc sync ตาม register
+
+## U04/U08 implementation follow-up — 2026-11-23
+
+- U04 reuses the existing `MT5Broker` and `ExecutionGateway`; no second planner, order gateway, or execution path was added. A fake-terminal regression covers protective BUY/SELL geometry, broker stop/freeze distance, missing/non-loss stop P/L, unavailable or excessive margin, invalid/rejected `order_check`, and confirms preflight failure never invokes `order_send`.
+- Focused command: `pytest tests/test_mt5_order_preflight.py tests/test_mt5_account_continuity.py tests/test_v4_plan_candidate.py tests/test_execution_recovery.py -q` — **134 passed**. Ruff E9/F/I and `compileall` passed.
+- U06 Paper integration adds a lost-ack case and confirms exact broker readback without a second modification: `pytest tests/test_v4_single_target_manager.py -q` — **9 passed**. PaperBroker data is isolated to a temporary test database.
+- U08 catalog scope is now concrete and linked from the Task Register. This is requirements documentation, not implementation; no API, database, UI, exporter, FX request, or trade side effect was added.
+- Real broker P/L/margin/order_check, accepted stops/freeze behavior, post-fill SL/TP readback, account-currency comparison, and Demo execution remain **NOT TESTED**. The V4 candidate remains inactive; no broker account, runtime profile, service, or VM changed. PaperBroker was used only in isolated automated tests; no user Demo or Live trade was placed.
