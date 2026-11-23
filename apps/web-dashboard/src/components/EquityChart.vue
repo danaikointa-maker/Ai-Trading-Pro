@@ -57,7 +57,7 @@ function render() {
 }
 
 onMounted(() => {
-  chart = echarts.init(el.value)
+  chart = echarts.init(el.value, 'v5')
   render()
   new ResizeObserver(() => chart?.resize()).observe(el.value)
 })

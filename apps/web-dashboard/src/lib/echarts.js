@@ -6,6 +6,7 @@
 // massively — and registering here means the two chart components cannot drift
 // into registering different feature sets.
 import * as echarts from 'echarts/core'
+import 'echarts/theme/v5'
 import { LineChart } from 'echarts/charts'
 import { GridComponent, MarkLineComponent, TooltipComponent } from 'echarts/components'
 import { CanvasRenderer } from 'echarts/renderers'

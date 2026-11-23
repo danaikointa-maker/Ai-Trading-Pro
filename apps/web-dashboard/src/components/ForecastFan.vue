@@ -94,7 +94,7 @@ function render() {
 }
 
 onMounted(() => {
-  chart = echarts.init(el.value, null, { renderer: 'canvas' })
+  chart = echarts.init(el.value, 'v5', { renderer: 'canvas' })
   render()
   new ResizeObserver(() => chart?.resize()).observe(el.value)
 })
