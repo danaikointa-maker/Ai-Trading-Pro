@@ -15,6 +15,7 @@ Updated: 2026-11-21. These are comparisons based on repository content plus the 
 | BE/Trail enabled | enabled in YAML | safer draft defaults off | distinguish configured rules from authorization and broker deployment; candidate AUTO OFF |
 | Kill flatten | true | proposed false | no silent live change; separate loss breach, stale feed and emergency liquidation policies |
 | Auto execution | `full_auto.enabled=false` | auto after 100-point confirmation | only after full gate in explicit DEMO, never auto promote |
+| U02 confirmation | Existing readiness is explanatory and order paths use the current Risk/Execution gate | Candidate gate: first observed quote, 100 broker points on closed M1, aligned closed-context M5, max 30-point chase, 300s expiry | Reuse strategy runtime and SQLite `kv`; scope state to a hash of workspace/broker/login/server/currency identity plus symbol. Candidate profile remains unloaded/off. Revalidate on order path; account switch, stale data and legacy signals cannot bypass. Broker point/anchor validation and Demo evidence remain open; see `docs/U02-SIGNAL-CONFIRMATION-V4.md`. |
 | Symbol | app XAUUSD | request XAUUSD.m | resolve exact mapping from broker spec; no hardcoding suffix |
 | Architecture | FastAPI/Vue3/MQL5, SQLite | prior prompts may suggest new services/database | reuse existing stack; PG only approved migration |
 | Position modification | `manager.py` can generate BE and trailing actions | new ProtectionEngine | single candidate reducer and one existing execution gateway, avoid two commands |
