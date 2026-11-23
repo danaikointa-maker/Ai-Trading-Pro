@@ -20,7 +20,7 @@
 <script setup>
 import { computed } from 'vue'
 import { api } from '../lib/api'
-import { mode, permissions, state, toast } from '../lib/store'
+import { mode, permissions, refreshTrading, state, toast } from '../lib/store'
 
 const modes = [
   { id: 'manual', label: 'Manual + AI', hint: 'AI แนะนำ ผู้ใช้กด Buy/Sell เอง' },
@@ -42,6 +42,7 @@ async function change(id) {
   try {
     await api.post('/api/trading/mode', { mode: id })
     toast(`เปลี่ยนโหมดเป็น ${id.replace('_', ' ')}`, 'success')
+    await refreshTrading()
   } catch (err) {
     toast(err.message, 'error')
   }

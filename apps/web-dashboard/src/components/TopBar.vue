@@ -85,7 +85,7 @@ import { computed } from 'vue'
 import { useRouter } from 'vue-router'
 import { api } from '../lib/api'
 import { clock, fmt, money, signed } from '../lib/format'
-import { logout, permissions, setSymbol, setTimeframe, state, toast } from '../lib/store'
+import { logout, permissions, refreshTrading, setSymbol, setTimeframe, state, toast } from '../lib/store'
 
 const router = useRouter()
 const timeframes = ['M1', 'M5', 'M15', 'H1', 'H4']
@@ -151,8 +151,7 @@ async function changeMode(id) {
   try {
     await api.post('/api/trading/mode', { mode: id })
     toast(`Trading mode → ${id.replace('_', ' ')}`, 'success')
-    const data = await api.get('/api/trading/state', { silent: true })
-    if (data) state.trading = data
+    await refreshTrading()
   } catch (err) {
     toast(err.message, 'error')
   }
