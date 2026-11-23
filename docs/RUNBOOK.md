@@ -859,3 +859,24 @@ sqlite3 storage/db/no7.sqlite3 \
   `jwt_secret_from_env: false` ถ้ายังใช้ secret สำรองในโค้ด (เท่ากับใครรู้โค้ดก็ปลอม token ได้)
 - MT5 password อยู่ใน `.env` เท่านั้น (ห้าม hardcode ใน MQL5 หรือ Python)
 - ทุกคำสั่งถูก audit (`actor`, `action`, `detail`) — ตรวจได้ที่หน้า System
+
+## U05 — Durable position modification (V4 candidate)
+
+V4 now carries an additive `position_modify_intents` ledger. Each position stop
+change is reserved and fenced by broker/account/ticket/position lifetime before adapter I/O; an
+unresolved `reserved`, `sending`, `accepted_unverified`, or `unknown` intent
+blocks another modification for that account and position lifetime until
+reconciliation. Legacy rows without a lifetime fingerprint retain a conservative
+`legacy-unscoped` fence.
+The append-only `position_events` log records transitions. A broker acknowledgement
+is not confirmation: the gateway reads the position back and confirms the stop
+and target against the broker's tick size. A stale quote, switched account,
+missing broker constraints, read-only bridge, or ambiguous result fails closed.
+
+The candidate's local unit and regression tests passed, but this is not a staging
+or broker acceptance. Before staging, take a verified database backup and retain
+the current `06642a0` artifact. Rollback means restore the prior application
+artifact while leaving `position_modify_intents` and its rows intact; do not drop
+the additive table. Stage rollout and a Connext-Demo modify/readback require the
+separate acceptance gates in the U05 Task Register. Live modification remains
+disabled by policy.

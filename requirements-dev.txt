@@ -12,3 +12,6 @@ pyarrow>=15
 # server (same Lua). Without it those cases skip; with a real NO7_REDIS_URL set they
 # run against the real thing instead.
 fakeredis[lua]>=2.30
+# fakeredis 2.40 currently fails while introspecting redis-py 8.2 built-in
+# method descriptors; keep the development/test resolver on the compatible 8.1 line.
+redis>=5.0.8,<8.2

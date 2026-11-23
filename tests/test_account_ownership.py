@@ -1,5 +1,6 @@
 """Persisted broker alias must never silently move to another account."""
 import json
+import time
 from types import SimpleNamespace
 from unittest.mock import Mock
 
@@ -208,6 +209,21 @@ def test_account_switch_during_broker_io_cannot_certify_success(owned, operation
         return read
 
     if operation == "modify":
+        # Position modification now has the same preflight requirements as the
+        # production adapter. Supply a complete Demo snapshot so this test
+        # reaches the broker call and exercises the account-switch guard after IO.
+        from packages.shared_schemas.models import Position, SymbolSpec, Tick
+
+        broker.account_info.return_value.account_type = "demo"
+        broker.positions.return_value = [Position(
+            ticket="ticket-1", symbol=request.symbol, direction=Direction.up,
+            volume=request.volume, entry=2000, sl=1890, tp=2020,
+            current_price=2000, open_time=1, broker_id=broker.id)]
+        broker.symbol_spec.return_value = SymbolSpec(
+            symbol=request.symbol, source="broker", spec_complete=True)
+        broker.ticker.return_value = Tick(
+            t=time.time(), bid=2000, ask=2000.1,
+            spread_points=10, last=2000)
         broker.modify_position.side_effect = switched(True)
         assert gateway.modify(broker, "ticket-1", sl=1900) is False
         broker.modify_position.assert_called_once()

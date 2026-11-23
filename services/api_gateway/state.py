@@ -932,7 +932,9 @@ class TradingRuntime:
                 # together; mutation entry must not slip between these steps.
                 observations = self.gateway.open_position_snapshot(
                     positions, broker_id=adapter.id, account_identity=identity,
-                    retain_unverified=True)
+                    retain_unverified=True,
+                    position_lifetime_fingerprints=self.gateway.position_lifetime_fingerprints(
+                        adapter, positions))
                 self.positions_cache = positions
                 self._positions_identity = dict(identity)
                 self._positions_adapter = adapter

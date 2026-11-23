@@ -63,6 +63,20 @@ CREATE TABLE IF NOT EXISTS position_events (
 CREATE INDEX IF NOT EXISTS idx_position_events_ticket
     ON position_events(broker_id, ticket, created_at);
 
+-- Mutable current-state projection for idempotent position modifications.
+-- Each transition is also preserved in append-only position_events.
+CREATE TABLE IF NOT EXISTS position_modify_intents (
+    broker_id TEXT NOT NULL, account_fingerprint TEXT NOT NULL, ticket TEXT NOT NULL,
+    position_lifetime_fingerprint TEXT NOT NULL DEFAULT 'legacy-unscoped',
+    idempotency_key TEXT NOT NULL, request_hash TEXT NOT NULL,
+    request_payload TEXT NOT NULL DEFAULT '{}', state TEXT NOT NULL,
+    created_at REAL NOT NULL, updated_at REAL NOT NULL,
+    PRIMARY KEY (broker_id, account_fingerprint, ticket, idempotency_key)
+);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_position_modify_one_unresolved
+    ON position_modify_intents(broker_id, account_fingerprint, ticket)
+    WHERE state IN ('reserved','sending','accepted_unverified','unknown');
+
 -- Closed M5 bars observed while a broker position is open. The stored source
 -- distinguishes an analytical live/replay observation from broker tick proof.
 CREATE TABLE IF NOT EXISTS position_candles (
@@ -266,6 +280,10 @@ class Database:
             "terminal_path": "TEXT NOT NULL DEFAULT ''",
             "validation_symbol": "TEXT NOT NULL DEFAULT 'XAUUSD'",
         },
+        "position_modify_intents": {
+            "request_payload": "TEXT NOT NULL DEFAULT '{}'",
+            "position_lifetime_fingerprint": "TEXT NOT NULL DEFAULT 'legacy-unscoped'",
+        },
     }
 
     def _migrate(self) -> None:
@@ -281,6 +299,22 @@ class Database:
                         # another worker added it between the PRAGMA and the ALTER
                         if "duplicate column" not in str(exc).lower():
                             raise
+
+        # Scope the single unresolved intent fence to one broker position
+        # lifetime. Existing rows get a conservative legacy sentinel during the
+        # additive column migration and remain fenced until reconciled manually.
+        index_name = "idx_position_modify_one_unresolved"
+        expected_columns = ("broker_id", "account_fingerprint", "ticket",
+                            "position_lifetime_fingerprint")
+        actual_columns = tuple(row["name"] for row in
+                               self._conn.execute(f"PRAGMA index_info({index_name})"))
+        if actual_columns != expected_columns:
+            self._conn.execute(f"DROP INDEX IF EXISTS {index_name}")
+        self._conn.execute(
+            f"CREATE UNIQUE INDEX IF NOT EXISTS {index_name} "
+            "ON position_modify_intents(broker_id, account_fingerprint, ticket, "
+            "position_lifetime_fingerprint) "
+            "WHERE state IN ('reserved','sending','accepted_unverified','unknown')")
 
 
         # Initialize the default tenant for existing installations.
