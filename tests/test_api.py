@@ -356,6 +356,32 @@ def test_risk_calculator_uses_the_same_account_currency_core(client, auth):
     assert body["provenance"]["spec_source"] == body["spec"]["source"]
 
 
+def test_risk_position_sizing_uses_the_selected_market_spec(client, auth, runtime, monkeypatch):
+    market_spec = runtime.adapter.symbol_spec("XAUUSD").model_copy(update={
+        "point": 0.1,
+        "contract_size": 10.0,
+        "spread_typical_points": 4.0,
+        "commission_per_lot_round_turn": 2.0,
+        "profit_currency": "EUR",
+        "account_currency": "EUR",
+        "source": "broker",
+    })
+    monkeypatch.setattr(runtime.market, "spec", lambda _symbol: market_spec)
+
+    response = client.get(
+        "/api/risk/calculator?symbol=XAUUSD&points=100&lot=0.01&balance=1000&risk_pct=1&sl_points=100",
+        headers=auth,
+    )
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["spec"]["point"] == 0.1
+    assert body["points"]["value_per_point_per_lot"] == 1.0
+    assert body["position_size"]["currency"] == "EUR"
+    assert body["position_size"]["lot"] == 0.09
+    assert body["position_size"]["estimated_stop_cost"] == 9.54
+
+
 def test_position_size_calculator_is_a_cost_aware_manual_sandbox(client, auth, runtime, monkeypatch):
     from unittest.mock import Mock
 

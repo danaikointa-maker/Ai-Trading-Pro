@@ -102,7 +102,9 @@ def calculator(symbol: str = "XAUUSD", points: float = 750, lot: float = 0.01,
                balance: float | None = None, risk_pct: float | None = None,
                sl_points: float | None = None,
                runtime: TradingRuntime = Depends(get_runtime), user=Depends(current_user)):
-    spec = runtime.adapter.symbol_spec(symbol)
+    # Use the same selected market-data specification as chart and points math.
+    # This includes a fresh, allowlisted MT5 Demo publisher spec when configured.
+    spec = runtime.market.spec(symbol)
     out = {"points": points_calculator(spec, points, lot), "spec": spec.model_dump(),
            "provenance": {"market_feed": runtime.market.effective_mode,
                           "spec_source": spec.source, "rate_source": spec.rate_source,
