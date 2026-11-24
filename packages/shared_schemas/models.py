@@ -2,12 +2,19 @@
 from __future__ import annotations
 
 import math
-
 from datetime import datetime, timezone
 from enum import Enum
 from typing import Any, Literal
 
-from pydantic import BaseModel, Field
+from pydantic import (
+    BaseModel,
+    ConfigDict,
+    Field,
+    StrictBool,
+    StrictInt,
+    StrictStr,
+    model_validator,
+)
 
 
 # --------------------------------------------------------------------------- enums
@@ -60,6 +67,51 @@ class TradeMode(str, Enum):
     manual = "manual"
     semi_auto = "semi_auto"
     full_auto = "full_auto"
+
+
+class PositionProtectionMode(str, Enum):
+    """Position-management mode; deliberately separate from order-entry mode."""
+
+    manual = "manual"
+    semi_auto = "semi_auto"
+    full_auto = "full_auto"
+    hybrid = "hybrid"
+
+
+class ProtectionEnvironment(str, Enum):
+    paper = "paper"
+    demo = "demo"
+    live = "live"
+
+
+class PositionProtectionModeConfig(BaseModel):
+    """Inert, account-scoped V1 mode contract; no runtime reads it yet.
+
+    Absence of this record means the existing legacy risk profile remains in
+    force. Persisting or applying this model is intentionally not wired here.
+    """
+
+    model_config = ConfigDict(extra="forbid", frozen=True, allow_inf_nan=False)
+
+    schema_version: Literal[1] = 1
+    config_version: StrictInt = Field(ge=1)
+    account_scope_sha256: StrictStr = Field(pattern=r"^[0-9a-f]{64}$")
+    mode: PositionProtectionMode
+    environment: ProtectionEnvironment = ProtectionEnvironment.paper
+    enabled: StrictBool = False
+    authorization_ref: StrictStr | None = Field(
+        default=None, min_length=1, max_length=128,
+        pattern=r"^[A-Za-z0-9][A-Za-z0-9:._/-]{0,127}$",
+    )
+
+    @model_validator(mode="after")
+    def full_auto_requires_demo_authorization(self) -> "PositionProtectionModeConfig":
+        if self.mode == PositionProtectionMode.full_auto and self.enabled:
+            if self.environment != ProtectionEnvironment.demo:
+                raise ValueError("Full Auto position protection is allowed only on Demo")
+            if self.authorization_ref is None:
+                raise ValueError("enabled Full Auto requires a separate authorization reference")
+        return self
 
 
 class ZoneKind(str, Enum):
