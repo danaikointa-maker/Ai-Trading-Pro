@@ -31,12 +31,15 @@ def test_explain_route_does_not_reuse_revoked_cache(monkeypatch):
     runtime.lock = RLock()
     runtime.active_symbol = 'XAUUSD'
     runtime.signals, runtime.plans = {}, {}
+    runtime.db = SimpleNamespace(workspace_id='local', audit=Mock())
     runtime.snapshot = Mock(return_value=None)
     runtime.forecasts = {'XAUUSD': ForecastBundle(symbol='XAUUSD', generated_at=1, price=2000,
         model_version='current', model_approved=True)}
     runtime.predictor = SimpleNamespace(version='current', approved=False, revalidate=lambda: False)
     explainer = Mock()
     explainer.explain.return_value = {}
+    explainer.fact_sheet.return_value = {}
+    explainer.officer_team.return_value = {'version': 'test', 'officers': []}
     monkeypatch.setattr('services.api_gateway.routes.explain.TradeExplainer', lambda *args: explainer)
     monkeypatch.setattr('services.api_gateway.routes.explain.No7LocalAI', Mock())
     explain(ExplainRequest(), runtime, {})
