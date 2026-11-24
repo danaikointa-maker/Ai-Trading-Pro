@@ -56,6 +56,10 @@ U09 remains **PARTIAL** until the outstanding runtime acceptance is recorded.
 - `git diff --check`: **passed**.
 - No MT5 account, order, Auto setting, broker, Cloudflare tunnel, VM service or runtime was changed.
 
+### Rollback
+
+- If review finds a chart-rendering regression, revert commit `8eabe61` on the U09 branch. The change has no config/schema migration and has not been deployed, so rollback requires no data or service restoration.
+
 ### Acceptance still outstanding
 
 - Authenticated visual review of manual vertical zoom during score updates and chart resize: **NOT TESTED**.
