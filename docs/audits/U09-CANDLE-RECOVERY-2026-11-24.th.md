@@ -38,5 +38,5 @@ U09 remains **PARTIAL** until the outstanding runtime acceptance is recorded.
 ## Base consolidation (2026-11-24)
 
 - U08 PR #71 merged into the V4 planning branch as `fd17eee`. U09 was rebased onto the current `plan/unified-development-v4` base after that merge; its diff now contains six U09 files and no duplicate calculator files.
-- Post-rebase local checks: chart viewport **9/9**, stale-quote API regression **1/1**, Vite build **666 modules**, Ruff E9/F/I, compileall and `git diff --check` passed. Hosted Gate after this rebase is pending.
+- Post-rebase local checks: chart viewport **9/9**, stale-quote API regression **1/1**, Vite build **666 modules**, Ruff E9/F/I, compileall and `git diff --check` passed. GitHub Actions Gate **#194 passed** on rebased commit `6284da60001d98b978e93116dcfaa54696a1130a` (full tests, dashboard build and real-Redis checks).
 - Read-only browser inventory found Chrome open to its Settings page, and the browser access host was unavailable; no authenticated Trading Pro page was accessible. MT5 was not running. Authenticated desktop/mobile visual review and a real MT5 stale-to-fresh recovery therefore remain **NOT TESTED**. No UI control, account, tunnel, publisher, broker or order was changed.
