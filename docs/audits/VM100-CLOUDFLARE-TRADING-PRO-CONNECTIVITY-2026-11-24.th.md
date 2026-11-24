@@ -59,3 +59,10 @@
 - HTTPS `HEAD /` ที่ `agent.youridea168.com` ยังคงตอบ `502 Bad Gateway` จาก Cloudflare.
 - `ss -ltn` แสดง app listeners `127.0.0.1:8000`, `127.0.0.1:18081`, `127.0.0.1:18082`; ไม่มี listener `:8080` ตาม origin ที่บันทึกไว้. SSH reachable จึงไม่เท่ากับ app/API reachable จาก LAN.
 - ยังคงไม่เปลี่ยน origin, DNS, Access, firewall หรือบริการ; ไม่อ่าน token/config secret และไม่เรียก API ที่มี account metadata.
+
+### Repeat verification — 2026-11-24 21:46 ICT
+
+- From the Windows PC, `HEAD https://agent.youridea168.com/` returned **502 Bad Gateway** from Cloudflare; TLS certificate verification succeeded (`ssl_verify_result=0`).
+- `cloudflared.service` reports `active`. VM100 still has no listener on origin port 8080; `ss -ltn` shows the Trading Pro services on loopback only, including V4 staging `127.0.0.1:18082`.
+- The staging API is reachable from the PC only through the temporary loopback SSH forward `127.0.0.1:18182 -> VM100 127.0.0.1:18082`, and reports simulation mode. It is not a reviewed Office API and must not be made the public origin.
+- No public route, tunnel origin, Access policy, firewall, service, secret or broker state was changed. Do not repoint the hostname until a dedicated authenticated Office API origin and its security/rollback checks are ready.
