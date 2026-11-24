@@ -25,6 +25,19 @@ export function nextBarCount(currentCount) {
   return (Number.isFinite(count) ? Math.max(0, Math.trunc(count)) : 0) + 1
 }
 
+export function needsCandleReloadOnRecovery(previous, current) {
+  if (!previous || !current) return false
+  const streamRecovered = previous.connected === false && current.connected === true
+  const apiRecovered = previous.serverUnreachable === true && current.serverUnreachable === false
+  const quoteRecovered = previous.tickerStale === true && current.tickerStale === false
+    && current.hasTick === true
+  return streamRecovered || apiRecovered || quoteRecovered
+}
+
+export function canApplyLiveQuote(tick, tickerStale, serverUnreachable) {
+  return Boolean(tick) && tickerStale !== true && serverUnreachable !== true
+}
+
 export function validPriceRange(min, max) {
   if (String(min).trim() === '' || String(max).trim() === '') return null
   const low = Number(min), high = Number(max)

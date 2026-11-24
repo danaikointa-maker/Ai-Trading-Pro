@@ -61,7 +61,7 @@ import { computed, onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue'
 import { createChart } from 'lightweight-charts'
 import { api } from '../lib/api'
 import { positions, state } from '../lib/store'
-import { clampBarSpacing, latestLogicalRange, matchesChartSymbol, nextBarCount, nextBarSpacing, shortMarkerSpan, validPriceRange, validTimeRange } from '../lib/chartViewport'
+import { canApplyLiveQuote, clampBarSpacing, latestLogicalRange, matchesChartSymbol, needsCandleReloadOnRecovery, nextBarCount, nextBarSpacing, shortMarkerSpan, validPriceRange, validTimeRange } from '../lib/chartViewport'
 
 const container = ref(null)
 const segmentCanvas = ref(null)
@@ -83,6 +83,8 @@ let loadedViewKey = ''
 let viewportFrame = null
 let viewportSaveTimer = null
 let markerFrame = null
+let recoveryRefreshTimer = null
+let candleLoadRequestId = 0
 let dragOrigin = null
 const VIEW_PREFS_KEY = 'no7.chart.viewport.v1'
 let savedPrefs = {}
@@ -313,18 +315,26 @@ async function retry() {
   await load()
 }
 
-async function load() {
+async function load({ silent = false } = {}) {
   if (!candleSeries) return
+  const requestId = ++candleLoadRequestId
+  const requestedSymbol = state.symbol
+  const requestedTimeframe = state.timeframe
+  const requestedRange = state.range
   const previousRange = chart.timeScale().getVisibleRange()
   const previousViewKey = loadedViewKey
-  loading.value = true
-  error.value = ''
+  if (!silent) {
+    loading.value = true
+    error.value = ''
+  }
   try {
     const data = await api.get(
-      `/api/market/candles?symbol=${encodeURIComponent(state.symbol)}&timeframe=${state.timeframe}&limit=${state.range}`,
+      `/api/market/candles?symbol=${encodeURIComponent(requestedSymbol)}&timeframe=${requestedTimeframe}&limit=${requestedRange}`,
     )
+    if (requestId !== candleLoadRequestId) return
+    error.value = ''
     const raw = Array.isArray(data.candles) ? data.candles : []
-    const nextViewKey = `${data.feed || 'feed'}:${data.symbol || state.symbol}:${state.timeframe}`
+    const nextViewKey = `${data.feed || 'feed'}:${data.symbol || requestedSymbol}:${requestedTimeframe}`
     displayBasis.value = data.time?.display_basis || 'utc'
     displayOffsetSeconds.value = displayBasis.value === 'broker_server'
       ? Number(data.time?.server_utc_offset_seconds || 0) : 0
@@ -376,11 +386,21 @@ async function load() {
     syncViewport()
     drawOverlays()
   } catch (err) {
-    error.value = String((err && err.message) || err)
-    console.error('[PriceChart] load failed', err)
+    if (requestId === candleLoadRequestId) {
+      error.value = !silent || bars.value === 0 ? String((err && err.message) || err) : ''
+      console.error('[PriceChart] load failed', err)
+    }
   } finally {
-    loading.value = false
+    if (requestId === candleLoadRequestId) loading.value = false
   }
+}
+
+function refreshAfterRecovery() {
+  if (recoveryRefreshTimer) clearTimeout(recoveryRefreshTimer)
+  recoveryRefreshTimer = setTimeout(() => {
+    recoveryRefreshTimer = null
+    load({ silent: true })
+  }, 150)
 }
 
 function clearLines() {
@@ -502,7 +522,7 @@ function drawOverlays() {
 
 function updateLast() {
   const tick = state.live?.ticker
-  if (!tick || !lastCandle) return
+  if (!canApplyLiveQuote(tick, state.live?.ticker_stale, state.serverUnreachable) || !lastCandle) return
   const seconds = { M1: 60, M5: 300, M15: 900, H1: 3600, H4: 14400 }[state.timeframe] || 300
   const bucket = Math.floor(tick.t / seconds) * seconds
   const price = Number(tick.last)
@@ -524,7 +544,20 @@ function updateLast() {
   drawShortMarkers()
 }
 
-watch(() => [state.symbol, state.timeframe, state.range], load)
+watch(() => [state.symbol, state.timeframe, state.range], () => load())
+watch([
+  () => state.connected,
+  () => state.serverUnreachable,
+  () => state.live?.ticker_stale,
+  () => Boolean(state.live?.ticker),
+], ([connected, serverUnreachable, tickerStale, hasTick],
+  [wasConnected, wasServerUnreachable, wasTickerStale, hadTick]) => {
+  if (needsCandleReloadOnRecovery(
+    { connected: wasConnected, serverUnreachable: wasServerUnreachable,
+      tickerStale: wasTickerStale, hasTick: hadTick },
+    { connected, serverUnreachable, tickerStale, hasTick },
+  )) refreshAfterRecovery()
+})
 watch(() => state.live?.version, () => {
   updateLast()
   drawOverlays()
@@ -546,6 +579,7 @@ onBeforeUnmount(() => {
   resizeObs?.disconnect()
   if (viewportFrame) cancelAnimationFrame(viewportFrame)
   if (markerFrame) cancelAnimationFrame(markerFrame)
+  if (recoveryRefreshTimer) clearTimeout(recoveryRefreshTimer)
   clearTimeout(viewportSaveTimer)
   chart?.timeScale().unsubscribeVisibleLogicalRangeChange(syncViewport)
   chart?.remove()
@@ -560,9 +594,16 @@ const FEED_LABELS = {
   mt5: 'MT5 LIVE',
   'mt5-live': 'MT5 LIVE',
 }
-const feedLabel = computed(() => FEED_LABELS[state.live?.feed] || (state.live?.feed ? String(state.live.feed).toUpperCase() : 'FEED —'))
-const feedWarn = computed(() => state.live?.feed !== 'mt5' && state.live?.feed !== 'mt5-live')
+const feedIsStale = computed(() => state.serverUnreachable || state.live?.ticker_stale === true || !state.live?.ticker)
+const feedLabel = computed(() => {
+  const source = FEED_LABELS[state.live?.feed] || (state.live?.feed ? String(state.live.feed).toUpperCase() : 'FEED —')
+  return feedIsStale.value ? `STALE · ${source}` : source
+})
+const feedWarn = computed(() => feedIsStale.value || (state.live?.feed !== 'mt5' && state.live?.feed !== 'mt5-live'))
 const feedTitle = computed(() => {
+  if (state.serverUnreachable) return 'ติดต่อ API ไม่ได้; กราฟเป็นข้อมูลล่าสุดที่มี ไม่ใช่ราคาสด'
+  if (state.live?.ticker_stale === true) return 'ราคา tick เก่า; หยุดอัปเดตแท่งจนกว่าจะได้รับ quote ใหม่'
+  if (!state.live?.ticker) return 'ยังไม่มี quote ปัจจุบัน; กราฟอาจเป็นข้อมูลย้อนหลัง'
   const f = state.live?.feed
   if (f === 'replay') return 'ราคามาจากไฟล์ที่นำเข้า (replay) — ไม่ใช่ tick data จริง และไม่ใช่ราคาสดจากโบรกเกอร์'
   if (f === 'simulated') return 'ราคาจากตัวจำลอง — ห้ามใช้ตัดสินใจกับเงินจริง'

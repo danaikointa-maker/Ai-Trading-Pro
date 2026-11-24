@@ -2,9 +2,11 @@ import test from 'node:test'
 import assert from 'node:assert/strict'
 
 import {
+  canApplyLiveQuote,
   clampBarSpacing,
   latestLogicalRange,
   matchesChartSymbol,
+  needsCandleReloadOnRecovery,
   nextBarCount,
   nextBarSpacing,
   shortMarkerSpan,
@@ -32,6 +34,33 @@ test('appending a new candle advances the latest-bar count', () => {
   assert.equal(nextBarCount(240), 241)
   assert.equal(nextBarCount(0), 1)
   assert.equal(nextBarCount(Number.NaN), 1)
+})
+
+test('candle history reloads only on a confirmed stream, API, or quote recovery', () => {
+  assert.equal(needsCandleReloadOnRecovery(
+    { connected: false }, { connected: true },
+  ), true)
+  assert.equal(needsCandleReloadOnRecovery(
+    { serverUnreachable: true }, { serverUnreachable: false },
+  ), true)
+  assert.equal(needsCandleReloadOnRecovery(
+    { tickerStale: true }, { tickerStale: false, hasTick: true },
+  ), true)
+  assert.equal(needsCandleReloadOnRecovery(
+    { tickerStale: true }, { tickerStale: false, hasTick: false },
+  ), false)
+  assert.equal(needsCandleReloadOnRecovery(
+    { connected: true, serverUnreachable: false, tickerStale: false },
+    { connected: true, serverUnreachable: false, tickerStale: false },
+  ), false)
+})
+
+test('stale or disconnected quotes never mutate the current candle', () => {
+  const tick = { t: 100, last: 2000 }
+  assert.equal(canApplyLiveQuote(tick, false, false), true)
+  assert.equal(canApplyLiveQuote(tick, true, false), false)
+  assert.equal(canApplyLiveQuote(tick, false, true), false)
+  assert.equal(canApplyLiveQuote(null, false, false), false)
 })
 
 test('saved time viewport restores only when the selected candle data covers it', () => {
