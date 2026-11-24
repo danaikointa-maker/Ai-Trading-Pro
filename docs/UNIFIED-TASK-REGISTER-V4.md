@@ -219,6 +219,14 @@ Status definitions: EXISTS_CODE = seen in repository but not live certified; NEE
 - This only hardens the offline read-only evaluator. No API, signal, RiskEngine, Auto, order, broker, VM100, or Cloudflare behavior changed. Real historical data/cost acceptance remains NOT TESTED.
 - U18 source rollback rehearsal reversed all 17 then-current PR #79 commits through `69f2f60` in a disposable worktree; the resulting tracked tree SHA exactly matched V4 base tree `01d9c1886cf39c9979619c9ddbfe352d9089cc84`. Temporary worktree was removed. This covers Git/source rollback only; deployment/database recovery remains NOT TESTED. GitHub returned no PR workflow run or commit status for `69f2f60`.
 
+### U14–U18 continuation verification — 2026-11-25
+
+- Re-ran the focused U14/U15/U16 contract, ingress, persistence, replay and rate-limit suite on PR #79 head `a1cefea`: **59 passed**, one pre-existing Starlette/httpx deprecation warning.
+- Re-ran the U17 Lens refresh regressions: **3 passed**; Vite 8.3.8 dashboard build passed with **667 modules**.
+- GitHub Actions Gate #237 for `a1cefea` is **PASS**: 1,775 passed, 7 skipped, Ruff/dashboard build passed, Redis acceptance 20 passed and Redis operator self-check 12/12 passed. PR #79 remains open, Draft, unmerged.
+- Rechecked the browser session inventory; browser access host is unavailable. Authenticated screenshots, role visibility in the rendered UI, and desktop/mobile visual acceptance remain **NOT TESTED**. Existing API tests cover authenticated viewer/trader reads without order/signal side effects, but do not replace that visual acceptance.
+- U14 Pine compilation/Bar Replay, U15 perimeter and deployed service checks, U16 real historical corpus/cost analysis, and U18 external Paper/reconnect/database-restore receipts remain **NOT TESTED/BLOCKED**. No account, broker, order, Auto/Live, VM100 service, Cloudflare route or deployment state changed.
+
 ## Anti-duplication ledger
 - Do NOT let TradingView/Lens/LLM/webhook create executable signals, alter MT5 canonical prices/specs, approve risk, toggle Auto, or call execution. Use U14?U18 as the only TradingView queue; do not add a parallel plan/backlog.
 - Do NOT create a second RiskEngine or PositionManager. Existing: `services/risk_engine/engine.py`, `manager.py`.
