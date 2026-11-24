@@ -194,6 +194,7 @@ Status definitions: EXISTS_CODE = seen in repository but not live certified; NEE
 
 - Added `test_sqlite_store_is_shared_across_worker_processes`: four independent Python worker processes spent against one temporary SQLite bucket; exactly 40 of 100 attempts were allowed, proving the configured SQLite store enforces one host-wide budget across processes.
 - `tests/test_ratelimit.py`: **17 passed**, one existing Starlette/httpx deprecation warning; Ruff E9/F/I passed for the changed test file. This proves the store implementation, not VM100 deployment configuration or production load.
+- Cross-area regression `pytest tests/test_tradingview_contract.py tests/test_tradingview_ingest.py tests/test_tradingview_persistence.py tests/test_tradingview_shadow_replay.py tests/test_ratelimit.py -q`: **54 passed**, one existing Starlette/httpx deprecation warning.
 - `config/app.yaml` still defaults to `ratelimit.store=memory`, which multiplies limits across workers. The isolated VM100 V4 staging health on 18082 also reports `requested=memory`, `shared=false`, and the same warning. Any multi-worker host must explicitly select SQLite (same host) or Redis (cross-host), then verify `/api/system/health → ratelimit` reports the shared backend. VM100 staging worker count remains NOT TESTED; no config/service was changed.
 
 ## Anti-duplication ledger
