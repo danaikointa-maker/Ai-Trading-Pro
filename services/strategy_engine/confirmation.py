@@ -23,6 +23,13 @@ BLOCKED = "BLOCKED"
 INVALIDATED = "INVALIDATED"
 
 
+def confirmation_movement_points(direction: Direction, reference_price: float,
+                                 price: float, point: float) -> float:
+    """Shared directional point-distance formula for gate and read-only previews."""
+    sign = 1.0 if direction == Direction.up else -1.0
+    return (float(price) - float(reference_price)) * sign / float(point)
+
+
 @dataclass(frozen=True)
 class ConfirmationResult:
     state: str
@@ -180,8 +187,8 @@ class SignalConfirmationGate:
                 elif m5_direction != direction:
                     reason = "M5 trend is not aligned with the candidate"
                 else:
-                    sign = 1.0 if direction == Direction.up else -1.0
-                    movement = (float(bar["c"]) - float(state["reference_price"])) * sign / point
+                    movement = confirmation_movement_points(
+                        direction, float(state["reference_price"]), float(bar["c"]), point)
                     chase = abs(execution_price - float(bar["c"])) / point
                     state.update(confirmation_bar_t=int(bar["t"]),
                                  confirmation_close=float(bar["c"]),

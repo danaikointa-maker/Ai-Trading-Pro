@@ -210,7 +210,7 @@ H080 reload ใช้ approval ของ payload และ DB ร่วมกั
 | GET | `/api/risk/settings` | limits + targets + stops + full_auto requirements |
 | PUT | `/api/risk/settings` | `{limits:{...}}` patch (audit ทุกครั้ง); `full_auto_enabled` เปลี่ยนได้โดย admin เท่านั้น และปิดแล้วจะกลับ Manual หาก Full Auto กำลังเลือกอยู่ |
 | POST | `/api/risk/kill-switch` \| `DELETE` | เปิด/ปิดด้วยมือ |
-| GET | `/api/risk/calculator?symbol=&points=&lot=` | read-only shared math core; `tool=risk_reward|drawdown|break_even|trading_costs|point_tick|profit_loss` เพิ่ม 6 manual-sandbox tools. tool อื่นรองรับ position size เดิม. คืน provenance สเปก/FX; ไม่อ่าน balance, position หรือ history จากบัญชี และไม่เรียก order/modify/close |
+| GET | `/api/risk/calculator?symbol=&points=&lot=` | read-only shared math core; `tool` รองรับ `risk_reward`, `drawdown`, `break_even`, `trading_costs`, `point_tick`, `profit_loss`, `auto_sl_tp`, `margin`, `confirmation_100pt`, `scenario`, `capital_growth`, `currency_convert` และ position size. `margin` อ่าน free margin/leverage จาก MT5 ที่ยืนยัน identity/ownership แล้วและเรียกเฉพาะ `order_calc_margin`; `confirmation_100pt` เป็น preview ไม่อ่าน/เขียน candidate. Tools อื่นใช้ manual sandbox หรือ market-data snapshot. ไม่มี tool ใดเรียก `order_check`, `order_send`, modify หรือ close; tool 8 real Demo comparison ยัง NOT TESTED |
 
 ## Brokers & backtest
 

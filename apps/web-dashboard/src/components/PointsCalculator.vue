@@ -24,10 +24,15 @@
           <option value="point_tick">Points / Ticks</option>
           <option value="profit_loss">Profit &amp; Loss</option>
           <option value="auto_sl_tp">Auto SL/TP preview</option>
+          <option value="margin">Margin / Leverage</option>
+          <option value="confirmation_100pt">100-Point preview</option>
+          <option value="scenario">Scenario simulator</option>
+          <option value="capital_growth">Capital growth</option>
+          <option value="currency_convert">Currency converter</option>
         </select>
       </label>
       <div class="flex items-center gap-1.5">
-        <span class="chip" :class="isReadOnlyTool ? 'chip-up' : 'chip-gold'">{{ isPlanPreviewTool ? 'READ ONLY · PLAN PREVIEW' : isAnalysisTool ? 'READ ONLY · ANALYSIS' : 'MANUAL · SANDBOX' }}</span>
+        <span class="chip" :class="isReadOnlyTool ? 'chip-up' : 'chip-gold'">{{ isPlanPreviewTool ? 'READ ONLY · PLAN PREVIEW' : isAnalysisTool ? 'READ ONLY · ANALYSIS' : isBrokerReadTool ? 'READ ONLY · BROKER PREVIEW' : 'MANUAL · SANDBOX' }}</span>
         <button type="button" class="btn py-1.5" @click="resetInputs">Reset</button>
         <button v-if="result && (tool !== 'size' || positionSize)" type="button" class="btn py-1.5" @click="copyResult">Copy result</button>
       </div>
@@ -251,6 +256,82 @@
       </div>
       <p class="text-[10px] leading-relaxed text-muted">ใช้ TradePlanner เดิม ตรวจ spread/spec, ATR และ swing ที่ยืนยันแล้ว; หากข้อมูลไม่สดหรือระยะ SL/TP ไม่ผ่านกฎ จะซ่อนแผนหรือแสดงเหตุผลบล็อก. ไม่มีการอ่าน equity จาก MT5 และไม่มีปุ่มส่งคำสั่งในเครื่องมือนี้</p>
     </div>
+    <div v-else-if="tool === 'margin'" class="space-y-3 px-4 py-3">
+      <div class="rounded-lg border border-ink-700 bg-ink-900/60 p-3 text-[10.5px] leading-relaxed text-muted">ใช้ MT5 order_calc_margin และ free margin ของบัญชีที่ยืนยัน ownership แล้วเท่านั้น หากไม่มี terminal/quote/spec สด จะแสดงว่าไม่พร้อมโดยไม่เดาค่า</div>
+      <div class="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
+        <label class="block"><span class="label">Side</span><select v-model="side" class="input mt-1"><option>BUY</option><option>SELL</option></select></label>
+        <label class="block"><span class="label">Volume (lot)</span><input v-model.number="lot" type="number" min="0.001" step="0.01" class="input mt-1 num" /></label>
+      </div>
+      <div v-if="result?.status === 'sufficient' || result?.status === 'insufficient_margin'" class="grid gap-2 rounded-lg border border-ink-700 bg-ink-900/60 p-3 sm:grid-cols-2 lg:grid-cols-4">
+        <div class="kv"><dt>ผลตรวจ</dt><dd :class="result.status === 'sufficient' ? 'text-up' : 'text-down'">{{ result.status === 'sufficient' ? 'มาร์จินคงเหลือพอ' : 'มาร์จินไม่พอ' }}</dd></div>
+        <div class="kv"><dt>ราคาที่ประเมิน</dt><dd>{{ fmt(result.price, spec?.digits ?? 2) }} · {{ result.side }}</dd></div>
+        <div class="kv"><dt>Required margin</dt><dd>{{ fmt(result.required_margin, 2) }} {{ result.currency }}</dd></div>
+        <div class="kv"><dt>Free after estimate</dt><dd>{{ fmt(result.projected_free_margin, 2) }} {{ result.currency }}</dd></div>
+        <div class="kv"><dt>Leverage</dt><dd>1:{{ result.leverage }}</dd></div>
+        <div class="kv"><dt>Quote age</dt><dd>{{ fmt(result.quote_age_seconds, 1) }}s</dd></div>
+      </div>
+      <p v-else-if="result" class="rounded-lg border border-amber-400/30 bg-amber-400/5 px-3 py-2 text-xs text-amber-200">{{ result.reason || 'ไม่มีผลคำนวณจาก MT5' }}</p>
+      <p class="text-[10px] leading-relaxed text-muted">เป็นการอ่านค่าเท่านั้น; ไม่ได้เรียก order_check/order_send และไม่ใช่การรับประกันว่าโบรกเกอร์จะรับออเดอร์</p>
+    </div>
+    <div v-else-if="tool === 'confirmation_100pt'" class="space-y-3 px-4 py-3">
+      <div class="grid gap-3 sm:grid-cols-3">
+        <label class="block"><span class="label">Side</span><select v-model="side" class="input mt-1"><option>BUY</option><option>SELL</option></select></label>
+        <label class="block"><span class="label">ราคาอ้างอิง bid/ask</span><input v-model.number="confirmationReference" type="number" min="0.000001" step="0.01" class="input mt-1 num" placeholder="กรอกราคาอ้างอิง" /></label>
+      </div>
+      <div v-if="result?.status === 'preview_match' || result?.status === 'waiting'" class="space-y-2 rounded-lg border border-ink-700 bg-ink-900/60 p-3">
+        <div class="flex flex-wrap items-center justify-between gap-2"><strong :class="result.status === 'preview_match' ? 'text-up' : 'text-gold-300'">{{ result.status === 'preview_match' ? 'เข้าเงื่อนไข preview' : 'ยังรอยืนยัน' }}</strong><span class="chip chip-gold">ไม่ใช่ confirmation ที่บันทึกไว้</span></div>
+        <div class="grid gap-2 sm:grid-cols-2 lg:grid-cols-4">
+          <div class="kv"><dt>ราคาเป้าหมาย</dt><dd>{{ fmt(result.target_price, spec?.digits ?? 2) }}</dd></div>
+          <div class="kv"><dt>M1 close progress</dt><dd>{{ fmt(result.closed_m1_progress_points, 1) }} / {{ fmt(result.threshold_points, 0) }} pts</dd></div>
+          <div class="kv"><dt>ระยะคงเหลือ</dt><dd>{{ fmt(result.remaining_points, 1) }} pts</dd></div>
+          <div class="kv"><dt>M5 aligned · chase</dt><dd>{{ result.m5_aligned ? 'yes' : 'no' }} · {{ fmt(result.chase_points, 1) }} pts</dd></div>
+        </div>
+        <ul v-if="result.blockers?.length" class="text-[10px] text-amber-200"><li v-for="reason in result.blockers" :key="reason">{{ reason }}</li></ul>
+      </div>
+      <p v-else-if="result" class="text-xs text-amber-300">{{ result.blockers?.join(' · ') || result.reason }}</p>
+      <p class="text-[10px] leading-relaxed text-muted">ใช้ราคาตลาดและแท่งปิด M1/M5 ล่าสุดพร้อมสูตรเดียวกับ confirmation gate; ไม่อ่านหรือเปลี่ยน candidate ของบัญชี และ 100 points ไม่ได้อนุมัติคำสั่ง</p>
+    </div>
+    <div v-else-if="tool === 'scenario'" class="space-y-3 px-4 py-3">
+      <div class="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
+        <label class="block"><span class="label">ทุนจำลอง ({{ spec?.account_currency || 'สกุลที่สมมติ' }})</span><input v-model.number="manualEquity" type="number" min="0.01" step="100" class="input mt-1 num" placeholder="กรอกทุนเอง" /></label>
+        <label class="block"><span class="label">Risk ต่อไม้ (%)</span><input v-model.number="riskPct" type="number" min="0.01" max="100" step="0.05" class="input mt-1 num" /></label>
+        <label class="block"><span class="label">Win rate สมมติ (%)</span><input v-model.number="scenarioWinRate" type="number" min="0" max="100" step="1" class="input mt-1 num" /></label>
+        <label class="block"><span class="label">Reward / Risk</span><input v-model.number="scenarioRewardRisk" type="number" min="0.01" step="0.1" class="input mt-1 num" /></label>
+        <label class="block"><span class="label">จำนวนไม้</span><input v-model.number="scenarioTrades" type="number" min="1" max="1000" step="1" class="input mt-1 num" /></label>
+        <label class="block"><span class="label">Cost ต่อไม้ (สกุลเดียวกัน)</span><input v-model.number="scenarioCost" type="number" min="0" step="0.01" class="input mt-1 num" /></label>
+        <label class="block"><span class="label">จำนวน simulation</span><input v-model.number="scenarioRuns" type="number" min="50" max="1000" step="50" class="input mt-1 num" /></label>
+        <label class="block"><span class="label">Seed</span><input v-model.number="scenarioSeed" type="number" step="1" class="input mt-1 num" /></label>
+      </div>
+      <div v-if="result?.status === 'ready'" class="grid gap-2 rounded-lg border border-ink-700 bg-ink-900/60 p-3 sm:grid-cols-2 lg:grid-cols-4">
+        <div class="kv"><dt>ผลปลายทาง P10</dt><dd>{{ fmt(result.ending_equity_p10, 2) }} หน่วยเงิน</dd></div><div class="kv"><dt>Median</dt><dd>{{ fmt(result.ending_equity_median, 2) }} หน่วยเงิน</dd></div><div class="kv"><dt>P90</dt><dd>{{ fmt(result.ending_equity_p90, 2) }} หน่วยเงิน</dd></div><div class="kv"><dt>Expectancy / ไม้*</dt><dd>{{ fmt(result.expectancy_per_trade_at_start, 2) }} หน่วยเงิน · {{ fmt(result.expectancy_pct_of_starting_equity, 3) }}%</dd></div><div class="kv"><dt>Max DD P90</dt><dd class="text-down">{{ fmt(result.max_drawdown_p90_pct, 2) }}%</dd></div><div class="kv"><dt>Longest losing streak</dt><dd>{{ result.longest_losing_streak_max }} ไม้</dd></div>
+      </div><p v-else-if="result" class="text-xs text-amber-300">{{ result.reason }}</p>
+      <p class="text-[10px] leading-relaxed text-muted">สุ่มผลตาม assumption และ seed ที่กรอกเพื่อเรียนรู้ผลของ risk/cost; *expectancy เป็นค่าเฉลี่ยเชิงคณิตศาสตร์ต่อไม้เมื่อใช้ทุนเริ่มต้นเท่านั้น. ไม่ใช้ข้อมูลย้อนหลัง ไม่ใช่ backtest หรือการคาดการณ์</p>
+    </div>
+    <div v-else-if="tool === 'capital_growth'" class="space-y-3 px-4 py-3">
+      <div class="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
+        <label class="block"><span class="label">ทุนเริ่มต้น</span><input v-model.number="manualEquity" type="number" min="0.01" step="100" class="input mt-1 num" placeholder="กรอกทุนเอง" /></label>
+        <label class="block"><span class="label">Low return / period (%)</span><input v-model.number="growthLow" type="number" step="0.1" class="input mt-1 num" /></label>
+        <label class="block"><span class="label">Base return / period (%)</span><input v-model.number="growthBase" type="number" step="0.1" class="input mt-1 num" /></label>
+        <label class="block"><span class="label">High return / period (%)</span><input v-model.number="growthHigh" type="number" step="0.1" class="input mt-1 num" /></label>
+        <label class="block"><span class="label">จำนวน period</span><input v-model.number="growthPeriods" type="number" min="1" max="1000" step="1" class="input mt-1 num" /></label>
+        <label class="block"><span class="label">Risk ต่อไม้ (%)</span><input v-model.number="riskPct" type="number" min="0" max="100" step="0.05" class="input mt-1 num" /></label>
+        <label class="block"><span class="label">แพ้ติดกัน (สมมติ)</span><input v-model.number="growthLossStreak" type="number" min="0" max="1000" step="1" class="input mt-1 num" /></label>
+      </div>
+      <div v-if="result?.status === 'ready'" class="grid gap-2 rounded-lg border border-ink-700 bg-ink-900/60 p-3 sm:grid-cols-2 lg:grid-cols-4">
+        <div class="kv"><dt>Low case</dt><dd>{{ fmt(result.low_case, 2) }} หน่วยเงิน</dd></div><div class="kv"><dt>Base case</dt><dd>{{ fmt(result.base_case, 2) }} หน่วยเงิน</dd></div><div class="kv"><dt>High case</dt><dd>{{ fmt(result.high_case, 2) }} หน่วยเงิน</dd></div><div class="kv"><dt>หลังแพ้ติดกัน · DD</dt><dd class="text-down">{{ fmt(result.after_assumed_losing_streak, 2) }} หน่วยเงิน · {{ fmt(result.losing_streak_drawdown_pct, 2) }}%</dd></div>
+      </div><p v-else-if="result" class="text-xs text-amber-300">{{ result.reason }}</p>
+      <p class="text-[10px] leading-relaxed text-muted">ทุกค่า return เป็นสมมติฐานที่กรอกเอง; ไม่มีการประเมินผลตอบแทนในอนาคต</p>
+    </div>
+    <div v-else-if="tool === 'currency_convert'" class="space-y-3 px-4 py-3">
+      <div class="grid gap-3 sm:grid-cols-3">
+        <label class="block"><span class="label">จำนวนเงิน</span><input v-model.number="fxAmount" type="number" step="0.01" class="input mt-1 num" /></label>
+        <label class="block"><span class="label">จากสกุลเงิน</span><input v-model="fromCurrency" maxlength="3" class="input mt-1 uppercase" /></label>
+        <label class="block"><span class="label">เป็นสกุลเงิน</span><input v-model="toCurrency" maxlength="3" class="input mt-1 uppercase" /></label>
+      </div>
+      <div v-if="result?.status === 'ready'" class="grid gap-2 rounded-lg border border-ink-700 bg-ink-900/60 p-3 sm:grid-cols-2 lg:grid-cols-4"><div class="kv"><dt>ผลแปลง</dt><dd>{{ fmt(result.converted_amount, 2) }} {{ result.to_currency }}</dd></div><div class="kv"><dt>FX rate</dt><dd>{{ fmt(result.rate, 6) }}</dd></div><div class="kv"><dt>Source pair</dt><dd>{{ result.rate_pair || 'identity' }}</dd></div><div class="kv"><dt>Captured UTC</dt><dd>{{ result.captured_at ? new Date(result.captured_at * 1000).toISOString() : '—' }}</dd></div></div>
+      <p v-else-if="result" class="text-xs text-amber-300">{{ result.reason }}</p>
+      <p class="text-[10px] leading-relaxed text-muted">ใช้ FX ticker สดที่ feed นี้มีให้เท่านั้น; ไม่ใช้ USD/THB หรืออัตราคงที่แทนข้อมูลที่ขาด</p>
+    </div>
     <p v-if="result?.valuation_valid === false" class="border-t border-amber-400/30 px-4 py-2 text-[10px] leading-relaxed text-amber-300">
       สเปกหรืออัตราแปลงสกุลเงินยังไม่ครบ จึงไม่แสดงยอดกำไร/ขาดทุนเป็นตัวเลข
     </p>
@@ -279,6 +360,7 @@ const riskPct = ref(0.5)
 const manualEquity = ref(null)
 const slPoints = ref(400)
 const side = ref('BUY')
+const confirmationReference = ref(null)
 const entry = ref(2000)
 const previewEntry = ref(null)
 const stopLoss = ref(1990)
@@ -299,6 +381,20 @@ const structureBufferAtr = ref(0.2)
 const swingLookbackBars = ref(10)
 const previewTargetMode = ref('adaptive')
 const targetR = ref(2)
+const scenarioWinRate = ref(50)
+const scenarioRewardRisk = ref(2)
+const scenarioTrades = ref(50)
+const scenarioCost = ref(0)
+const scenarioRuns = ref(300)
+const scenarioSeed = ref(7)
+const growthLow = ref(-2)
+const growthBase = ref(1)
+const growthHigh = ref(4)
+const growthPeriods = ref(12)
+const growthLossStreak = ref(5)
+const fxAmount = ref(1000)
+const fromCurrency = ref('USD')
+const toCurrency = ref('THB')
 const spec = ref(null)
 const result = ref(null)
 const positionSize = ref(null)
@@ -311,14 +407,17 @@ let loadTimer = null
 const symbol = computed(() => state.symbol)
 const isAnalysisTool = computed(() => ['atr_volatility', 'support_resistance'].includes(tool.value))
 const isPlanPreviewTool = computed(() => tool.value === 'auto_sl_tp')
-const isReadOnlyTool = computed(() => isAnalysisTool.value || isPlanPreviewTool.value)
+const isBrokerReadTool = computed(() => ['margin', 'confirmation_100pt'].includes(tool.value))
+const isReadOnlyTool = computed(() => isAnalysisTool.value || isPlanPreviewTool.value || isBrokerReadTool.value)
 const sourceLabel = computed(() => isAnalysisTool.value
   ? `Analysis snapshot · ${spec.value?.source || '—'}`
   : isPlanPreviewTool.value ? 'Manual SL/TP preview · read only'
+  : isBrokerReadTool.value ? `${tool.value === 'margin' ? 'MT5 margin' : '100-point'} · read only`
   : spec.value?.source === 'broker' ? 'Broker symbol spec' : 'Declared symbol spec')
 const sourceContext = computed(() => isAnalysisTool.value
   ? `feed ${provenance.value?.market_feed || '—'}`
   : isPlanPreviewTool.value ? `fresh ${provenance.value?.market_feed || 'market'} · manual equity`
+  : isBrokerReadTool.value ? `${provenance.value?.adapter || provenance.value?.market_feed || 'fresh feed'} · read only`
   : `${spec.value?.account_currency || '—'} · FX ${spec.value?.rate_source || '—'}`)
 
 function accountMoney(value) {
@@ -415,6 +514,45 @@ async function load() {
       query.set('swing_lookback_bars', String(swingLookbackBars.value))
       query.set('target_mode', previewTargetMode.value)
       query.set('target_r', String(targetR.value))
+    } else if (tool.value === 'margin') {
+      endpoint = '/api/risk/calculator'
+      query.set('tool', 'margin')
+      query.set('side', side.value)
+      query.set('lot', String(lot.value))
+    } else if (tool.value === 'confirmation_100pt') {
+      endpoint = '/api/risk/calculator'
+      query.set('tool', 'confirmation_100pt')
+      query.set('side', side.value)
+      if (confirmationReference.value !== null && confirmationReference.value !== '') {
+        query.set('reference_price', String(confirmationReference.value))
+      }
+    } else if (tool.value === 'scenario') {
+      endpoint = '/api/risk/calculator'
+      query.set('tool', 'scenario')
+      if (manualEquity.value !== null && manualEquity.value !== '') query.set('manual_equity', String(manualEquity.value))
+      query.set('risk_pct', String(riskPct.value))
+      query.set('win_rate_pct', String(scenarioWinRate.value))
+      query.set('reward_risk', String(scenarioRewardRisk.value))
+      query.set('trades', String(scenarioTrades.value))
+      query.set('cost_per_trade', String(scenarioCost.value))
+      query.set('runs', String(scenarioRuns.value))
+      query.set('seed', String(scenarioSeed.value))
+    } else if (tool.value === 'capital_growth') {
+      endpoint = '/api/risk/calculator'
+      query.set('tool', 'capital_growth')
+      if (manualEquity.value !== null && manualEquity.value !== '') query.set('manual_equity', String(manualEquity.value))
+      query.set('low_return_pct', String(growthLow.value))
+      query.set('base_return_pct', String(growthBase.value))
+      query.set('high_return_pct', String(growthHigh.value))
+      query.set('periods', String(growthPeriods.value))
+      query.set('risk_pct', String(riskPct.value))
+      query.set('loss_streak', String(growthLossStreak.value))
+    } else if (tool.value === 'currency_convert') {
+      endpoint = '/api/risk/calculator'
+      query.set('tool', 'currency_convert')
+      query.set('amount', String(fxAmount.value))
+      query.set('from_currency', fromCurrency.value)
+      query.set('to_currency', toCurrency.value)
     }
     const data = await api.get(`${endpoint}?${query.toString()}`)
     if (activeRequest !== requestId) return
@@ -449,6 +587,7 @@ function resetInputs() {
   riskPct.value = 0.5
   slPoints.value = 400
   side.value = 'BUY'
+  confirmationReference.value = null
   entry.value = 2000
   previewEntry.value = null
   stopLoss.value = 1990
@@ -469,6 +608,20 @@ function resetInputs() {
   swingLookbackBars.value = 10
   previewTargetMode.value = 'adaptive'
   targetR.value = 2
+  scenarioWinRate.value = 50
+  scenarioRewardRisk.value = 2
+  scenarioTrades.value = 50
+  scenarioCost.value = 0
+  scenarioRuns.value = 300
+  scenarioSeed.value = 7
+  growthLow.value = -2
+  growthBase.value = 1
+  growthHigh.value = 4
+  growthPeriods.value = 12
+  growthLossStreak.value = 5
+  fxAmount.value = 1000
+  fromCurrency.value = 'USD'
+  toCurrency.value = 'THB'
 }
 
 async function copyResult() {
@@ -480,10 +633,13 @@ async function copyResult() {
 }
 
 watch([symbol, tool], scheduleLoad, { immediate: true })
-watch([points, lot, equity, manualEquity, riskPct, slPoints, side, entry, stopLoss, takeProfit, exitPrice,
+watch([points, lot, equity, manualEquity, riskPct, slPoints, side, confirmationReference, entry, stopLoss, takeProfit, exitPrice,
   grossReward, grossLoss, estimatedCost, holdingNights, tripleSwapNights, currentEquity,
   peakEquity, priceDelta, previewEntry, stopMode, fixedSlPoints, atrMultiplier, structureBufferAtr,
-  swingLookbackBars, previewTargetMode, targetR], () => { if (!isAnalysisTool.value) scheduleLoad() })
+  swingLookbackBars, previewTargetMode, targetR, scenarioWinRate, scenarioRewardRisk,
+  scenarioTrades, scenarioCost, scenarioRuns, scenarioSeed, growthLow, growthBase,
+  growthHigh, growthPeriods, growthLossStreak, fxAmount, fromCurrency, toCurrency],
+  () => { if (!isAnalysisTool.value) scheduleLoad() })
 
 onBeforeUnmount(() => {
   if (loadTimer !== null) clearTimeout(loadTimer)

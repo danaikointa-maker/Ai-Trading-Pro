@@ -2,12 +2,12 @@
 from __future__ import annotations
 
 from concurrent.futures import ThreadPoolExecutor
+from threading import RLock
 from types import SimpleNamespace
 from unittest.mock import Mock
 
-import pytest
 import pandas as pd
-from threading import RLock
+import pytest
 
 from packages.persistence.db import Database
 from packages.shared_schemas.models import (
@@ -18,8 +18,8 @@ from packages.shared_schemas.models import (
     SignalStatus,
     SymbolSpec,
     Tick,
-    TradePlan,
     TradeMode,
+    TradePlan,
 )
 from services.api_gateway.state import TradingRuntime
 from services.market_data.replay import ReplayFeed
@@ -30,6 +30,7 @@ from services.strategy_engine.confirmation import (
     INVALIDATED,
     WAIT,
     SignalConfirmationGate,
+    confirmation_movement_points,
 )
 
 NOW = 1_700_000_120
@@ -184,6 +185,11 @@ def test_sell_uses_sell_side_and_negative_price_direction(db):
                         now=NOW + 5, bar_t=NOW - 60)
     assert confirmed.state == CONFIRMED
     assert confirmed.confirmation_points == pytest.approx(100)
+
+
+def test_shared_confirmation_distance_math_is_directional():
+    assert confirmation_movement_points(Direction.up, 2000.0, 2001.0, 0.01) == pytest.approx(100)
+    assert confirmation_movement_points(Direction.down, 2000.0, 1999.0, 0.01) == pytest.approx(100)
 
 
 def test_chase_over_30_points_never_releases_order(db):

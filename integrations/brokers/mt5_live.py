@@ -387,6 +387,81 @@ class MT5Broker(BrokerAdapter):
             return f"SL/TP is inside broker stops/freeze distance ({minimum:g} points)"
         return None
 
+    def calculate_margin(self, side: str, symbol: str, volume: float,
+                         max_quote_age_seconds: float = 30.0) -> dict[str, Any]:
+        """Read-only broker margin estimate; never selects symbols or sends orders."""
+        self._require()
+        account = self._account_identity()
+        normalized_side = str(side or "").strip().upper()
+        if normalized_side not in {"BUY", "SELL"}:
+            raise BrokerError("margin estimate side must be BUY or SELL")
+        try:
+            requested_volume = float(volume)
+            age_limit = float(max_quote_age_seconds)
+        except (TypeError, ValueError, OverflowError) as exc:
+            raise BrokerError("margin estimate inputs are invalid") from exc
+        if (not math.isfinite(requested_volume) or requested_volume <= 0
+                or not math.isfinite(age_limit) or age_limit <= 0):
+            raise BrokerError("margin estimate inputs are outside supported bounds")
+
+        broker_symbol = self._broker_symbol(symbol)
+        symbol_info = mt5.symbol_info(broker_symbol)
+        if symbol_info is None or not bool(getattr(symbol_info, "visible", False)):
+            raise BrokerError("broker symbol is missing or not visible in Market Watch")
+        spec = self.symbol_spec(symbol)
+        normalized_volume = spec.normalize_lot(requested_volume)
+        if (not spec.spec_complete or spec.sizing_blocked
+                or not math.isclose(normalized_volume, requested_volume,
+                                    rel_tol=0.0, abs_tol=1e-8)):
+            raise BrokerError("complete broker spec and legal volume step are required")
+        tick = mt5.symbol_info_tick(broker_symbol)
+        if tick is None:
+            raise BrokerError("current broker quote is unavailable")
+        try:
+            bid, ask, tick_time = float(tick.bid), float(tick.ask), float(tick.time)
+        except (AttributeError, TypeError, ValueError, OverflowError) as exc:
+            raise BrokerError("current broker quote is invalid") from exc
+        if (not all(math.isfinite(value) for value in (bid, ask, tick_time))
+                or bid <= 0 or ask < bid or tick_time <= 0):
+            raise BrokerError("current broker quote is invalid")
+        now = time.time()
+        quote_age = now - tick_time
+        if quote_age < -2 or quote_age > age_limit:
+            raise BrokerError("current broker quote is stale or from the future")
+        price = ask if normalized_side == "BUY" else bid
+        order_type = mt5.ORDER_TYPE_BUY if normalized_side == "BUY" else mt5.ORDER_TYPE_SELL
+        try:
+            required_margin = float(mt5.order_calc_margin(
+                order_type, broker_symbol, requested_volume, price))
+        except Exception as exc:  # noqa: BLE001 - calculator must fail closed
+            raise BrokerError("MT5 order_calc_margin is unavailable") from exc
+        if not math.isfinite(required_margin) or required_margin < 0:
+            raise BrokerError("MT5 order_calc_margin returned an invalid result")
+        account = self._account_identity()
+        try:
+            free_margin = float(getattr(account, "margin_free"))
+            leverage = int(getattr(account, "leverage"))
+            currency = str(getattr(account, "currency", "") or "").strip().upper()
+        except (AttributeError, TypeError, ValueError, OverflowError) as exc:
+            raise BrokerError("current account margin metadata is unavailable") from exc
+        if (not math.isfinite(free_margin) or free_margin < 0
+                or leverage <= 0 or not currency):
+            raise BrokerError("current account margin metadata is invalid")
+        projected_free = free_margin - required_margin
+        return {
+            "status": "sufficient" if projected_free >= -max(0.01, free_margin * 1e-9)
+            else "insufficient_margin",
+            "symbol": symbol, "broker_symbol": broker_symbol,
+            "side": normalized_side, "volume": requested_volume,
+            "price": price, "quote_time": tick_time,
+            "quote_age_seconds": round(max(0.0, quote_age), 2),
+            "required_margin": round(required_margin, 2),
+            "free_margin": round(free_margin, 2),
+            "projected_free_margin": round(projected_free, 2),
+            "currency": currency, "leverage": leverage,
+            "source": "mt5_order_calc_margin",
+        }
+
     def _preflight_order(self, request: OrderRequest, payload: dict[str, Any],
                          broker_symbol: str, price: float, volume: float,
                          spec: SymbolSpec) -> OrderResult | None:

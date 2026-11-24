@@ -9,6 +9,7 @@ Two invariants:
 from __future__ import annotations
 
 import math
+import random
 from dataclasses import dataclass, field
 from typing import Any, Callable
 
@@ -855,6 +856,163 @@ def profit_loss_calculator(spec: SymbolSpec, entry: float, exit_price: float,
             "net_after_known_costs": result["net_after_known_costs"],
             "valuation_valid": True,
             "reason": "estimate uses typical spread and round-turn commission; excludes slippage and swap"}
+
+
+def scenario_simulator(starting_equity: float, risk_pct: float, win_rate_pct: float,
+                       reward_risk: float, trades: int, cost_per_trade: float = 0.0,
+                       runs: int = 300, seed: int = 7) -> dict[str, Any]:
+    """Simulate explicitly assumed wins/losses; this is not a backtest or forecast."""
+    try:
+        equity, risk, win_rate, rr, cost = map(
+            float, (starting_equity, risk_pct, win_rate_pct, reward_risk, cost_per_trade))
+    except (TypeError, ValueError, OverflowError):
+        equity, risk, win_rate, rr, cost = (math.nan,) * 5
+    common = {"source": "manual_sandbox", "starting_equity": equity if math.isfinite(equity) else None,
+              "risk_pct": risk if math.isfinite(risk) else None,
+              "win_rate_pct": win_rate if math.isfinite(win_rate) else None,
+              "reward_risk": rr if math.isfinite(rr) else None,
+              "trades": trades, "runs": runs, "seed": seed}
+    if (any(isinstance(value, bool) for value in
+            (starting_equity, risk_pct, win_rate_pct, reward_risk, trades, cost_per_trade, runs, seed))
+            or not all(math.isfinite(value) for value in (equity, risk, win_rate, rr, cost))
+            or equity <= 0 or not 0 < risk <= 100 or not 0 <= win_rate <= 100
+            or rr <= 0 or cost < 0 or not 1 <= trades <= 1000
+            or not 50 <= runs <= 1000 or not isinstance(seed, int)):
+        return {**common, "status": "invalid_input",
+                "reason": "enter valid assumptions; trades 1–1000 and runs 50–1000"}
+
+    initial_risk_amount = equity * (risk / 100.0)
+    expected_change = ((win_rate / 100.0) * (initial_risk_amount * rr - cost)
+                       + (1 - win_rate / 100.0) * (-initial_risk_amount - cost))
+    if not math.isfinite(initial_risk_amount) or not math.isfinite(expected_change):
+        return {**common, "status": "unavailable",
+                "reason": "assumptions exceed the supported numeric range"}
+
+    rng = random.Random(seed)
+    end_equities: list[float] = []
+    drawdowns: list[float] = []
+    max_streaks: list[int] = []
+    for _ in range(runs):
+        current = peak = equity
+        max_drawdown = 0.0
+        loss_streak = longest_loss_streak = 0
+        for _ in range(trades):
+            if current <= 0:
+                break
+            risk_amount = current * (risk / 100.0)
+            is_win = rng.random() < win_rate / 100.0
+            change = (risk_amount * rr - cost) if is_win else -(risk_amount + cost)
+            if not math.isfinite(risk_amount) or not math.isfinite(change):
+                return {**common, "status": "unavailable",
+                        "reason": "assumptions exceed the supported numeric range"}
+            current += change
+            if not math.isfinite(current):
+                return {**common, "status": "unavailable",
+                        "reason": "assumptions exceed the supported numeric range"}
+            current = max(0.0, current)
+            if is_win:
+                loss_streak = 0
+            else:
+                loss_streak += 1
+                longest_loss_streak = max(longest_loss_streak, loss_streak)
+            peak = max(peak, current)
+            if peak > 0:
+                max_drawdown = max(max_drawdown, (peak - current) / peak * 100.0)
+        end_equities.append(current)
+        drawdowns.append(max_drawdown)
+        max_streaks.append(longest_loss_streak)
+
+    end_equities.sort()
+    drawdowns.sort()
+    def percentile(values: list[float], p: float) -> float:
+        return values[round((len(values) - 1) * p)]
+    return {
+        **common, "status": "ready",
+        "ending_equity_p10": round(percentile(end_equities, 0.10), 2),
+        "ending_equity_median": round(percentile(end_equities, 0.50), 2),
+        "ending_equity_p90": round(percentile(end_equities, 0.90), 2),
+        "max_drawdown_p90_pct": round(percentile(drawdowns, 0.90), 2),
+        "longest_losing_streak_max": max(max_streaks, default=0),
+        "expectancy_per_trade_at_start": round(expected_change, 2),
+        "expectancy_pct_of_starting_equity": round(expected_change / equity * 100.0, 4),
+        "method": "seeded Monte Carlo with per-trade equity risk compounding",
+        "disclaimer": "hypothetical assumptions only; not historical backtest, prediction, or trading advice",
+    }
+
+
+def capital_growth_calculator(starting_capital: float, low_return_pct: float,
+                              base_return_pct: float, high_return_pct: float,
+                              periods: int, risk_pct: float = 0.5,
+                              loss_streak: int = 0) -> dict[str, Any]:
+    """Compound three user-supplied return assumptions; never infer expected return."""
+    try:
+        capital, low, base, high, risk = map(
+            float, (starting_capital, low_return_pct, base_return_pct, high_return_pct, risk_pct))
+    except (TypeError, ValueError, OverflowError):
+        capital, low, base, high, risk = (math.nan,) * 5
+    common = {"source": "manual_sandbox", "starting_capital": capital if math.isfinite(capital) else None,
+              "periods": periods, "risk_pct": risk if math.isfinite(risk) else None,
+              "loss_streak": loss_streak}
+    if (any(isinstance(value, bool) for value in
+            (starting_capital, low_return_pct, base_return_pct, high_return_pct,
+             periods, risk_pct, loss_streak))
+            or not all(math.isfinite(value) for value in (capital, low, base, high, risk))
+            or capital <= 0 or min(low, base, high) <= -100
+            or max(abs(low), abs(base), abs(high)) > 1000
+            or not low <= base <= high
+            or not 1 <= periods <= 1000 or not 0 <= risk <= 100
+            or not 0 <= loss_streak <= 1000):
+        return {**common, "status": "invalid_input",
+                "reason": "returns must be ordered and above -100%; periods 1–1000; risk and streak within bounds"}
+
+    def compound(rate: float) -> float | None:
+        exponent = periods * math.log1p(rate / 100.0)
+        if exponent > math.log(float.fromhex("0x1.fffffffffffffp+1023")):
+            return None
+        value = capital * math.exp(exponent)
+        return round(value, 2) if math.isfinite(value) else None
+
+    after_loss_streak = capital * ((1 - risk / 100.0) ** loss_streak)
+    low_case, base_case, high_case = compound(low), compound(base), compound(high)
+    if low_case is None and base_case is None and high_case is None:
+        return {**common, "status": "unavailable",
+                "reason": "assumptions exceed the supported numeric range"}
+    return {**common, "status": "ready",
+            "low_case": low_case, "base_case": base_case,
+            "high_case": high_case,
+            "after_assumed_losing_streak": round(after_loss_streak, 2),
+            "losing_streak_drawdown_pct": round((1 - after_loss_streak / capital) * 100, 2),
+            "assumed_period_returns_pct": {"low": low, "base": base, "high": high},
+            "disclaimer": "illustrative compounding of user assumptions; not a return forecast"}
+
+
+def currency_conversion_calculator(amount: float, from_currency: str, to_currency: str,
+                                   rate: float, source: str,
+                                   captured_at: float | None) -> dict[str, Any]:
+    """Apply a timestamped resolved FX rate without embedding any currency assumption."""
+    try:
+        value, fx_rate = float(amount), float(rate)
+    except (TypeError, ValueError, OverflowError):
+        value, fx_rate = math.nan, math.nan
+    base, quote = str(from_currency or "").strip().upper(), str(to_currency or "").strip().upper()
+    common = {"amount": value if math.isfinite(value) else None, "from_currency": base,
+              "to_currency": quote, "rate": fx_rate if math.isfinite(fx_rate) else None,
+              "rate_source": source or "unknown", "captured_at": captured_at,
+              "source": "market_fx" if source == "ticker" else source}
+    if (any(isinstance(item, bool) for item in (amount, rate))
+            or not math.isfinite(value) or not math.isfinite(fx_rate)
+            or not base or not quote or len(base) != 3 or len(quote) != 3
+            or fx_rate <= 0):
+        return {**common, "status": "invalid_input", "converted_amount": None,
+                "reason": "amount, three-letter currency codes, and a positive finite rate are required"}
+    if source == "unknown":
+        return {**common, "status": "unavailable", "converted_amount": None,
+                "reason": "no fresh FX quote is available; no fixed rate was assumed"}
+    converted = value * fx_rate
+    if not math.isfinite(converted):
+        return {**common, "status": "unavailable", "converted_amount": None,
+                "reason": "converted amount exceeds the supported numeric range"}
+    return {**common, "status": "ready", "converted_amount": round(converted, 2), "reason": ""}
 
 
 def position_size_calculator(spec: SymbolSpec, equity: float, risk_pct: float,
