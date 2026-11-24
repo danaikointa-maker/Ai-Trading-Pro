@@ -305,6 +305,8 @@ def test_live_snapshot_marks_memory_quote_stale_after_feed_stops(client, auth, r
     # publisher route. Force this case to cover the adapter + last-known quote path.
     monkeypatch.setitem(runtime.market.publisher, "enabled", False)
     tick = Tick(t=1_700_000_000, bid=2000, ask=2001, spread_points=100, last=2000.5)
+    # Keep the session-scoped simulator from racing the stale last-known quote.
+    monkeypatch.setattr(runtime.feed, "tick", lambda: {"XAUUSD": tick})
     runtime.market.on_ticks({"XAUUSD": tick})
     runtime.active_symbol = "XAUUSD"
     runtime.ticks = {"XAUUSD": tick}

@@ -20,9 +20,83 @@ export function latestLogicalRange(count, visibleBars, rightGap = 0) {
   return { from: to - width, to }
 }
 
+// Latest-bar following is a horizontal navigation action. Keep it separate
+// from price-scale autoscaling so ticks, overlays, and container resizes do
+// not undo a user's vertical zoom.
+export function followLatestTimeRange(chart, range) {
+  if (!range || typeof chart?.timeScale !== 'function') return false
+  const timeScale = chart.timeScale()
+  if (typeof timeScale?.setVisibleLogicalRange !== 'function') return false
+  timeScale.setVisibleLogicalRange(range)
+  return true
+}
+
+export function shouldResetPriceScaleForViewChange(previousViewKey, nextViewKey) {
+  return Boolean(previousViewKey && nextViewKey && previousViewKey !== nextViewKey)
+}
+
+export function stabilizeAutoscaleInfo(info, anchorPrice, fixedSpan, fixedCenter) {
+  const range = info?.priceRange
+  const minValue = Number(range?.minValue)
+  const maxValue = Number(range?.maxValue)
+  const span = Number(fixedSpan)
+  const hasFixedSpan = Number.isFinite(span) && span > 0
+  if (!Number.isFinite(minValue) || !Number.isFinite(maxValue) || maxValue <= minValue) {
+    const retainedCenter = Number(fixedCenter)
+    return {
+      info,
+      span: hasFixedSpan ? span : null,
+      center: Number.isFinite(retainedCenter) && retainedCenter > 0 ? retainedCenter : null,
+    }
+  }
+  if (!hasFixedSpan) return { info, span: maxValue - minValue, center: (minValue + maxValue) / 2 }
+
+  const anchor = Number(anchorPrice)
+  const retainedCenter = Number(fixedCenter)
+  const center = Number.isFinite(anchor) && anchor > 0
+    ? anchor
+    : Number.isFinite(retainedCenter) && retainedCenter > 0
+      ? retainedCenter
+      : (minValue + maxValue) / 2
+  return {
+    info: {
+      ...info,
+      priceRange: { minValue: center - span / 2, maxValue: center + span / 2 },
+    },
+    span,
+    center,
+  }
+}
+
+export function fullPlotLineSpan(width) {
+  if (!Number.isFinite(width) || width < 1) return null
+  return { left: 0, right: width }
+}
+
+export function priceLineDash(style) {
+  if (style === 0) return []
+  if (style === 1) return [2, 3]
+  if (style === 3) return [10, 4, 3, 4]
+  if (style === 4) return [1, 4]
+  return [5, 3]
+}
+
 export function nextBarCount(currentCount) {
   const count = Number(currentCount)
   return (Number.isFinite(count) ? Math.max(0, Math.trunc(count)) : 0) + 1
+}
+
+export function needsCandleReloadOnRecovery(previous, current) {
+  if (!previous || !current) return false
+  const streamRecovered = previous.connected === false && current.connected === true
+  const apiRecovered = previous.serverUnreachable === true && current.serverUnreachable === false
+  const quoteRecovered = previous.tickerStale === true && current.tickerStale === false
+    && current.hasTick === true
+  return streamRecovered || apiRecovered || quoteRecovered
+}
+
+export function canApplyLiveQuote(tick, tickerStale, serverUnreachable) {
+  return Boolean(tick) && tickerStale !== true && serverUnreachable !== true
 }
 
 export function validPriceRange(min, max) {

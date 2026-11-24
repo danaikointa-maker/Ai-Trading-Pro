@@ -61,7 +61,7 @@ import { computed, onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue'
 import { createChart } from 'lightweight-charts'
 import { api } from '../lib/api'
 import { positions, state } from '../lib/store'
-import { clampBarSpacing, latestLogicalRange, matchesChartSymbol, nextBarCount, nextBarSpacing, shortMarkerSpan, validPriceRange, validTimeRange } from '../lib/chartViewport'
+import { canApplyLiveQuote, clampBarSpacing, followLatestTimeRange, fullPlotLineSpan, latestLogicalRange, matchesChartSymbol, needsCandleReloadOnRecovery, nextBarCount, nextBarSpacing, priceLineDash, shortMarkerSpan, shouldResetPriceScaleForViewChange, stabilizeAutoscaleInfo, validPriceRange, validTimeRange } from '../lib/chartViewport'
 
 const container = ref(null)
 const segmentCanvas = ref(null)
@@ -74,8 +74,9 @@ let candleSeries = null
 let ema20 = null
 let ema50 = null
 let ema200 = null
-let priceLines = []
 let shortMarkers = []
+let fixedPriceSpan = null
+let fixedPriceCenter = null
 let lastCandle = null
 let resizeObs = null
 let priceDigits = 2
@@ -83,6 +84,8 @@ let loadedViewKey = ''
 let viewportFrame = null
 let viewportSaveTimer = null
 let markerFrame = null
+let recoveryRefreshTimer = null
+let candleLoadRequestId = 0
 let dragOrigin = null
 const VIEW_PREFS_KEY = 'no7.chart.viewport.v1'
 let savedPrefs = {}
@@ -141,8 +144,7 @@ function goLatest() {
   const range = latestRange()
   if (!chart || !range) return
   autoScroll.value = true
-  chart.priceScale('right').applyOptions({ autoScale: true })
-  chart.timeScale().setVisibleLogicalRange(range)
+  followLatestTimeRange(chart, range)
   saveViewPrefs()
 }
 
@@ -171,6 +173,9 @@ function toggleShift() {
 function fitAll() {
   if (!chart || !bars.value) return
   autoScroll.value = false
+  fixedPriceSpan = null
+  fixedPriceCenter = null
+  chart.priceScale('right').applyOptions({ autoScale: true })
   chart.timeScale().fitContent()
   syncViewport()
 }
@@ -281,9 +286,23 @@ function buildChart() {
     borderVisible: false,
     priceLineVisible: true,
     priceLineColor: 'rgba(245,181,65,0.6)',
+    autoscaleInfoProvider: (original) => {
+      const scaled = stabilizeAutoscaleInfo(
+        original(), autoScroll.value ? lastCandle?.close : null, fixedPriceSpan, fixedPriceCenter,
+      )
+      fixedPriceSpan = scaled.span
+      fixedPriceCenter = scaled.center
+      return scaled.info
+    },
   })
-  const line = (color, width = 1) =>
-    chart.addLineSeries({ color, lineWidth: width, priceLineVisible: false, lastValueVisible: false, crosshairMarkerVisible: false })
+  const line = (color, width = 1) => chart.addLineSeries({
+    color,
+    lineWidth: width,
+    priceLineVisible: false,
+    lastValueVisible: false,
+    crosshairMarkerVisible: false,
+    autoscaleInfoProvider: () => null,
+  })
   ema20 = line('rgba(245,181,65,0.85)', 1)
   ema50 = line('rgba(96,165,250,0.8)', 1)
   ema200 = line('rgba(167,139,250,0.8)', 1)
@@ -313,18 +332,26 @@ async function retry() {
   await load()
 }
 
-async function load() {
+async function load({ silent = false } = {}) {
   if (!candleSeries) return
+  const requestId = ++candleLoadRequestId
+  const requestedSymbol = state.symbol
+  const requestedTimeframe = state.timeframe
+  const requestedRange = state.range
   const previousRange = chart.timeScale().getVisibleRange()
   const previousViewKey = loadedViewKey
-  loading.value = true
-  error.value = ''
+  if (!silent) {
+    loading.value = true
+    error.value = ''
+  }
   try {
     const data = await api.get(
-      `/api/market/candles?symbol=${encodeURIComponent(state.symbol)}&timeframe=${state.timeframe}&limit=${state.range}`,
+      `/api/market/candles?symbol=${encodeURIComponent(requestedSymbol)}&timeframe=${requestedTimeframe}&limit=${requestedRange}`,
     )
+    if (requestId !== candleLoadRequestId) return
+    error.value = ''
     const raw = Array.isArray(data.candles) ? data.candles : []
-    const nextViewKey = `${data.feed || 'feed'}:${data.symbol || state.symbol}:${state.timeframe}`
+    const nextViewKey = `${data.feed || 'feed'}:${data.symbol || requestedSymbol}:${requestedTimeframe}`
     displayBasis.value = data.time?.display_basis || 'utc'
     displayOffsetSeconds.value = displayBasis.value === 'broker_server'
       ? Number(data.time?.server_utc_offset_seconds || 0) : 0
@@ -363,6 +390,13 @@ async function load() {
     try {
       storedRange = JSON.parse(localStorage.getItem(`${VIEW_PREFS_KEY}:${nextViewKey}`) || 'null')
     } catch { /* ignore invalid saved viewport */ }
+    if (shouldResetPriceScaleForViewChange(previousViewKey, nextViewKey)) {
+      // A different feed/symbol/timeframe has a different price domain. Reset
+      // only on that intentional context change, never on a score refresh.
+      fixedPriceSpan = null
+      fixedPriceCenter = null
+      chart.priceScale('right').applyOptions({ autoScale: true })
+    }
     if (autoScroll.value) {
       goLatest()
     } else if (previousViewKey === nextViewKey && validTimeRange(previousRange, firstTime, lastTime)) {
@@ -376,35 +410,32 @@ async function load() {
     syncViewport()
     drawOverlays()
   } catch (err) {
-    error.value = String((err && err.message) || err)
-    console.error('[PriceChart] load failed', err)
+    if (requestId === candleLoadRequestId) {
+      error.value = !silent || bars.value === 0 ? String((err && err.message) || err) : ''
+      console.error('[PriceChart] load failed', err)
+    }
   } finally {
-    loading.value = false
+    if (requestId === candleLoadRequestId) loading.value = false
   }
 }
 
-function clearLines() {
-  priceLines.forEach(({ series, line }) => {
-    try {
-      series.removePriceLine(line)
-    } catch {
-      /* noop */
-    }
-  })
-  priceLines = []
+function refreshAfterRecovery() {
+  if (recoveryRefreshTimer) clearTimeout(recoveryRefreshTimer)
+  recoveryRefreshTimer = setTimeout(() => {
+    recoveryRefreshTimer = null
+    load({ silent: true })
+  }, 150)
 }
 
 function addLine(price, color, title, style = 2, width = 1) {
   if (!price || !Number.isFinite(Number(price))) return
-  const line = candleSeries.createPriceLine({
-    price: Number(price),
-    color,
-    lineWidth: width,
-    lineStyle: style,
-    axisLabelVisible: true,
-    title,
+  // Analysis levels belong on the presentation canvas, not the candle
+  // series. PriceLines participate in price-scale range calculation, so a
+  // changing score could stretch the candles to include a distant zone.
+  shortMarkers.push({
+    price: Number(price), color, label: title, fullWidth: true,
+    lineStyle: style, lineWidth: width,
   })
-  priceLines.push({ series: candleSeries, line })
 }
 
 function drawShortMarkers() {
@@ -422,16 +453,18 @@ function drawShortMarkers() {
   if (!ctx) return
   ctx.setTransform(ratio, 0, 0, ratio, 0, 0)
   ctx.clearRect(0, 0, width, height)
-  const span = shortMarkerSpan(width)
-  if (!span) return
+  const markerSpan = shortMarkerSpan(width)
+  const plotSpan = fullPlotLineSpan(Math.min(width, chart.timeScale().width()))
   for (const marker of shortMarkers) {
+    const span = marker.fullWidth ? plotSpan : markerSpan
+    if (!span) continue
     const y = candleSeries.priceToCoordinate(marker.price)
     if (!Number.isFinite(y) || y < 1 || y > height - 1) continue
     ctx.save()
     ctx.strokeStyle = marker.color
     ctx.fillStyle = marker.color
-    ctx.lineWidth = marker.emphasis ? 2 : 1.5
-    ctx.setLineDash(marker.dashed ? [5, 3] : [])
+    ctx.lineWidth = marker.lineWidth || (marker.emphasis ? 2 : 1.5)
+    ctx.setLineDash(marker.fullWidth ? priceLineDash(marker.lineStyle) : (marker.dashed ? [5, 3] : []))
     ctx.beginPath()
     ctx.moveTo(span.left, y)
     ctx.lineTo(span.right, y)
@@ -440,9 +473,11 @@ function drawShortMarkers() {
     ctx.font = '10px ui-monospace, monospace'
     const label = `${marker.label} ${Number(marker.price).toFixed(priceDigits)}`
     const labelWidth = ctx.measureText(label).width + 8
-    const labelLeft = Math.max(span.left, span.right - labelWidth)
+    const labelLeft = marker.fullWidth
+      ? Math.max(span.left + 3, span.right - labelWidth - 3)
+      : Math.max(span.left, span.right - labelWidth)
     ctx.globalAlpha = 0.9
-    ctx.fillRect(labelLeft, y - 11, span.right - labelLeft, 12)
+    ctx.fillRect(labelLeft, y - 11, Math.min(labelWidth, span.right - labelLeft), 12)
     ctx.globalAlpha = 1
     ctx.fillStyle = '#071018'
     ctx.fillText(label, labelLeft + 4, y - 2)
@@ -452,7 +487,6 @@ function drawShortMarkers() {
 
 function drawOverlays() {
   if (!candleSeries) return
-  clearLines()
   shortMarkers = []
   const signal = state.live?.signal
   const analysis = state.live?.analysis
@@ -502,7 +536,7 @@ function drawOverlays() {
 
 function updateLast() {
   const tick = state.live?.ticker
-  if (!tick || !lastCandle) return
+  if (!canApplyLiveQuote(tick, state.live?.ticker_stale, state.serverUnreachable) || !lastCandle) return
   const seconds = { M1: 60, M5: 300, M15: 900, H1: 3600, H4: 14400 }[state.timeframe] || 300
   const bucket = Math.floor(tick.t / seconds) * seconds
   const price = Number(tick.last)
@@ -524,7 +558,20 @@ function updateLast() {
   drawShortMarkers()
 }
 
-watch(() => [state.symbol, state.timeframe, state.range], load)
+watch(() => [state.symbol, state.timeframe, state.range], () => load())
+watch([
+  () => state.connected,
+  () => state.serverUnreachable,
+  () => state.live?.ticker_stale,
+  () => Boolean(state.live?.ticker),
+], ([connected, serverUnreachable, tickerStale, hasTick],
+  [wasConnected, wasServerUnreachable, wasTickerStale, hadTick]) => {
+  if (needsCandleReloadOnRecovery(
+    { connected: wasConnected, serverUnreachable: wasServerUnreachable,
+      tickerStale: wasTickerStale, hasTick: hadTick },
+    { connected, serverUnreachable, tickerStale, hasTick },
+  )) refreshAfterRecovery()
+})
 watch(() => state.live?.version, () => {
   updateLast()
   drawOverlays()
@@ -546,6 +593,7 @@ onBeforeUnmount(() => {
   resizeObs?.disconnect()
   if (viewportFrame) cancelAnimationFrame(viewportFrame)
   if (markerFrame) cancelAnimationFrame(markerFrame)
+  if (recoveryRefreshTimer) clearTimeout(recoveryRefreshTimer)
   clearTimeout(viewportSaveTimer)
   chart?.timeScale().unsubscribeVisibleLogicalRangeChange(syncViewport)
   chart?.remove()
@@ -560,9 +608,16 @@ const FEED_LABELS = {
   mt5: 'MT5 LIVE',
   'mt5-live': 'MT5 LIVE',
 }
-const feedLabel = computed(() => FEED_LABELS[state.live?.feed] || (state.live?.feed ? String(state.live.feed).toUpperCase() : 'FEED —'))
-const feedWarn = computed(() => state.live?.feed !== 'mt5' && state.live?.feed !== 'mt5-live')
+const feedIsStale = computed(() => state.serverUnreachable || state.live?.ticker_stale === true || !state.live?.ticker)
+const feedLabel = computed(() => {
+  const source = FEED_LABELS[state.live?.feed] || (state.live?.feed ? String(state.live.feed).toUpperCase() : 'FEED —')
+  return feedIsStale.value ? `STALE · ${source}` : source
+})
+const feedWarn = computed(() => feedIsStale.value || (state.live?.feed !== 'mt5' && state.live?.feed !== 'mt5-live'))
 const feedTitle = computed(() => {
+  if (state.serverUnreachable) return 'ติดต่อ API ไม่ได้; กราฟเป็นข้อมูลล่าสุดที่มี ไม่ใช่ราคาสด'
+  if (state.live?.ticker_stale === true) return 'ราคา tick เก่า; หยุดอัปเดตแท่งจนกว่าจะได้รับ quote ใหม่'
+  if (!state.live?.ticker) return 'ยังไม่มี quote ปัจจุบัน; กราฟอาจเป็นข้อมูลย้อนหลัง'
   const f = state.live?.feed
   if (f === 'replay') return 'ราคามาจากไฟล์ที่นำเข้า (replay) — ไม่ใช่ tick data จริง และไม่ใช่ราคาสดจากโบรกเกอร์'
   if (f === 'simulated') return 'ราคาจากตัวจำลอง — ห้ามใช้ตัดสินใจกับเงินจริง'
