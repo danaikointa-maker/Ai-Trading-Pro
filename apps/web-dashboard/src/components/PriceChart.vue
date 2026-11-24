@@ -61,7 +61,7 @@ import { computed, onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue'
 import { createChart } from 'lightweight-charts'
 import { api } from '../lib/api'
 import { positions, state } from '../lib/store'
-import { canApplyLiveQuote, clampBarSpacing, followLatestTimeRange, fullPlotLineSpan, latestLogicalRange, matchesChartSymbol, needsCandleReloadOnRecovery, nextBarCount, nextBarSpacing, priceLineDash, shortMarkerSpan, shouldResetPriceScaleForViewChange, validPriceRange, validTimeRange } from '../lib/chartViewport'
+import { canApplyLiveQuote, clampBarSpacing, followLatestTimeRange, fullPlotLineSpan, latestLogicalRange, matchesChartSymbol, needsCandleReloadOnRecovery, nextBarCount, nextBarSpacing, priceLineDash, shortMarkerSpan, shouldResetPriceScaleForViewChange, stabilizeAutoscaleInfo, validPriceRange, validTimeRange } from '../lib/chartViewport'
 
 const container = ref(null)
 const segmentCanvas = ref(null)
@@ -75,6 +75,8 @@ let ema20 = null
 let ema50 = null
 let ema200 = null
 let shortMarkers = []
+let fixedPriceSpan = null
+let fixedPriceCenter = null
 let lastCandle = null
 let resizeObs = null
 let priceDigits = 2
@@ -171,6 +173,8 @@ function toggleShift() {
 function fitAll() {
   if (!chart || !bars.value) return
   autoScroll.value = false
+  fixedPriceSpan = null
+  fixedPriceCenter = null
   chart.priceScale('right').applyOptions({ autoScale: true })
   chart.timeScale().fitContent()
   syncViewport()
@@ -282,9 +286,23 @@ function buildChart() {
     borderVisible: false,
     priceLineVisible: true,
     priceLineColor: 'rgba(245,181,65,0.6)',
+    autoscaleInfoProvider: (original) => {
+      const scaled = stabilizeAutoscaleInfo(
+        original(), autoScroll.value ? lastCandle?.close : null, fixedPriceSpan, fixedPriceCenter,
+      )
+      fixedPriceSpan = scaled.span
+      fixedPriceCenter = scaled.center
+      return scaled.info
+    },
   })
-  const line = (color, width = 1) =>
-    chart.addLineSeries({ color, lineWidth: width, priceLineVisible: false, lastValueVisible: false, crosshairMarkerVisible: false })
+  const line = (color, width = 1) => chart.addLineSeries({
+    color,
+    lineWidth: width,
+    priceLineVisible: false,
+    lastValueVisible: false,
+    crosshairMarkerVisible: false,
+    autoscaleInfoProvider: () => null,
+  })
   ema20 = line('rgba(245,181,65,0.85)', 1)
   ema50 = line('rgba(96,165,250,0.8)', 1)
   ema200 = line('rgba(167,139,250,0.8)', 1)
@@ -375,6 +393,8 @@ async function load({ silent = false } = {}) {
     if (shouldResetPriceScaleForViewChange(previousViewKey, nextViewKey)) {
       // A different feed/symbol/timeframe has a different price domain. Reset
       // only on that intentional context change, never on a score refresh.
+      fixedPriceSpan = null
+      fixedPriceCenter = null
       chart.priceScale('right').applyOptions({ autoScale: true })
     }
     if (autoScroll.value) {

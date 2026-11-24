@@ -47,11 +47,12 @@ U09 remains **PARTIAL** until the outstanding runtime acceptance is recorded.
 - Draw analysis levels on the existing non-interactive overlay canvas, using the chart's current price-to-coordinate mapping. The overlay cannot contribute prices to chart auto-scaling; full-width lines, labels and line styles remain visible.
 - Make latest-bar follow update only the horizontal time range. The explicit **Fit All** action remains the user-controlled path that restores automatic price scaling.
 - Reset automatic price scaling only when the selected feed/symbol/timeframe changes; a same-view score refresh or reconnect keeps the user's chosen scale.
-- Added focused helper tests for horizontal-only follow, plot-width bounds and the supported line styles.
+- Keep auto-follow vertically centered on the latest candle using a fixed price-range span captured from the initial/current view. As price changes, the range translates without growing, so each candle keeps the same vertical size. When horizontal auto-follow is off, retain the last vertical center. EMA series are excluded from autoscale; analysis levels stay on canvas. Manual axis scaling remains user-controlled, and **Fit All** recalculates the span.
+- Added focused helper tests for horizontal-only follow, fixed-span price translation, plot-width bounds and supported line styles.
 
 ### Verification
 
-- `npm run test:chart-viewport`: **12 passed, 0 failed**.
+- `npm run test:chart-viewport`: **14 passed, 0 failed**.
 - `npm run build`: **passed**, Vite 8.3.8, 666 modules transformed.
 - `git diff --check`: **passed**.
 - No MT5 account, order, Auto setting, broker, Cloudflare tunnel, VM service or runtime was changed.
