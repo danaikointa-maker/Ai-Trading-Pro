@@ -13,7 +13,7 @@ from services.strategy_engine.tradingview_shadow import (
 
 def _evidence(*, bar_close: int = 600, received: int = 620,
               long_score: int = 80, short_score: int = 20,
-              timeframe: str = "5") -> dict:
+              timeframe: str = "5", quality: str = "accepted_shadow") -> dict:
     return {
         "source_schema": "ai-agent-lens/v1",
         "event": "LONG_SETUP",
@@ -34,6 +34,7 @@ def _evidence(*, bar_close: int = 600, received: int = 620,
         "long_score": long_score,
         "short_score": short_score,
         "score_threshold": 70,
+        "quality": quality,
         "features": {},
     }
 
@@ -108,6 +109,24 @@ def test_duplicate_evidence_for_same_closed_bar_is_excluded_as_ambiguous():
     assert result["coverage"]["duplicate_evidence_excluded"] == 1
     assert result["coverage"]["unique_evidence"] == 0
     assert result["horizons"]["1"]["tradingview"]["samples"] == 0
+
+
+def test_replay_uses_only_accepted_shadow_evidence():
+    accepted = _evidence(bar_close=900, received=920, quality="accepted_shadow")
+    unverified = _evidence(bar_close=600, quality="unverified")
+    rejected = _evidence(bar_close=600, quality="rejected", long_score=95)
+    decision = ShadowNo7Decision("XAUUSD", "M5", 900, 950, "SELL", 60)
+
+    result = _replay(evidence=[unverified, rejected, accepted], decisions=[decision])
+
+    assert result["comparison"]["exact_unique_matches"] == 1
+    assert result["coverage"]["unique_evidence"] == 1
+    assert result["coverage"]["evidence_excluded_by_quality"] == 2
+    assert result["coverage"]["evidence_quality_counts"] == {
+        "accepted_shadow": 1, "rejected": 1, "unverified": 1,
+    }
+    assert result["cost_assumptions"]["symbol_spec_source"] == "broker"
+    assert result["horizons"]["1"]["tradingview"]["samples"] == 1
 
 
 def test_replay_rejects_missing_or_untrusted_broker_cost_spec():

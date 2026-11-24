@@ -166,6 +166,8 @@ def replay_tradingview_shadow(
 
     evidence_by_key: dict[tuple[str, str, int], list[ExternalAnalysisEvidence]] = defaultdict(list)
     filtered_evidence = 0
+    filtered_evidence_quality = 0
+    quality_counts: dict[str, int] = defaultdict(int)
     for item in evidence:
         parsed = (item if isinstance(item, ExternalAnalysisEvidence)
                   else ExternalAnalysisEvidence.model_validate(item))
@@ -173,6 +175,10 @@ def replay_tradingview_shadow(
                canonical_no7_timeframe(parsed.timeframe), parsed.bar_close_utc)
         if key[:2] != (canonical_symbol, canonical_tf):
             filtered_evidence += 1
+            continue
+        quality_counts[parsed.quality] += 1
+        if parsed.quality != "accepted_shadow":
+            filtered_evidence_quality += 1
             continue
         evidence_by_key[key].append(parsed)
 
@@ -198,9 +204,6 @@ def replay_tradingview_shadow(
 
     unique_evidence = {key: rows[0] for key, rows in evidence_by_key.items() if len(rows) == 1}
     unique_decisions = {key: rows[0] for key, rows in decisions_by_key.items() if len(rows) == 1}
-    quality_counts: dict[str, int] = defaultdict(int)
-    for item in unique_evidence.values():
-        quality_counts[item.quality] += 1
     comparison_keys = sorted(set(unique_evidence) & set(unique_decisions))
     agreement = disagreement = neutral_comparisons = 0
     score_gaps: list[float] = []
@@ -283,6 +286,7 @@ def replay_tradingview_shadow(
             "evidence_with_exact_closed_bar": used_evidence,
             "evidence_without_exact_bar": missing_bar,
             "duplicate_evidence_excluded": duplicate_evidence,
+            "evidence_excluded_by_quality": filtered_evidence_quality,
             "duplicate_no7_decisions_excluded": duplicate_decisions,
             "filtered_evidence_symbol_or_timeframe": filtered_evidence,
             "filtered_no7_symbol_or_timeframe": filtered_decisions,
