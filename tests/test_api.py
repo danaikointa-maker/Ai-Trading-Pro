@@ -302,9 +302,11 @@ def test_live_snapshot_marks_memory_quote_stale_after_feed_stops(client, auth, r
     from packages.shared_schemas.models import Tick
 
     # The runtime is session-scoped and other tests may temporarily exercise the
-    # publisher route. Force this case to cover the adapter + last-known quote path.
+    # publisher route. Pin the feed too because TestClient keeps its simulated
+    # market loop running and may otherwise race the last-known quote assertion.
     monkeypatch.setitem(runtime.market.publisher, "enabled", False)
     tick = Tick(t=1_700_000_000, bid=2000, ask=2001, spread_points=100, last=2000.5)
+    monkeypatch.setattr(runtime.feed, "tick", lambda: {"XAUUSD": tick})
     runtime.market.on_ticks({"XAUUSD": tick})
     runtime.active_symbol = "XAUUSD"
     runtime.ticks = {"XAUUSD": tick}
