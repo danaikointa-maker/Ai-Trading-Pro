@@ -210,7 +210,7 @@ H080 reload ใช้ approval ของ payload และ DB ร่วมกั
 | GET | `/api/risk/settings` | limits + targets + stops + full_auto requirements |
 | PUT | `/api/risk/settings` | `{limits:{...}}` patch (audit ทุกครั้ง); `full_auto_enabled` เปลี่ยนได้โดย admin เท่านั้น และปิดแล้วจะกลับ Manual หาก Full Auto กำลังเลือกอยู่ |
 | POST | `/api/risk/kill-switch` \| `DELETE` | เปิด/ปิดด้วยมือ |
-| GET | `/api/risk/calculator?symbol=&points=&lot=` | read-only shared math core; `tool=risk_reward|drawdown|point_tick|profit_loss` เพิ่ม 4 manual-sandbox tools. tool อื่นรองรับ position size เดิม. คืน provenance สเปก/FX; ไม่อ่าน balance, position หรือ history จากบัญชี และไม่เรียก order/modify/close |
+| GET | `/api/risk/calculator?symbol=&points=&lot=` | read-only shared math core; `tool=risk_reward|drawdown|break_even|point_tick|profit_loss` เพิ่ม 5 manual-sandbox tools. tool อื่นรองรับ position size เดิม. คืน provenance สเปก/FX; ไม่อ่าน balance, position หรือ history จากบัญชี และไม่เรียก order/modify/close |
 
 ## Brokers & backtest
 

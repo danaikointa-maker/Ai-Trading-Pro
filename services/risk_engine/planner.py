@@ -645,6 +645,35 @@ def drawdown_recovery_calculator(current_equity: float, peak_equity: float) -> d
             "reason": "recovery percentage uses current equity as its denominator; this is not a forecast"}
 
 
+def break_even_win_rate_calculator(gross_reward: float, gross_loss: float,
+                                   estimated_cost: float) -> dict[str, Any]:
+    """Manual expectancy threshold using same-currency per-trade assumptions."""
+    try:
+        reward, loss, cost = (float(value) for value in
+                              (gross_reward, gross_loss, estimated_cost))
+    except (TypeError, ValueError, OverflowError):
+        reward, loss, cost = math.nan, math.nan, math.nan
+    common = {"gross_reward": reward if math.isfinite(reward) else None,
+              "gross_loss": loss if math.isfinite(loss) else None,
+              "estimated_cost": cost if math.isfinite(cost) else None,
+              "source": "manual_sandbox"}
+    if (any(isinstance(value, bool) for value in (gross_reward, gross_loss, estimated_cost))
+            or not all(math.isfinite(value) for value in (reward, loss, cost))
+            or reward <= 0 or loss <= 0 or cost < 0):
+        return {**common, "status": "invalid_input",
+                "reason": "reward/loss must be positive and estimated cost cannot be negative"}
+    net_reward = reward - cost
+    net_loss = loss + cost
+    if net_reward <= 0:
+        return {**common, "status": "unavailable", "net_reward": round(net_reward, 4),
+                "net_loss": round(net_loss, 4), "break_even_win_rate_pct": None,
+                "reason": "estimated per-trade cost equals or exceeds gross reward"}
+    return {**common, "status": "ready", "net_reward": round(net_reward, 4),
+            "net_loss": round(net_loss, 4),
+            "break_even_win_rate_pct": round(net_loss / (net_reward + net_loss) * 100.0, 4),
+            "reason": "mathematical break-even threshold only; not a forecast or recommended win rate"}
+
+
 def point_tick_converter(spec: SymbolSpec, price_delta: float) -> dict[str, Any]:
     """Convert a price move without assuming one broker point equals one tick."""
     try:

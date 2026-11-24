@@ -8,6 +8,7 @@ from services.api_gateway.deps import current_user, get_runtime
 from services.api_gateway.roles import ADMIN, at_least
 from services.api_gateway.state import TradingRuntime
 from services.risk_engine.planner import (
+    break_even_win_rate_calculator,
     drawdown_recovery_calculator,
     point_tick_converter,
     points_calculator,
@@ -112,11 +113,13 @@ def calculator(symbol: str = "XAUUSD", points: float = 750, lot: float = 0.01,
                stop_loss: float | None = None, take_profit: float | None = None,
                side: str | None = None, exit_price: float | None = None,
                current_equity: float | None = None, peak_equity: float | None = None,
+               gross_reward: float | None = None, gross_loss: float | None = None,
+               estimated_cost: float | None = None,
                price_delta: float | None = None,
                runtime: TradingRuntime = Depends(get_runtime), user=Depends(current_user)):
     """Read-only calculators; only symbol metadata is sourced from the selected market feed."""
     allowed_tools = {None, "points", "size", "position_size", "risk_reward", "drawdown",
-                     "point_tick", "profit_loss"}
+                     "point_tick", "profit_loss", "break_even"}
     if tool not in allowed_tools:
         raise HTTPException(status_code=422, detail="unsupported calculator tool")
     # Use the same selected market-data specification as chart and points math.
@@ -129,13 +132,15 @@ def calculator(symbol: str = "XAUUSD", points: float = 750, lot: float = 0.01,
     disclaimer = ("ผลลัพธ์เป็นแบบจำลองจากข้อมูลที่กรอกและสเปกที่ระบุ ไม่ใช่คำสั่งซื้อขาย; "
                   "ค่ากำไร/ขาดทุนหักเฉพาะ spread ทั่วไปและ commission ไม่รวม slippage/swap")
 
-    if tool in {"risk_reward", "drawdown", "point_tick", "profit_loss"}:
+    if tool in {"risk_reward", "drawdown", "point_tick", "profit_loss", "break_even"}:
         if tool == "risk_reward":
             result = risk_reward_calculator(spec, entry, stop_loss, take_profit, side, lot)
         elif tool == "drawdown":
             result = drawdown_recovery_calculator(current_equity, peak_equity)
         elif tool == "point_tick":
             result = point_tick_converter(spec, price_delta)
+        elif tool == "break_even":
+            result = break_even_win_rate_calculator(gross_reward, gross_loss, estimated_cost)
         else:
             result = profit_loss_calculator(spec, entry, exit_price, side, lot)
         return {"tool": tool, "result": result, "spec": spec.model_dump(),

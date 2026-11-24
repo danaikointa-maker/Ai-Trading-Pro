@@ -1,6 +1,6 @@
 # Trading Calculator & Learning Center — 16-tool catalog (V4)
 
-Status: **partial implementation**. Tools 1, 2, 4, 5, and 6 have read-only/sandbox UI and shared backend math. The other tools, full exports, and lessons are not implemented. No calculator may call an order, modify, or close endpoint.
+Status: **partial implementation**. Tools 1, 2, 4, 5, 6, and 12 have read-only/sandbox UI and shared backend math. The other tools, full exports, and lessons are not implemented. No calculator may call an order, modify, or close endpoint.
 
 ## Shared rules
 
@@ -25,7 +25,7 @@ Status: **partial implementation**. Tools 1, 2, 4, 5, and 6 have read-only/sandb
 | 9 | AI & strategy — 100-Point Confirmation | Side, reference Bid/Ask, current price, broker point, closed M1/M5 context | Threshold `100 × point`, directional progress, and confirmation blockers | Reuse the existing confirmation state/read-only readiness; reaching 100 points alone is not order approval |
 | 10 | AI & strategy — ATR & Volatility | Closed bars, period, symbol price/point | ATR in price and points, ATR/price %, volatility label with timeframe | Reuse analysis snapshot; only closed bars and source timestamp are accepted |
 | 11 | AI & strategy — Support & Resistance | Analysis snapshot, timeframe, zones and quality | Nearby support/resistance distances and zone quality/confluence | Reuse existing zone builder/snapshot; do not recompute or promote candidate zones to confirmed |
-| 12 | AI & strategy — Break-Even Win Rate | Net reward, net loss, estimated cost | Required win rate for zero expectancy: `loss / (win + loss) × 100` | Shared calculator function to be added; label as a mathematical threshold, not a forecast |
+| 12 | AI & strategy — Break-Even Win Rate | Gross reward, gross loss, estimated same-currency cost per trade | Required win rate for zero expectancy: `net loss / (net win + net loss) × 100` | Implemented as a manual sandbox; cost is applied to both winning and losing outcomes; non-positive net reward is unavailable; not a forecast |
 | 13 | Planning & education — Trading Scenario Simulator | Manual/demo-only entry, SL/TP, outcomes, costs, sample size | Hypothetical outcome distribution and expectancy; no broker actions | Reuse sandbox/backtest primitives where appropriate; never label a scenario as historical backtest |
 | 14 | Planning & education — Capital Growth Simulator | Starting capital, risk/return assumptions, number of periods | Compounded illustrative range using explicit user assumptions | New sandbox calculation; show drawdown and losing-streak examples, not a return prediction |
 | 15 | Planning & education — USD / THB Converter | Amount, currency pair, timestamped rate/source | Converted estimate with rate timestamp and provenance | Reuse the existing FX rate resolver when available; no fixed USD/THB assumption |
@@ -49,4 +49,4 @@ Status: **partial implementation**. Tools 1, 2, 4, 5, and 6 have read-only/sandb
 
 ## Implemented slice boundary
 
-`GET /api/risk/calculator` is extended; no new database/table or account-balance read is added. The UI has a source label, reset, JSON copy, formulas/help text and manual-sandbox inputs. PDF export, save-scenario features, learning lessons, account-owned live values, MT5 margin calculation and tools 3, 7–16 remain queued separately under U08 and subject to the shared read-only boundary above.
+`GET /api/risk/calculator` is extended; no new database/table or account-balance read is added. The UI has a source label, reset, JSON copy, formulas/help text and manual-sandbox inputs. PDF export, save-scenario features, learning lessons, account-owned live values, MT5 margin calculation and tools 3, 7–11, 13–16 remain queued separately under U08 and subject to the shared read-only boundary above.

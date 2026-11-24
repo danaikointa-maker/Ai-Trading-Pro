@@ -15,7 +15,7 @@
 
 ## Trading Calculator (U08)
 
-- Implemented read-only/manual-sandbox tools: Position Size, Risk/Reward, Drawdown Recovery, Point/Tick conversion, and Profit/Loss. Price math reuses broker/declared `SymbolSpec` and existing `points_calculator`; manual equity inputs do not read or write account state.
+- Implemented read-only/manual-sandbox tools: Position Size, Risk/Reward, Drawdown Recovery, Break-even Win Rate, Point/Tick conversion, and Profit/Loss. Price math reuses broker/declared `SymbolSpec` and existing `points_calculator`; manual equity inputs do not read or write account state.
 - `GET /api/risk/calculator` is not an MT5 order preflight and does not call order/modify/close. Monetary outputs are suppressed if symbol/currency valuation is unknown. Cost estimates use typical spread and commission, and exclude swap/slippage except where a future tool explicitly models them.
 - Remaining calculator tools, owned account data/history, MT5 margin results, save/export, learning content, and authenticated desktop/mobile visual acceptance remain NOT TESTED or NOT IMPLEMENTED. See the V4 16-tool catalog.
 

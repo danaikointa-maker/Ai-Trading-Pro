@@ -16,6 +16,7 @@
           <option value="points">Points → P&amp;L</option>
           <option value="size">Position size</option>
           <option value="risk_reward">Risk / Reward</option>
+          <option value="break_even">Break-even win rate</option>
           <option value="drawdown">Drawdown recovery</option>
           <option value="point_tick">Points / Ticks</option>
           <option value="profit_loss">Profit &amp; Loss</option>
@@ -113,6 +114,20 @@
       <p v-else-if="result" class="text-xs text-amber-300">{{ result.reason }}</p>
       <p class="text-[10px] leading-relaxed text-muted">สูตร recovery = (Peak − Equity) ÷ Equity. กรอกค่าจำลองเอง ระบบไม่ดึงยอดจริงในบัญชี</p>
     </div>
+    <div v-else-if="tool === 'break_even'" class="space-y-3 px-4 py-3">
+      <div class="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
+        <label class="block"><span class="label">กำไรต่อไม้ก่อนต้นทุน ({{ spec?.account_currency || 'สกุลเดียวกัน' }})</span><input v-model.number="grossReward" type="number" min="0.01" step="1" class="input mt-1 num" /></label>
+        <label class="block"><span class="label">ขาดทุนต่อไม้ก่อนต้นทุน ({{ spec?.account_currency || 'สกุลเดียวกัน' }})</span><input v-model.number="grossLoss" type="number" min="0.01" step="1" class="input mt-1 num" /></label>
+        <label class="block"><span class="label">ต้นทุนประมาณต่อไม้ ({{ spec?.account_currency || 'สกุลเดียวกัน' }})</span><input v-model.number="estimatedCost" type="number" min="0" step="0.1" class="input mt-1 num" /></label>
+      </div>
+      <div v-if="result?.status === 'ready'" class="grid gap-2 rounded-lg border border-ink-700 bg-ink-900/60 p-3 sm:grid-cols-2 lg:grid-cols-3">
+        <div class="kv"><dt>กำไรสุทธิสมมติ</dt><dd class="text-up">{{ accountMoney(result.net_reward) }}</dd></div>
+        <div class="kv"><dt>ขาดทุนสุทธิสมมติ</dt><dd class="text-down">{{ accountMoney(result.net_loss) }}</dd></div>
+        <div class="kv"><dt>Win rate เพื่อคุ้มทุน</dt><dd class="text-gold-300">{{ fmt(result.break_even_win_rate_pct, 2) }}%</dd></div>
+      </div>
+      <p v-else-if="result" class="text-xs text-amber-300">{{ result.reason }}</p>
+      <p class="text-[10px] leading-relaxed text-muted">สูตร = ขาดทุนสุทธิ ÷ (กำไรสุทธิ + ขาดทุนสุทธิ). ใช้สมมติฐานสกุลเดียวกัน; เป็นเส้นคุ้มทุนทางคณิตศาสตร์ ไม่ใช่ผลคาดการณ์</p>
+    </div>
     <div v-else-if="tool === 'point_tick'" class="space-y-3 px-4 py-3">
       <label class="block max-w-sm"><span class="label">ระยะราคา (price units)</span><input v-model.number="priceDelta" type="number" step="0.01" class="input mt-1 num" /></label>
       <div v-if="result?.status === 'ready'" class="grid gap-2 rounded-lg border border-ink-700 bg-ink-900/60 p-3 sm:grid-cols-3">
@@ -169,6 +184,9 @@ const entry = ref(2000)
 const stopLoss = ref(1990)
 const takeProfit = ref(2020)
 const exitPrice = ref(2010)
+const grossReward = ref(100)
+const grossLoss = ref(100)
+const estimatedCost = ref(7)
 const currentEquity = ref(9000)
 const peakEquity = ref(10000)
 const priceDelta = ref(5)
@@ -221,6 +239,12 @@ async function load() {
       query.set('tool', 'drawdown')
       query.set('current_equity', String(currentEquity.value))
       query.set('peak_equity', String(peakEquity.value))
+    } else if (tool.value === 'break_even') {
+      endpoint = '/api/risk/calculator'
+      query.set('tool', 'break_even')
+      query.set('gross_reward', String(grossReward.value))
+      query.set('gross_loss', String(grossLoss.value))
+      query.set('estimated_cost', String(estimatedCost.value))
     } else if (tool.value === 'point_tick') {
       endpoint = '/api/risk/calculator'
       query.set('tool', 'point_tick')
@@ -257,6 +281,9 @@ function resetInputs() {
   stopLoss.value = 1990
   takeProfit.value = 2020
   exitPrice.value = 2010
+  grossReward.value = 100
+  grossLoss.value = 100
+  estimatedCost.value = 7
   currentEquity.value = 9000
   peakEquity.value = 10000
   priceDelta.value = 5
@@ -271,5 +298,6 @@ async function copyResult() {
 }
 
 watch([symbol, points, lot, tool, equity, riskPct, slPoints, side, entry, stopLoss,
-  takeProfit, exitPrice, currentEquity, peakEquity, priceDelta], load, { immediate: true })
+  takeProfit, exitPrice, grossReward, grossLoss, estimatedCost, currentEquity, peakEquity,
+  priceDelta], load, { immediate: true })
 </script>

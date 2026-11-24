@@ -4,6 +4,7 @@ import pytest
 
 from packages.shared_schemas.models import SymbolSpec
 from services.risk_engine.planner import (
+    break_even_win_rate_calculator,
     drawdown_recovery_calculator,
     point_tick_converter,
     profit_loss_calculator,
@@ -50,6 +51,16 @@ def test_drawdown_recovery_uses_remaining_equity_as_denominator():
     assert drawdown_recovery_calculator(9000, 10000)["source"] == "manual_sandbox"
 
 
+def test_break_even_win_rate_accounts_for_manual_cost_and_rejects_erased_reward():
+    result = break_even_win_rate_calculator(200, 100, 10)
+    assert result["status"] == "ready"
+    assert result["net_reward"] == 190
+    assert result["net_loss"] == 110
+    assert result["break_even_win_rate_pct"] == pytest.approx(36.6667)
+    assert break_even_win_rate_calculator(10, 100, 10)["status"] == "unavailable"
+    assert break_even_win_rate_calculator(100, 100, -1)["status"] == "invalid_input"
+
+
 def test_point_tick_converter_does_not_assume_point_equals_tick():
     aligned = point_tick_converter(SPEC, 0.10)
     fractional = point_tick_converter(SPEC, 0.03)
@@ -87,6 +98,7 @@ def test_calculator_api_is_read_only_and_returns_manual_provenance(client, auth,
     cases = [
         ("risk_reward", "&entry=2000&stop_loss=1990&take_profit=2020&side=BUY&lot=0.1"),
         ("drawdown", "&current_equity=9000&peak_equity=10000"),
+        ("break_even", "&gross_reward=200&gross_loss=100&estimated_cost=10"),
         ("point_tick", "&price_delta=0.1"),
         ("profit_loss", "&entry=2000&exit_price=2010&side=BUY&lot=0.1"),
     ]
