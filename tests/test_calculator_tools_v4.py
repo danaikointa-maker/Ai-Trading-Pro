@@ -147,6 +147,115 @@ def test_currency_conversion_requires_a_resolved_timestamped_rate():
     assert currency_conversion_calculator(100, "USD", "USD", 1, "identity", None)["converted_amount"] == 100
 
 
+def test_calculator_scenarios_are_user_scoped_and_only_store_manual_inputs(client, auth):
+    from services.api_gateway.deps import current_user
+
+    saved = client.post("/api/risk/calculator/scenarios", headers=auth, json={
+        "name": "Conservative baseline", "tool": "scenario",
+        "inputs": {"manual_equity": 10000, "risk_pct": 0.5, "win_rate_pct": 45},
+    })
+    assert saved.status_code == 200, saved.text
+    item = saved.json()["scenario"]
+    assert item["source"] == "manual_sandbox"
+    assert set(item["inputs"]) == {"manual_equity", "risk_pct", "win_rate_pct"}
+
+    listed = client.get("/api/risk/calculator/scenarios", headers=auth)
+    assert listed.status_code == 200
+    assert item["id"] in {row["id"] for row in listed.json()["scenarios"]}
+
+    client.app.dependency_overrides[current_user] = lambda: {
+        "email": "other-user@no7.ai", "tenant_id": "default", "role": "trader",
+    }
+    try:
+        other_list = client.get("/api/risk/calculator/scenarios", headers=auth)
+        assert other_list.status_code == 200
+        assert item["id"] not in {row["id"] for row in other_list.json()["scenarios"]}
+        assert client.delete(f"/api/risk/calculator/scenarios/{item['id']}",
+                             headers=auth).status_code == 404
+    finally:
+        client.app.dependency_overrides.pop(current_user, None)
+
+    assert client.delete(f"/api/risk/calculator/scenarios/{item['id']}",
+                         headers=auth).status_code == 200
+
+
+@pytest.mark.parametrize("payload", [
+    {"name": "", "tool": "scenario", "inputs": {"risk_pct": 1}},
+    {"name": "bad scope", "tool": "scenario", "inputs": {"broker_id": "live", "risk_pct": 1}},
+    {"name": "bad value", "tool": "scenario", "inputs": {"risk_pct": "0.5"}},
+    {"name": "wrong tool", "tool": "margin", "inputs": {"lot": 1}},
+])
+def test_calculator_scenario_save_rejects_non_manual_or_invalid_payload(client, auth, payload):
+    response = client.post("/api/risk/calculator/scenarios", headers=auth, json=payload)
+    assert response.status_code == 422
+
+
+def test_trade_review_whatif_separates_actual_and_manual_preview_without_execution(
+        client, auth, runtime, monkeypatch):
+    from unittest.mock import Mock
+
+    from packages.shared_schemas.models import Direction, TradeRecord
+
+    identity = runtime.gateway._assert_account(runtime.adapter)
+    runtime.db.kv_set("account-owner:" + runtime.adapter.id, identity)
+    trade = TradeRecord(
+        ticket="whatif-closed-1", symbol="XAUUSD", direction=Direction.up,
+        volume=0.1, entry=2000, exit=2010, sl=1990, tp=2020,
+        opened_at=1_700_000_000, closed_at=1_700_000_600, points=100,
+        gross_pnl=100, costs=1, swap=-0.5, pnl=98.5, r_multiple=1.0,
+        broker_id=runtime.adapter.id,
+    )
+    runtime.gateway.record_trade(trade)
+    monkeypatch.setattr(runtime.market, "spec", lambda _symbol: SPEC)
+    submit, modify, close = Mock(), Mock(), Mock()
+    monkeypatch.setattr(runtime.gateway, "submit", submit)
+    monkeypatch.setattr(runtime.gateway, "modify", modify)
+    monkeypatch.setattr(runtime.gateway, "close", close)
+    orders_before = runtime.db.query_one("SELECT COUNT(*) AS n FROM orders")["n"]
+
+    response = client.get(
+        "/api/risk/calculator?tool=trade_review_whatif&trade_ticket=whatif-closed-1"
+        "&whatif_entry=2001&whatif_stop_loss=1991&whatif_take_profit=2021",
+        headers=auth,
+    )
+    assert response.status_code == 200, response.text
+    result = response.json()["result"]
+    assert result["actual"]["net_pnl"] == 98.5
+    assert result["actual"]["entry"] == 2000
+    assert result["whatif"]["entry"] == 2001
+    assert result["whatif"]["risk_reward"]["status"] == "ready"
+    assert result["execution_approved"] is False
+    assert response.json()["provenance"]["account_scope_verified"] is True
+    runtime.db.kv_set("account-owner:" + runtime.adapter.id, {"login": "other", "workspace_id": identity["workspace_id"]})
+    denied = client.get(
+        "/api/risk/calculator?tool=trade_review_whatif&trade_ticket=whatif-closed-1",
+        headers=auth,
+    )
+    assert denied.status_code == 409
+    runtime.db.kv_set("account-owner:" + runtime.adapter.id, identity)
+    assert runtime.db.query_one("SELECT COUNT(*) AS n FROM orders")["n"] == orders_before
+    submit.assert_not_called()
+    modify.assert_not_called()
+    close.assert_not_called()
+
+
+def test_trade_review_whatif_cannot_read_another_broker_ticket(client, auth, runtime):
+    from packages.shared_schemas.models import Direction, TradeRecord
+
+    other = TradeRecord(
+        ticket="whatif-private-other", symbol="XAUUSD", direction=Direction.down,
+        volume=0.1, entry=2000, exit=1990, opened_at=1_700_000_000,
+        closed_at=1_700_000_600, points=100, gross_pnl=100, costs=0,
+        pnl=100, broker_id="another-account",
+    )
+    runtime.gateway.record_trade(other)
+    response = client.get(
+        "/api/risk/calculator?tool=trade_review_whatif&trade_ticket=whatif-private-other",
+        headers=auth,
+    )
+    assert response.status_code == 404
+
+
 def test_calculator_api_is_read_only_and_returns_manual_provenance(client, auth, runtime, monkeypatch):
     from unittest.mock import Mock
 

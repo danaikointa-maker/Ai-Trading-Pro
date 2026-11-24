@@ -210,7 +210,10 @@ H080 reload ใช้ approval ของ payload และ DB ร่วมกั
 | GET | `/api/risk/settings` | limits + targets + stops + full_auto requirements |
 | PUT | `/api/risk/settings` | `{limits:{...}}` patch (audit ทุกครั้ง); `full_auto_enabled` เปลี่ยนได้โดย admin เท่านั้น และปิดแล้วจะกลับ Manual หาก Full Auto กำลังเลือกอยู่ |
 | POST | `/api/risk/kill-switch` \| `DELETE` | เปิด/ปิดด้วยมือ |
-| GET | `/api/risk/calculator?symbol=&points=&lot=` | read-only shared math core; `tool` รองรับ `risk_reward`, `drawdown`, `break_even`, `trading_costs`, `point_tick`, `profit_loss`, `auto_sl_tp`, `margin`, `confirmation_100pt`, `scenario`, `capital_growth`, `currency_convert` และ position size. `margin` อ่าน free margin/leverage จาก MT5 ที่ยืนยัน identity/ownership แล้วและเรียกเฉพาะ `order_calc_margin`; `confirmation_100pt` เป็น preview ไม่อ่าน/เขียน candidate. Tools อื่นใช้ manual sandbox หรือ market-data snapshot. ไม่มี tool ใดเรียก `order_check`, `order_send`, modify หรือ close; tool 8 real Demo comparison ยัง NOT TESTED |
+| GET | `/api/risk/calculator?symbol=&points=&lot=` | read-only shared math core; `tool` รองรับ Risk/Reward, drawdown, break-even, trading costs, point/tick, P/L, Auto SL/TP preview, MT5 margin, stateless 100-point preview, scenario, growth, FX, and active-account `trade_review_whatif` (`trade_ticket`, optional `whatif_entry`, `whatif_stop_loss`, `whatif_take_profit`, `whatif_lot`). Tool 16 verifies broker ID and active account ownership and returns actual trade evidence separately from non-executable what-if estimates. No tool calls `order_check`, `order_send`, modify or close; real Demo margin/history acceptance remains NOT TESTED |
+| GET | `/api/risk/calculator/scenarios` | รายการสมมติฐานตัวเลขของ workspace/tenant/user ปัจจุบันเท่านั้น |
+| POST | `/api/risk/calculator/scenarios` | `{name,tool,inputs}` บันทึกเฉพาะ numeric manual inputs สำหรับ `scenario` หรือ `capital_growth` ใน `kv` เดิม; ไม่เก็บยอดบัญชีหรือข้อมูล broker |
+| DELETE | `/api/risk/calculator/scenarios/{scenario_id}` | ลบเฉพาะ scenario ใน namespace ของผู้ใช้ปัจจุบัน |
 
 ## Brokers & backtest
 

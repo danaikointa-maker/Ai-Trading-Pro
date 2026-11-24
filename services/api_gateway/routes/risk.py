@@ -1,14 +1,19 @@
 from __future__ import annotations
 
 import copy
+import hashlib
+import json
 import math
+import re
+import time
+import uuid
 from typing import Any
 
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
 
 from integrations.brokers.fx import resolve_quote_rate
-from packages.shared_schemas.models import Direction, TradeMode
+from packages.shared_schemas.models import Direction, TradeMode, TradeRecord
 from services.api_gateway.deps import current_user, get_runtime
 from services.api_gateway.roles import ADMIN, at_least
 from services.api_gateway.state import TradingRuntime
@@ -39,6 +44,103 @@ class RiskUpdate(BaseModel):
 class KillSwitchRequest(BaseModel):
     reason: str = "manual emergency stop"
     flatten: bool = False
+
+
+class CalculatorScenarioSave(BaseModel):
+    name: str
+    tool: str
+    inputs: dict[str, Any]
+
+
+def _calculator_scenario_prefix(runtime: TradingRuntime, user: dict[str, Any]) -> str:
+    identity = ":".join((runtime.db.workspace_id, str(user.get("tenant_id") or ""),
+                         str(user.get("email") or "").strip().lower()))
+    scope = hashlib.sha256(identity.encode("utf-8")).hexdigest()[:32]
+    return f"calculator-scenario:v1:{scope}:"
+
+
+@router.get("/calculator/scenarios")
+def list_calculator_scenarios(runtime: TradingRuntime = Depends(get_runtime),
+                              user=Depends(current_user)):
+    prefix = _calculator_scenario_prefix(runtime, user)
+    rows = runtime.db.query("SELECT key,value FROM kv WHERE key LIKE ? ORDER BY updated_at DESC LIMIT 101",
+                            (prefix + "%",))
+    scenarios = []
+    for row in rows[:100]:
+        try:
+            item = json.loads(row["value"])
+            if (isinstance(item, dict) and isinstance(item.get("id"), str)
+                    and row["key"] == prefix + item["id"]):
+                scenarios.append(item)
+        except (TypeError, json.JSONDecodeError):
+            continue
+    return {"scenarios": scenarios, "count": len(scenarios), "limit": 100,
+            "scope": "current_user_manual_inputs_only"}
+
+
+@router.post("/calculator/scenarios")
+def save_calculator_scenario(payload: CalculatorScenarioSave,
+                             runtime: TradingRuntime = Depends(get_runtime),
+                             user=Depends(current_user)):
+    name = payload.name.strip()
+    if not name or len(name) > 64 or re.search(r"[\x00-\x1f\x7f]", name):
+        raise HTTPException(status_code=422, detail="scenario name must be 1–64 printable characters")
+    allowed_inputs = {
+        "scenario": {"manual_equity", "risk_pct", "win_rate_pct", "reward_risk",
+                     "trades", "cost_per_trade", "runs", "seed"},
+        "capital_growth": {"manual_equity", "low_return_pct", "base_return_pct",
+                           "high_return_pct", "periods", "risk_pct", "loss_streak"},
+    }
+    keys = allowed_inputs.get(payload.tool)
+    if keys is None:
+        raise HTTPException(status_code=422, detail="only manual scenario and capital-growth inputs can be saved")
+    if (not payload.inputs or len(payload.inputs) > len(keys)
+            or set(payload.inputs) - keys):
+        raise HTTPException(status_code=422, detail="scenario contains unsupported or empty inputs")
+    for value in payload.inputs.values():
+        if (isinstance(value, bool) or not isinstance(value, (int, float))
+                or not math.isfinite(float(value))):
+            raise HTTPException(status_code=422, detail="scenario inputs must be finite numeric assumptions")
+
+    scenario_id = uuid.uuid4().hex
+    created_at = time.time()
+    item = {"id": scenario_id, "name": name, "tool": payload.tool,
+            "inputs": payload.inputs, "created_at": created_at,
+            "source": "manual_sandbox"}
+    encoded = json.dumps(item, separators=(",", ":"), allow_nan=False)
+    if len(encoded) > 4096:
+        raise HTTPException(status_code=413, detail="scenario is too large")
+    prefix = _calculator_scenario_prefix(runtime, user)
+    try:
+        with runtime.db.cursor() as cur:
+            cur.execute("BEGIN IMMEDIATE")
+            count = cur.execute("SELECT COUNT(*) FROM kv WHERE key LIKE ?",
+                                (prefix + "%",)).fetchone()[0]
+            if count >= 100:
+                raise HTTPException(status_code=409, detail="scenario limit (100) reached; remove one first")
+            cur.execute("INSERT INTO kv(key,value,updated_at) VALUES(?,?,?)",
+                        (prefix + scenario_id, encoded, created_at))
+    except HTTPException:
+        raise
+    runtime.db.audit(user["email"], "calculator.scenario.save",
+                     {"id": scenario_id, "tool": payload.tool})
+    return {"scenario": item}
+
+
+@router.delete("/calculator/scenarios/{scenario_id}")
+def delete_calculator_scenario(scenario_id: str,
+                               runtime: TradingRuntime = Depends(get_runtime),
+                               user=Depends(current_user)):
+    if not re.fullmatch(r"[0-9a-f]{32}", scenario_id):
+        raise HTTPException(status_code=404, detail="scenario not found")
+    prefix = _calculator_scenario_prefix(runtime, user)
+    with runtime.db.cursor() as cur:
+        cur.execute("BEGIN IMMEDIATE")
+        deleted = cur.execute("DELETE FROM kv WHERE key=?", (prefix + scenario_id,)).rowcount
+        if deleted != 1:
+            raise HTTPException(status_code=404, detail="scenario not found")
+    runtime.db.audit(user["email"], "calculator.scenario.delete", {"id": scenario_id})
+    return {"ok": True, "deleted": scenario_id}
 
 
 @router.get("/settings")
@@ -138,6 +240,11 @@ def calculator(symbol: str = "XAUUSD", points: float = 750, lot: float = 0.01,
                target_mode: str = "adaptive",
                target_r: float = 2.0,
                reference_price: float | None = None,
+               trade_ticket: str | None = None,
+               whatif_entry: float | None = None,
+               whatif_stop_loss: float | None = None,
+               whatif_take_profit: float | None = None,
+               whatif_lot: float | None = None,
                win_rate_pct: float | None = None,
                reward_risk: float | None = None,
                trades: int = 50,
@@ -156,7 +263,8 @@ def calculator(symbol: str = "XAUUSD", points: float = 750, lot: float = 0.01,
     """Read-only calculators; only symbol metadata is sourced from the selected market feed."""
     allowed_tools = {None, "points", "size", "position_size", "risk_reward", "drawdown",
                      "point_tick", "profit_loss", "break_even", "trading_costs", "auto_sl_tp",
-                     "margin", "confirmation_100pt", "scenario", "capital_growth", "currency_convert"}
+                     "margin", "confirmation_100pt", "scenario", "capital_growth", "currency_convert",
+                     "trade_review_whatif"}
     if tool not in allowed_tools:
         raise HTTPException(status_code=422, detail="unsupported calculator tool")
 
@@ -283,6 +391,79 @@ def calculator(symbol: str = "XAUUSD", points: float = 750, lot: float = 0.01,
             "disclaimer": ("แผนคำนวณจากทุนและราคาเข้าที่กรอก โดยใช้ข้อมูล M5 ปิดแล้วและสเปกตลาดที่ตรวจ freshness; "
                            "เป็นตัวอย่างอ่านอย่างเดียว ไม่ได้ผ่านการอนุมัติคำสั่ง ไม่อ่านยอดบัญชี และไม่ส่งคำสั่ง"),
         }
+
+    if tool == "trade_review_whatif":
+        if not trade_ticket or len(trade_ticket) > 128:
+            raise HTTPException(status_code=422, detail="select a closed trade from the active account")
+        row = runtime.db.query_one(
+            "SELECT broker_id,payload FROM trades WHERE ticket=? AND broker_id=?",
+            (trade_ticket, runtime.adapter.id))
+        if row is None:
+            raise HTTPException(status_code=404, detail="closed trade not found for the active account")
+        try:
+            trade = TradeRecord(**json.loads(row["payload"]))
+            identity = runtime.gateway._account(runtime.adapter)
+            owner = runtime.db.kv_get("account-owner:" + runtime.adapter.id)
+        except Exception as exc:  # noqa: BLE001 - ambiguous account evidence fails closed
+            raise HTTPException(status_code=409, detail="trade account identity is unresolved") from exc
+        if row["broker_id"] != trade.broker_id or trade.broker_id != runtime.adapter.id:
+            raise HTTPException(status_code=404, detail="closed trade not found for the active account")
+        if owner != identity:
+            raise HTTPException(status_code=409, detail="active account ownership is not verified")
+        actual_values = (trade.volume, trade.entry, trade.exit, trade.gross_pnl,
+                         trade.costs, trade.swap, trade.pnl, trade.r_multiple)
+        if not all(math.isfinite(float(value)) for value in actual_values):
+            raise HTTPException(status_code=409, detail="stored closed-trade values are invalid")
+        for label, value in (("entry", whatif_entry), ("stop loss", whatif_stop_loss),
+                             ("take profit", whatif_take_profit), ("lot", whatif_lot)):
+            if value is not None and (not math.isfinite(value) or value <= 0):
+                raise HTTPException(status_code=422, detail=f"what-if {label} must be finite and positive")
+        try:
+            spec = runtime.market.spec(trade.symbol)
+        except Exception:  # noqa: BLE001 - missing specification is a non-executable preview
+            return {"tool": tool, "result": {"status": "unavailable",
+                    "reason": "selected feed symbol specification is unavailable",
+                    "execution_approved": False}, "spec": None,
+                    "provenance": {"broker_id": trade.broker_id,
+                                   "trade_source": "account_scoped_closed_trade"},
+                    "disclaimer": "ทบทวนผลจริงจากรายการปิดแล้วและสมมติฐาน What-if เท่านั้น; ไม่เขียนประวัติหรือส่งคำสั่ง"}
+        side_value = "BUY" if trade.direction == Direction.up else "SELL"
+        entry_value = whatif_entry if whatif_entry is not None else trade.entry
+        stop_value = whatif_stop_loss if whatif_stop_loss is not None else (trade.sl or None)
+        target_value = whatif_take_profit if whatif_take_profit is not None else (trade.tp or None)
+        volume_value = whatif_lot if whatif_lot is not None else trade.volume
+        rr = risk_reward_calculator(spec, entry_value, stop_value, target_value,
+                                    side_value, volume_value)
+        at_sl = (profit_loss_calculator(spec, entry_value, stop_value, side_value, volume_value)
+                 if stop_value is not None else None)
+        at_tp = (profit_loss_calculator(spec, entry_value, target_value, side_value, volume_value)
+                 if target_value is not None else None)
+        result = {
+            "status": "ready" if spec.spec_complete and not spec.sizing_blocked else "unavailable",
+            "source": "account_scoped_closed_trade_plus_manual_whatif",
+            "actual": {
+                "ticket": trade.ticket, "symbol": trade.symbol, "side": side_value,
+                "volume": trade.volume, "entry": trade.entry, "exit": trade.exit,
+                "stop_loss": trade.sl, "take_profit": trade.tp,
+                "gross_pnl": trade.gross_pnl, "costs": trade.costs,
+                "swap": trade.swap, "net_pnl": trade.pnl, "r_multiple": trade.r_multiple,
+                "closed_at": trade.closed_at, "exit_reason": trade.exit_reason,
+                "currency": spec.account_currency, "source": "recorded_closed_trade",
+            },
+            "whatif": {"entry": entry_value, "stop_loss": stop_value,
+                       "take_profit": target_value, "volume": volume_value,
+                       "side": side_value, "source": "manual_sandbox",
+                       "risk_reward": rr, "at_stop": at_sl, "at_target": at_tp},
+            "execution_approved": False,
+            "limitations": ["What-if ใช้ typical spread/commission จากสเปกปัจจุบัน ไม่ใช่ค่าใช้จ่ายจริงของไม้เดิม",
+                            "ไม่มีการจำลองลำดับแท่งหรือสรุปว่า SL/TP ใดจะถูกชนก่อน"],
+        }
+        return {"tool": tool, "result": result, "spec": spec.model_dump(),
+                "provenance": {"broker_id": trade.broker_id,
+                               "account_scope_verified": True,
+                               "market_feed": runtime.market.effective_mode,
+                               "spec_source": spec.source},
+                "disclaimer": "ประวัติจริงแสดงแยกจากสมมติฐาน What-if; เป็นการทบทวน ไม่ใช่ผลย้อนหลังสมมติหรือคำสั่งซื้อขาย"}
 
     if tool == "margin":
         adapter = runtime.adapter
