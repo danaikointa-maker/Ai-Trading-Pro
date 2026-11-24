@@ -161,6 +161,7 @@ Status definitions: EXISTS_CODE = seen in repository but not live certified; NEE
 - Added save/list/delete for numeric manual Scenario and Capital Growth inputs in the existing `kv` store, namespaced by workspace, tenant and normalized user email. It stores no broker credentials, balance, positions or account history; maximum 100 records per user namespace.
 - Added JSON/CSV result downloads, protecting CSV text cells from formula injection, and five short Thai beginner lessons with one-question quizzes. PDF export is not implemented.
 - Focused Python regression (calculator tools, V4 plan candidate, points, swap, ATR validity, API, MT5 preflight and 100-point confirmation): **161 passed**, one existing Starlette/httpx deprecation warning. Scenario API tests cover user isolation, rejected account-scoped fields, deletion boundaries, cross-broker ticket rejection and no execution gateway calls. Dashboard calculator export **2 passed**, calculator analysis **2 passed**, Vite 8.3.8 build passed (**666 modules**).
+- GitHub Actions Gate **#183 passed** on head `34b59d8f0f5e8e392ba32bdbdeaf481f915ab095`.
 - Authenticated desktop/mobile visual acceptance, real connected Demo account history review, real MT5 margin comparison, and PDF export remain NOT TESTED/NOT IMPLEMENTED. U08 remains PARTIAL; PR #71 is still Draft and unmerged.
 
 ### U11–U15 continuation recheck (2026-11-24)
