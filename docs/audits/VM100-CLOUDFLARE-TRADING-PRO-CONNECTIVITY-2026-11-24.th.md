@@ -44,3 +44,18 @@
 - ห้ามเปิด trading API, Live/Auto, broker account, order route หรือ command bridge ผ่าน DNS นี้.
 
 อ้างอิง Cloudflare: [Tunnel troubleshooting — 502 / origin unreachable](https://developers.cloudflare.com/cloudflare-one/troubleshooting/tunnel/), [Access application types — self-hosted applications](https://developers.cloudflare.com/cloudflare-one/access-controls/applications/choose-application-type/).
+
+## Recheck from Windows PC — 2026-11-24
+
+- SSH ไป `danai@192.168.1.10:22` สำเร็จ; `cloudflared.service` ยัง active/running.
+- DNS ยังชี้ไป Cloudflare edge และ HTTPS ที่ `https://agent.youridea168.com/` ยังตอบ **502**.
+- Listener ที่ตรวจพบยัง bind เฉพาะ `127.0.0.1`: ports 8000, 18081 และ 18082; ไม่มี listener ที่ port 8080 ซึ่งเป็น Tunnel origin ปัจจุบัน.
+- GET health บน loopback ของ 18081/18082 ตอบสำเร็จ แต่ health response ของ Trading Pro มี operational metadata มากกว่าคำตอบ liveness ขั้นต่ำ รวมถึง broker/account identifier และรายละเอียดบริการ จึง **ห้ามเผย health route นี้ผ่าน public hostname**; Office API ควรมี minimal health endpoint แยกที่ไม่แสดง runtime/account details.
+- การตรวจนี้เป็น read-only; ไม่อ่าน secret/config token, ไม่แก้ Tunnel, firewall, service หรือ broker state. ไม่ทดสอบ Access allow/deny หรือ authenticated Windows application flow.
+
+### Repeat verification — 2026-11-24 17:38 ICT
+
+- Windows PC ยัง SSH ถึง `192.168.1.10:22` ได้; บน VM100 `cloudflared.service` เป็น `active`.
+- HTTPS `HEAD /` ที่ `agent.youridea168.com` ยังคงตอบ `502 Bad Gateway` จาก Cloudflare.
+- `ss -ltn` แสดง app listeners `127.0.0.1:8000`, `127.0.0.1:18081`, `127.0.0.1:18082`; ไม่มี listener `:8080` ตาม origin ที่บันทึกไว้. SSH reachable จึงไม่เท่ากับ app/API reachable จาก LAN.
+- ยังคงไม่เปลี่ยน origin, DNS, Access, firewall หรือบริการ; ไม่อ่าน token/config secret และไม่เรียก API ที่มี account metadata.
