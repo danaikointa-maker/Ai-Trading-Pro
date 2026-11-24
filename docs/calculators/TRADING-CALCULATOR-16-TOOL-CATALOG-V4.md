@@ -1,6 +1,6 @@
 # Trading Calculator & Learning Center — 16-tool catalog (V4)
 
-Status: **partial implementation**. Tools 1, 2, 4, 5, 6, and 12 have read-only/sandbox UI and shared backend math. The other tools, full exports, and lessons are not implemented. No calculator may call an order, modify, or close endpoint.
+Status: **partial implementation**. Tools 1, 2, 4, 5, 6, 7, and 12 have read-only/sandbox UI and shared backend math. The other tools, full exports, and lessons are not implemented. No calculator may call an order, modify, or close endpoint.
 
 ## Shared rules
 
@@ -20,7 +20,7 @@ Status: **partial implementation**. Tools 1, 2, 4, 5, 6, and 12 have read-only/s
 | 4 | Capital & risk — Drawdown & Recovery | Balance/equity/peak, loss %, recovery target | Drawdown from peak and gain needed to recover: `loss / remaining_equity` | Implemented as manual-only arithmetic; does not read simulator or broker equity |
 | 5 | Price & costs — Point / Pip / Tick Converter | Price delta, point, digits, tick size | Point distance, price delta, and legal tick count; a tick is not assumed to equal a point | Implemented using declared/broker `SymbolSpec`; fractional tick counts are explicitly marked unaligned |
 | 6 | Price & costs — Profit & Loss | Side, entry/exit, lot, symbol spec, account currency | Gross broker-aware P/L plus separately itemized known costs and net estimate | Implemented by reusing `points_calculator`; unresolved FX suppresses monetary output |
-| 7 | Price & costs — Spread / Commission / Swap | Bid/Ask, volume, commission, swap mode/rates, holding nights | Spread cost, commission, swap estimate, and total known cost by account currency | Reuse broker `SymbolSpec`; identify excluded slippage and unknown broker charges |
+| 7 | Price & costs — Spread / Commission / Swap | Side, price, lot, holding nights, triple-swap nights | Typical spread, round-turn commission, signed swap estimate, and total holding cost | Implemented as a manual sandbox using `SymbolSpec` spread/commission/swap mode; triple-swap night count is user-supplied using the broker's schedule. Rate comparison with a real broker and slippage remain NOT TESTED |
 | 8 | Price & costs — Margin / Leverage | Side, symbol, lot, price, leverage, equity/free margin | Estimated required margin and projected free margin; never label margin as maximum loss | Prefer MT5 `order_calc_margin`; unavailable or stale values are marked NOT AVAILABLE, not guessed |
 | 9 | AI & strategy — 100-Point Confirmation | Side, reference Bid/Ask, current price, broker point, closed M1/M5 context | Threshold `100 × point`, directional progress, and confirmation blockers | Reuse the existing confirmation state/read-only readiness; reaching 100 points alone is not order approval |
 | 10 | AI & strategy — ATR & Volatility | Closed bars, period, symbol price/point | ATR in price and points, ATR/price %, volatility label with timeframe | Reuse analysis snapshot; only closed bars and source timestamp are accepted |
@@ -49,4 +49,4 @@ Status: **partial implementation**. Tools 1, 2, 4, 5, 6, and 12 have read-only/s
 
 ## Implemented slice boundary
 
-`GET /api/risk/calculator` is extended; no new database/table or account-balance read is added. The UI has a source label, reset, JSON copy, formulas/help text and manual-sandbox inputs. PDF export, save-scenario features, learning lessons, account-owned live values, MT5 margin calculation and tools 3, 7–11, 13–16 remain queued separately under U08 and subject to the shared read-only boundary above.
+`GET /api/risk/calculator` is extended; no new database/table or account-balance read is added. The UI has a source label, reset, JSON copy, formulas/help text and manual-sandbox inputs. PDF export, save-scenario features, learning lessons, account-owned live values, MT5 margin calculation and tools 3, 8–11, 13–16 remain queued separately under U08 and subject to the shared read-only boundary above.

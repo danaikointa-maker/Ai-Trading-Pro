@@ -17,6 +17,7 @@
           <option value="size">Position size</option>
           <option value="risk_reward">Risk / Reward</option>
           <option value="break_even">Break-even win rate</option>
+          <option value="trading_costs">Spread / commission / swap</option>
           <option value="drawdown">Drawdown recovery</option>
           <option value="point_tick">Points / Ticks</option>
           <option value="profit_loss">Profit &amp; Loss</option>
@@ -128,6 +129,24 @@
       <p v-else-if="result" class="text-xs text-amber-300">{{ result.reason }}</p>
       <p class="text-[10px] leading-relaxed text-muted">สูตร = ขาดทุนสุทธิ ÷ (กำไรสุทธิ + ขาดทุนสุทธิ). ใช้สมมติฐานสกุลเดียวกัน; เป็นเส้นคุ้มทุนทางคณิตศาสตร์ ไม่ใช่ผลคาดการณ์</p>
     </div>
+    <div v-else-if="tool === 'trading_costs'" class="space-y-3 px-4 py-3">
+      <div class="grid gap-3 sm:grid-cols-2 lg:grid-cols-5">
+        <label class="block"><span class="label">Side</span><select v-model="side" class="input mt-1"><option>BUY</option><option>SELL</option></select></label>
+        <label class="block"><span class="label">ราคาอ้างอิง swap</span><input v-model.number="entry" type="number" min="0.000001" step="0.01" class="input mt-1 num" /></label>
+        <label class="block"><span class="label">Lot</span><input v-model.number="lot" type="number" min="0.000001" step="0.01" class="input mt-1 num" /></label>
+        <label class="block"><span class="label">จำนวนคืนที่ถือ</span><input v-model.number="holdingNights" type="number" min="0" step="1" class="input mt-1 num" /></label>
+        <label class="block"><span class="label">คืนคิด swap 3 เท่า</span><input v-model.number="tripleSwapNights" type="number" min="0" step="1" class="input mt-1 num" /></label>
+      </div>
+      <div v-if="result?.status === 'ready'" class="grid gap-2 rounded-lg border border-ink-700 bg-ink-900/60 p-3 sm:grid-cols-2 lg:grid-cols-5">
+        <div class="kv"><dt>Spread ทั่วไป</dt><dd>{{ accountMoney(result.spread_cost) }}</dd></div>
+        <div class="kv"><dt>Commission ไป-กลับ</dt><dd>{{ accountMoney(result.commission_cost) }}</dd></div>
+        <div class="kv"><dt>Swap {{ result.swap_mode }} (ลบ=เสีย)</dt><dd :class="result.swap_amount_signed <= 0 ? 'text-down' : 'text-up'">{{ accountMoney(result.swap_amount_signed) }}</dd></div>
+        <div class="kv"><dt>คืนที่คิด swap</dt><dd>{{ result.swap_nights_applied }}</dd></div>
+        <div class="kv"><dt>ต้นทุนสุทธิประมาณ</dt><dd class="text-gold-300">{{ accountMoney(result.total_cost_estimate) }}</dd></div>
+      </div>
+      <p v-else-if="result" class="text-xs text-amber-300">{{ result.reason }}</p>
+      <p class="text-[10px] leading-relaxed text-muted">ใช้ swap mode/rate จาก {{ result?.spec_source || spec?.source || 'สเปกสัญลักษณ์' }}; จำนวนคืน 3 เท่าต้องกรอกตามวัน rollover ของโบรกเกอร์เอง. ถ้าสเปกยังไม่ยืนยัน ให้ถือเป็นตัวอย่างเท่านั้น</p>
+    </div>
     <div v-else-if="tool === 'point_tick'" class="space-y-3 px-4 py-3">
       <label class="block max-w-sm"><span class="label">ระยะราคา (price units)</span><input v-model.number="priceDelta" type="number" step="0.01" class="input mt-1 num" /></label>
       <div v-if="result?.status === 'ready'" class="grid gap-2 rounded-lg border border-ink-700 bg-ink-900/60 p-3 sm:grid-cols-3">
@@ -187,6 +206,8 @@ const exitPrice = ref(2010)
 const grossReward = ref(100)
 const grossLoss = ref(100)
 const estimatedCost = ref(7)
+const holdingNights = ref(3)
+const tripleSwapNights = ref(1)
 const currentEquity = ref(9000)
 const peakEquity = ref(10000)
 const priceDelta = ref(5)
@@ -245,6 +266,13 @@ async function load() {
       query.set('gross_reward', String(grossReward.value))
       query.set('gross_loss', String(grossLoss.value))
       query.set('estimated_cost', String(estimatedCost.value))
+    } else if (tool.value === 'trading_costs') {
+      endpoint = '/api/risk/calculator'
+      query.set('tool', 'trading_costs')
+      query.set('side', side.value)
+      query.set('price', String(entry.value))
+      query.set('holding_nights', String(holdingNights.value))
+      query.set('triple_swap_nights', String(tripleSwapNights.value))
     } else if (tool.value === 'point_tick') {
       endpoint = '/api/risk/calculator'
       query.set('tool', 'point_tick')
@@ -284,6 +312,8 @@ function resetInputs() {
   grossReward.value = 100
   grossLoss.value = 100
   estimatedCost.value = 7
+  holdingNights.value = 3
+  tripleSwapNights.value = 1
   currentEquity.value = 9000
   peakEquity.value = 10000
   priceDelta.value = 5
@@ -298,6 +328,7 @@ async function copyResult() {
 }
 
 watch([symbol, points, lot, tool, equity, riskPct, slPoints, side, entry, stopLoss,
-  takeProfit, exitPrice, grossReward, grossLoss, estimatedCost, currentEquity, peakEquity,
+  takeProfit, exitPrice, grossReward, grossLoss, estimatedCost, holdingNights,
+  tripleSwapNights, currentEquity, peakEquity,
   priceDelta], load, { immediate: true })
 </script>

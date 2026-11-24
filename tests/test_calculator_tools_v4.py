@@ -9,6 +9,7 @@ from services.risk_engine.planner import (
     point_tick_converter,
     profit_loss_calculator,
     risk_reward_calculator,
+    trading_costs_calculator,
 )
 
 SPEC = SymbolSpec(
@@ -61,6 +62,29 @@ def test_break_even_win_rate_accounts_for_manual_cost_and_rejects_erased_reward(
     assert break_even_win_rate_calculator(100, 100, -1)["status"] == "invalid_input"
 
 
+def test_trading_costs_reuse_declared_swap_mode_and_manual_triple_count():
+    swap_spec = SPEC.model_copy(update={
+        "swap_mode": "money", "swap_long_per_lot": -21.4,
+        "swap_short_per_lot": 9.1,
+    })
+    result = trading_costs_calculator(swap_spec, "BUY", 2000, 0.1, 3, 1)
+    assert result["status"] == "ready"
+    assert result["swap_nights_applied"] == 5
+    assert result["spread_cost"] == pytest.approx(0.2)
+    assert result["commission_cost"] == pytest.approx(0.7)
+    assert result["swap_amount_signed"] == pytest.approx(-10.7)
+    assert result["total_cost_estimate"] == pytest.approx(11.6)
+
+    points_mode = swap_spec.model_copy(update={"swap_mode": "points", "swap_long_points": -10})
+    points_result = trading_costs_calculator(points_mode, "BUY", 2000, 0.1, 1, 0)
+    assert points_result["swap_amount_signed"] == pytest.approx(-1.0)
+
+    percent_mode = swap_spec.model_copy(update={"swap_mode": "percent", "swap_long_pct": -5})
+    percent_result = trading_costs_calculator(percent_mode, "BUY", 2000, 0.1, 1, 0)
+    assert percent_result["swap_amount_signed"] == pytest.approx(-2.78)
+    assert trading_costs_calculator(swap_spec, "BUY", 2000, 0.1, 1, 2)["status"] == "invalid_input"
+
+
 def test_point_tick_converter_does_not_assume_point_equals_tick():
     aligned = point_tick_converter(SPEC, 0.10)
     fractional = point_tick_converter(SPEC, 0.03)
@@ -99,6 +123,7 @@ def test_calculator_api_is_read_only_and_returns_manual_provenance(client, auth,
         ("risk_reward", "&entry=2000&stop_loss=1990&take_profit=2020&side=BUY&lot=0.1"),
         ("drawdown", "&current_equity=9000&peak_equity=10000"),
         ("break_even", "&gross_reward=200&gross_loss=100&estimated_cost=10"),
+        ("trading_costs", "&side=BUY&price=2000&lot=0.1&holding_nights=3&triple_swap_nights=1"),
         ("point_tick", "&price_delta=0.1"),
         ("profit_loss", "&entry=2000&exit_price=2010&side=BUY&lot=0.1"),
     ]

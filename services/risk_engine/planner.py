@@ -674,6 +674,66 @@ def break_even_win_rate_calculator(gross_reward: float, gross_loss: float,
             "reason": "mathematical break-even threshold only; not a forecast or recommended win rate"}
 
 
+def trading_costs_calculator(spec: SymbolSpec, side: str, price: float, lot: float,
+                             holding_nights: int, triple_swap_nights: int) -> dict[str, Any]:
+    """Manual holding-cost estimate using the declared broker swap mode/rates."""
+    try:
+        price_value, volume = float(price), float(lot)
+        nights_value, triple_value = float(holding_nights), float(triple_swap_nights)
+    except (TypeError, ValueError, OverflowError):
+        price_value = volume = nights_value = triple_value = math.nan
+    direction = str(side or "").strip().upper()
+    common = {"side": direction if direction in {"BUY", "SELL"} else None,
+              "price": price_value if math.isfinite(price_value) else None,
+              "lot": volume if math.isfinite(volume) else None,
+              "holding_nights": int(nights_value) if math.isfinite(nights_value) and nights_value.is_integer() else None,
+              "triple_swap_nights": int(triple_value) if math.isfinite(triple_value) and triple_value.is_integer() else None,
+              "swap_mode": spec.swap_mode, "currency": spec.account_currency,
+              "source": "manual_sandbox", "spec_source": spec.source}
+    if (any(isinstance(value, bool) for value in
+            (price, lot, holding_nights, triple_swap_nights))
+            or direction not in {"BUY", "SELL"}
+            or not all(math.isfinite(value) for value in
+                       (price_value, volume, nights_value, triple_value))
+            or price_value <= 0 or volume <= 0 or nights_value < 0 or triple_value < 0
+            or not nights_value.is_integer() or not triple_value.is_integer()
+            or triple_value > nights_value):
+        return {**common, "status": "invalid_input",
+                "reason": "price/lot must be positive; nights must be whole numbers and triple nights cannot exceed held nights"}
+    if (spec.sizing_blocked or not math.isfinite(spec.spread_typical_points)
+            or spec.spread_typical_points < 0
+            or not math.isfinite(spec.commission_per_lot_round_turn)
+            or spec.commission_per_lot_round_turn < 0 or spec.swap_days_in_year <= 0):
+        return {**common, "status": "unavailable", "spread_cost": None,
+                "commission_cost": None, "swap_amount_signed": None,
+                "total_cost_estimate": None,
+                "reason": "symbol valuation or cost specification is incomplete"}
+    zero_move = points_calculator(spec, 0, volume)
+    if not zero_move["valuation_valid"]:
+        return {**common, "status": "unavailable", "spread_cost": None,
+                "commission_cost": None, "swap_amount_signed": None,
+                "total_cost_estimate": None, "reason": zero_move["valuation_reason"]}
+    overnight_count = int(nights_value) + 2 * int(triple_value)
+    try:
+        swap_per_night = spec.swap_per_lot_night(direction == "BUY", price_value)
+        swap_total = swap_per_night * volume * overnight_count
+    except (TypeError, ValueError, OverflowError, ZeroDivisionError):
+        swap_total = math.nan
+    if not math.isfinite(swap_total):
+        return {**common, "status": "unavailable", "spread_cost": None,
+                "commission_cost": None, "swap_amount_signed": None,
+                "total_cost_estimate": None, "reason": "swap rate cannot be valued safely"}
+    spread = float(zero_move["spread_cost"])
+    commission = float(zero_move["commission"])
+    return {**common, "status": "ready", "spread_cost": round(spread, 2),
+            "commission_cost": round(commission, 2),
+            "swap_per_night_signed": round(swap_per_night * volume, 4),
+            "swap_nights_applied": overnight_count,
+            "swap_amount_signed": round(swap_total, 2),
+            "total_cost_estimate": round(spread + commission - swap_total, 2),
+            "reason": "spread uses typical spec; swap uses supplied night counts and configured swap mode; actual broker rollover may differ"}
+
+
 def point_tick_converter(spec: SymbolSpec, price_delta: float) -> dict[str, Any]:
     """Convert a price move without assuming one broker point equals one tick."""
     try:
