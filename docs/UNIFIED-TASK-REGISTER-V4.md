@@ -141,6 +141,11 @@ Status definitions: EXISTS_CODE = seen in repository but not live certified; NEE
 - On V4 merge base `71ab452db7f9507f0ea4a3ceb28e5ae39963c2e1`, focused TradingView contract/ingress/persistence/shadow replay passed **34 tests**; the broader API/rate-limit/backtest regression passed **95 tests**. Ruff E9/F/I, compileall, Vite 8.3.8 build (**664 modules**) and chart viewport (**7 passed**) passed. See `docs/audits/U16-U18-followup-2026-11-23.th.md`.
 - U17 authenticated role/responsive visual review and U18 Pine/Bar Replay, real historical data/cost study, load, Paper failure/reconnect and rollback gates remain NOT TESTED/BLOCKED. No webhook activation, deployment or broker command occurred.
 
+### U01 publisher tunnel example correction (2026-11-24)
+
+- Updated `.env.example` and the current publisher setup paragraph in `docs/RUNBOOK.md` to match the isolated VM100 staging artifact: PC loopback `18182` forwards to VM100 loopback `18082` via `ssh -N -L 18182:127.0.0.1:18082 danai@192.168.1.10`. Kept historical checks for the older `18181 → 18081` runtime intact and explicitly labeled them as historical.
+- `rg` confirms the active generic publisher URL example uses `18182`; `git diff --check` passes. No `.env`, tokens, MT5 session, SSH process, publisher, staging process, quote, account, or trading action was accessed or changed. U01 remains PARTIAL / BLOCKED pending identity-matched fresh Demo quote and rate/spec/freshness acceptance.
+
 ## Anti-duplication ledger
 - Do NOT let TradingView/Lens/LLM/webhook create executable signals, alter MT5 canonical prices/specs, approve risk, toggle Auto, or call execution. Use U14?U18 as the only TradingView queue; do not add a parallel plan/backlog.
 - Do NOT create a second RiskEngine or PositionManager. Existing: `services/risk_engine/engine.py`, `manager.py`.
