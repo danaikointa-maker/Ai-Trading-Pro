@@ -1,7 +1,7 @@
 # U08 Follow-up — Trade Review, Saved Scenarios, Exports and Learning
 
-Date: 2026-11-24  
-Branch: `feature/u08-calculator-tools-20261124`  
+Date: 2026-11-24
+Branch: `feature/u08-calculator-tools-20261124`
 PR: #71, Draft, targets `plan/unified-development-v4`
 
 ## Scope and result
