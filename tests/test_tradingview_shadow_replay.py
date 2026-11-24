@@ -140,6 +140,22 @@ def test_replay_rejects_missing_or_untrusted_broker_cost_spec():
         _replay(costs=ShadowCostAssumptions(10, 2, 0.015))
 
 
+def test_replay_rejects_overflowed_derived_broker_point_value():
+    with pytest.raises(ValueError, match="broker point value must be finite"):
+        _replay(spec=_spec(point=1e308))
+
+
+def test_replay_rejects_overflowed_cost_and_outcome_calculations():
+    with pytest.raises(ValueError, match="estimated broker costs must remain finite"):
+        _replay(costs=ShadowCostAssumptions(1e308, 1e308, 1.0))
+
+    bars = _bars()
+    bars["c"] = bars["c"].astype(float)
+    bars.loc[bars["t"] == 1200, "c"] = 1e308
+    with pytest.raises(ValueError, match="replay outcome must remain finite"):
+        _replay(bars=bars)
+
+
 def test_replay_rejects_duplicate_or_nonchronological_bar_timestamps():
     bars = _bars()
     bars.loc[3, "t"] = 900

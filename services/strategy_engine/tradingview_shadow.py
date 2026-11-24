@@ -161,6 +161,12 @@ def replay_tradingview_shadow(
     if not math.isfinite(spec.commission_per_lot_round_turn) or spec.commission_per_lot_round_turn < 0:
         raise ValueError("broker commission must be finite and non-negative")
 
+    value_per_point = spec.value_per_point_per_lot
+    reference_value = value_per_point * costs.reference_lot
+    if (not math.isfinite(value_per_point) or value_per_point <= 0
+            or not math.isfinite(reference_value) or reference_value <= 0):
+        raise ValueError("broker point value must be finite and positive for the reference lot")
+
     times, opens, closes = _validate_bars(closed_bars)
     time_to_index = {timestamp: index for index, timestamp in enumerate(times)}
 
@@ -197,10 +203,12 @@ def replay_tradingview_shadow(
     duplicate_decisions = sum(len(rows) - 1 for rows in decisions_by_key.values() if len(rows) > 1)
     cost_money = (
         (costs.spread_points + 2 * costs.slippage_points_per_side)
-        * spec.value_per_point_per_lot * costs.reference_lot
+        * reference_value
         + spec.commission_per_lot_round_turn * costs.reference_lot
     )
-    cost_points = cost_money / (spec.value_per_point_per_lot * costs.reference_lot)
+    cost_points = cost_money / reference_value
+    if not math.isfinite(cost_money) or cost_money < 0 or not math.isfinite(cost_points):
+        raise ValueError("estimated broker costs must remain finite for the reference lot")
 
     unique_evidence = {key: rows[0] for key, rows in evidence_by_key.items() if len(rows) == 1}
     unique_decisions = {key: rows[0] for key, rows in decisions_by_key.items() if len(rows) == 1}
@@ -258,7 +266,10 @@ def replay_tradingview_shadow(
                 price_move = direction * (closes[exit_index] - opens[entry_index])
                 gross_money = spec.pnl_in_account_currency(price_move, costs.reference_lot)
                 net_money = gross_money - cost_money
-                net_points = net_money / (spec.value_per_point_per_lot * costs.reference_lot)
+                net_points = net_money / reference_value
+                if not math.isfinite(gross_money) or not math.isfinite(net_money) \
+                        or not math.isfinite(net_points):
+                    raise ValueError("replay outcome must remain finite with the supplied broker spec")
                 outcome_lists[horizon][system_name].append(net_points)
 
     return {
