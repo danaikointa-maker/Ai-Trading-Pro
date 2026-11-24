@@ -184,6 +184,12 @@ Status definitions: EXISTS_CODE = seen in repository but not live certified; NEE
 - **U01:** PC SSH forwarding to isolated VM100 staging is verified: `127.0.0.1:18182 -> 192.168.1.10 / 127.0.0.1:18082`; health is `ok` in `simulate` mode, and OpenAPI lists the publisher route. No MT5 terminal, publisher token, identity-matched Demo quote, or trade command was present. U01 remains blocked on fresh Demo feed/identity evidence.
 - **U15:** `agent.youridea168.com` still responds `502` from Cloudflare with TLS verified; `cloudflared.service` is active, but VM100 has no listener on configured origin `:8080`. Do not repoint to Trading Pro ports; Access and dedicated Office API acceptance remain unverified.
 
+### U15 read-only recheck — 2026-11-25
+
+- SSH to `danai@192.168.1.10` succeeded and `cloudflared.service` is active. VM100 listeners remain loopback-only for ports 8000, 18081 and 18082; no process listens on configured Tunnel origin port 8080.
+- Status-only probes of `/api/system/health` returned HTTP 200 on local ports 8000, 18081 and 18082, and connection refused on 8080; response bodies were discarded. `https://agent.youridea168.com/` returned Cloudflare HTTP 502 with TLS verification successful (`ssl_verify_result=0`).
+- This confirms the Trading Pro APIs are alive locally but does not satisfy the dedicated Office API or Access gates. No route, tunnel, firewall, service, secret, account or broker state was changed; do not repoint the hostname to any Trading Pro port.
+
 ## Anti-duplication ledger
 - Do NOT let TradingView/Lens/LLM/webhook create executable signals, alter MT5 canonical prices/specs, approve risk, toggle Auto, or call execution. Use U14?U18 as the only TradingView queue; do not add a parallel plan/backlog.
 - Do NOT create a second RiskEngine or PositionManager. Existing: `services/risk_engine/engine.py`, `manager.py`.
