@@ -190,6 +190,12 @@ Status definitions: EXISTS_CODE = seen in repository but not live certified; NEE
 - Status-only probes of `/api/system/health` returned HTTP 200 on local ports 8000, 18081 and 18082, and connection refused on 8080; response bodies were discarded. `https://agent.youridea168.com/` returned Cloudflare HTTP 502 with TLS verification successful (`ssl_verify_result=0`).
 - This confirms the Trading Pro APIs are alive locally but does not satisfy the dedicated Office API or Access gates. No route, tunnel, firewall, service, secret, account or broker state was changed; do not repoint the hostname to any Trading Pro port.
 
+### U15 local multi-worker limiter check — 2026-11-25
+
+- Added `test_sqlite_store_is_shared_across_worker_processes`: four independent Python worker processes spent against one temporary SQLite bucket; exactly 40 of 100 attempts were allowed, proving the configured SQLite store enforces one host-wide budget across processes.
+- `tests/test_ratelimit.py`: **17 passed**, one existing Starlette/httpx deprecation warning; Ruff E9/F/I passed for the changed test file. This proves the store implementation, not VM100 deployment configuration or production load.
+- `config/app.yaml` still defaults to `ratelimit.store=memory`, which multiplies limits across workers. Any multi-worker host must explicitly select SQLite (same host) or Redis (cross-host), then verify `/api/system/health → ratelimit` reports the shared backend. VM100's active app config and worker count remain NOT TESTED; no config/service was changed.
+
 ## Anti-duplication ledger
 - Do NOT let TradingView/Lens/LLM/webhook create executable signals, alter MT5 canonical prices/specs, approve risk, toggle Auto, or call execution. Use U14?U18 as the only TradingView queue; do not add a parallel plan/backlog.
 - Do NOT create a second RiskEngine or PositionManager. Existing: `services/risk_engine/engine.py`, `manager.py`.
