@@ -38,15 +38,13 @@
 <script setup>
 import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { api } from '../lib/api'
+import { createLatestRefreshQueue } from '../lib/latestRefreshQueue'
 import { state } from '../lib/store'
 
 const evidence = ref([])
 const error = ref('')
-const busy = ref(false)
 const status = computed(() => error.value ? 'ไม่พร้อม' : evidence.value.length ? 'Shadow' : 'รอข้อมูล')
 let timer = null
-let requestId = 0
-let pending = false
 
 function tfLabel(tf) {
   const labels = { '1': 'M1', '3': 'M3', '5': 'M5', '15': 'M15', '30': 'M30', '60': 'H1', '120': 'H2', '240': 'H4', D: 'D1', W: 'W1' }
@@ -59,32 +57,30 @@ function timeLabel(epoch) {
     timeZoneName: 'short',
   })
 }
-async function refresh() {
-  if (busy.value) {
-    pending = true
-    return
-  }
-  const current = ++requestId
-  busy.value = true
-  error.value = ''
-  try {
+const refreshQueue = createLatestRefreshQueue({
+  onStart: () => { error.value = '' },
+  run: () => {
     const q = new URLSearchParams({ symbol: state.symbol, timeframe: state.timeframe, limit: '10' })
-    const result = await api.get(`/api/integrations/tradingview/ai-agent-lens/latest?${q}`, { silent: true })
-    if (current === requestId) evidence.value = result?.evidence || []
-  } catch (err) {
-    if (current === requestId) error.value = err?.message || 'โหลดข้อมูล Shadow ไม่ได้'
-  } finally {
-    busy.value = false
-    if (pending) {
-      pending = false
-      refresh()
-    }
-  }
+    return api.get(`/api/integrations/tradingview/ai-agent-lens/latest?${q}`, { silent: true })
+  },
+  onResult: result => { evidence.value = result?.evidence || [] },
+  onError: err => { error.value = err?.message || 'โหลดข้อมูล Shadow ไม่ได้' },
+})
+
+function refresh(options) {
+  return refreshQueue.refresh(options)
 }
-watch(() => [state.symbol, state.timeframe], refresh)
+watch(() => [state.symbol, state.timeframe], () => {
+  evidence.value = []
+  error.value = ''
+  refresh({ invalidateIfBusy: true })
+})
 onMounted(() => {
   refresh()
   timer = window.setInterval(refresh, 30000)
 })
-onBeforeUnmount(() => { if (timer) window.clearInterval(timer) })
+onBeforeUnmount(() => {
+  refreshQueue.close()
+  if (timer) window.clearInterval(timer)
+})
 </script>

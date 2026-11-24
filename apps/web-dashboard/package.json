@@ -9,6 +9,7 @@
     "preview": "vite preview --host 0.0.0.0",
     "smoke:trades-review": "node scripts/trade-review-smoke.mjs",
     "test:chart-viewport": "node --test tests/chartViewport.test.mjs",
+    "test:tradingview-lens": "node --test tests/tradingViewLensRefresh.test.mjs",
     "test:calculator-analysis": "node --test tests/calculatorAnalysis.test.mjs",
     "test:calculator-export": "node --test tests/calculatorExport.test.mjs"
   },
