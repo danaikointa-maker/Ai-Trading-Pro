@@ -9,6 +9,7 @@ Two invariants:
 from __future__ import annotations
 
 import math
+import random
 from dataclasses import dataclass, field
 from typing import Any, Callable
 
@@ -53,6 +54,7 @@ class PlanInputs:
     # Candidate-only: legacy keeps nearest-tick rounding until profile migration.
     directional_tick_rounding: bool = False
     sl_policy: str = "legacy"
+    fixed_sl_points: float | None = None
     sl_structure_buffer_atr: float = 0.35
     swing_lookback_bars: int = 0
     m5_bar_count: int = 0
@@ -323,6 +325,58 @@ class TradePlanner:
                       f"{ctx.sl_max_points:.0f}; reject instead of narrowing protection")
                 return PlanResult(plan=None, blockers=blockers,
                                   blocker_codes=codes, notes=notes + [sl_note])
+        elif ctx.sl_policy == "fixed":
+            if (ctx.fixed_sl_points is None or not math.isfinite(ctx.fixed_sl_points)
+                    or ctx.fixed_sl_points <= 0
+                    or not math.isfinite(ctx.sl_max_points) or ctx.sl_max_points <= 0):
+                block("invalid_stop_policy", "fixed stop distance must be a positive finite value")
+                return PlanResult(plan=None, blockers=blockers,
+                                  blocker_codes=codes, notes=notes)
+            sl_points = float(ctx.fixed_sl_points)
+            if sl_points < vol_floor:
+                block("stop_distance_min",
+                      f"fixed stop {sl_points:.0f} points is below the volatility floor "
+                      f"{vol_floor:.0f}; do not narrow protective distance")
+                return PlanResult(plan=None, blockers=blockers,
+                                  blocker_codes=codes, notes=notes)
+            if sl_points > ctx.sl_max_points:
+                block("stop_distance_max",
+                      f"fixed stop {sl_points:.0f} points exceeds configured maximum "
+                      f"{ctx.sl_max_points:.0f}")
+                return PlanResult(plan=None, blockers=blockers,
+                                  blocker_codes=codes, notes=notes)
+            sl_note = f"Manual fixed stop distance: {sl_points:.0f} points"
+        elif ctx.sl_policy in {"atr", "structure"}:
+            if (not math.isfinite(ctx.atr_points) or ctx.atr_points <= 0
+                    or not math.isfinite(ctx.sl_max_points) or ctx.sl_max_points <= 0
+                    or ctx.swing_lookback_bars < 0 or ctx.m5_bar_count < 0
+                    or not math.isfinite(ctx.sl_atr_multiplier) or ctx.sl_atr_multiplier <= 0
+                    or not math.isfinite(ctx.sl_structure_buffer_atr)
+                    or ctx.sl_structure_buffer_atr < 0):
+                block("invalid_stop_policy", "ATR/structure stop parameters are invalid")
+                return PlanResult(plan=None, blockers=blockers,
+                                  blocker_codes=codes, notes=notes)
+            if ctx.sl_policy == "atr":
+                atr_reference = ctx.atr_points * ctx.sl_atr_multiplier
+                sl_points = max(atr_reference, vol_floor)
+                sl_note = (f"ATR stop: max({ctx.sl_atr_multiplier:.2f} ATR, "
+                           "volatility floor)")
+            else:
+                structure_points, structure_note = self._candidate_structure_distance(
+                    direction, ctx.entry, ctx)
+                if structure_points <= 0:
+                    block("structure_missing", structure_note)
+                    return PlanResult(plan=None, blockers=blockers,
+                                      blocker_codes=codes, notes=notes)
+                sl_points = max(structure_points, vol_floor)
+                sl_note = (f"Structure stop: max({structure_points:.0f}-point confirmed "
+                           f"swing + ATR buffer, volatility floor); {structure_note}")
+            if sl_points > ctx.sl_max_points:
+                block("stop_distance_max",
+                      f"required stop {sl_points:.0f} points exceeds configured maximum "
+                      f"{ctx.sl_max_points:.0f}; reject instead of narrowing protection")
+                return PlanResult(plan=None, blockers=blockers,
+                                  blocker_codes=codes, notes=notes + [sl_note])
         elif ctx.sl_policy == "legacy":
             if self.stops.get("use_structure_stop", True):
                 sl_points, sl_note = self._stop_from_structure(direction, ctx.entry, ctx)
@@ -342,7 +396,12 @@ class TradePlanner:
                               blocker_codes=codes, notes=notes)
         min_stop = float(spec.stops_level_points)
         if min_stop > 0 and sl_points < min_stop + 1:
-            if ctx.sl_policy == "atr_structure" and min_stop + 1 > ctx.sl_max_points:
+            if ctx.sl_policy == "fixed":
+                block("broker_stop_distance",
+                      "fixed stop is inside the broker stops level; increase the manual distance")
+                return PlanResult(plan=None, blockers=blockers,
+                                  blocker_codes=codes, notes=notes)
+            if ctx.sl_policy in {"atr_structure", "atr", "structure"} and min_stop + 1 > ctx.sl_max_points:
                 block("broker_stop_distance", "broker stops level exceeds candidate maximum stop distance")
                 return PlanResult(plan=None, blockers=blockers,
                                   blocker_codes=codes, notes=notes)
@@ -555,6 +614,405 @@ def points_calculator(spec: SymbolSpec, points: float, lot: float) -> dict[str, 
         "valuation_reason": ("" if valuation_valid else
                              "symbol specification or account-currency conversion is unresolved"),
     }
+
+
+def risk_reward_calculator(spec: SymbolSpec, entry: float, stop_loss: float,
+                          take_profit: float, side: str, lot: float) -> dict[str, Any]:
+    """Read-only risk/reward estimate using the shared broker-aware P&L maths."""
+    try:
+        values = tuple(float(value) for value in (entry, stop_loss, take_profit, lot))
+    except (TypeError, ValueError, OverflowError):
+        values = (math.nan, math.nan, math.nan, math.nan)
+    entry_value, sl_value, tp_value, volume = values
+    direction = str(side or "").strip().upper()
+    common = {"entry": entry_value if math.isfinite(entry_value) else None,
+              "stop_loss": sl_value if math.isfinite(sl_value) else None,
+              "take_profit": tp_value if math.isfinite(tp_value) else None,
+              "side": direction if direction in {"BUY", "SELL"} else None,
+              "lot": volume if math.isfinite(volume) else None,
+              "currency": spec.account_currency, "source": "manual_sandbox",
+              "spec_source": spec.source, "rate_source": spec.rate_source}
+    if (any(isinstance(value, bool) for value in (entry, stop_loss, take_profit, lot))
+            or not all(math.isfinite(value) for value in values)
+            or min(entry_value, sl_value, tp_value, volume) <= 0
+            or direction not in {"BUY", "SELL"} or volume <= 0):
+        return {**common, "status": "invalid_input", "reason": "enter positive prices/lot and side BUY or SELL"}
+    if direction == "BUY":
+        risk_delta, reward_delta = entry_value - sl_value, tp_value - entry_value
+    else:
+        risk_delta, reward_delta = sl_value - entry_value, entry_value - tp_value
+    if risk_delta <= 0 or reward_delta <= 0:
+        return {**common, "status": "invalid_levels",
+                "reason": "BUY requires SL < entry < TP; SELL requires TP < entry < SL"}
+    if (spec.sizing_blocked or not math.isfinite(spec.commission_per_lot_round_turn)
+            or spec.commission_per_lot_round_turn < 0 or not math.isfinite(spec.spread_typical_points)
+            or spec.spread_typical_points < 0):
+        return {**common, "status": "unavailable", "risk_points": None,
+                "reward_points": None, "rr_gross": None, "rr_net": None,
+                "reason": "symbol specification, conversion rate, or costs are unavailable"}
+    risk_points, reward_points = risk_delta / spec.point, reward_delta / spec.point
+    risk_calc = points_calculator(spec, risk_points, volume)
+    reward_calc = points_calculator(spec, reward_points, volume)
+    if not risk_calc["valuation_valid"] or not reward_calc["valuation_valid"]:
+        return {**common, "status": "unavailable", "risk_points": risk_points,
+                "reward_points": reward_points, "rr_gross": None, "rr_net": None,
+                "reason": risk_calc["valuation_reason"]}
+    risk_cost = (abs(float(risk_calc["gross_profit"])) + float(risk_calc["commission"])
+                 + float(risk_calc["spread_cost"]))
+    reward_net = (float(reward_calc["gross_profit"]) - float(reward_calc["commission"])
+                  - float(reward_calc["spread_cost"]))
+    reward_gross = float(reward_calc["gross_profit"])
+    risk_gross = abs(float(risk_calc["gross_profit"]))
+    if risk_cost <= 0 or risk_gross <= 0:
+        return {**common, "status": "unavailable", "risk_points": risk_points,
+                "reward_points": reward_points, "rr_gross": None, "rr_net": None,
+                "reason": "risk amount cannot be valued from the supplied symbol specification"}
+    return {**common, "status": "ready", "risk_points": round(risk_points, 4),
+            "reward_points": round(reward_points, 4),
+            "risk_amount_estimate": round(risk_cost, 2),
+            "reward_amount_gross": round(reward_gross, 2),
+            "reward_amount_net_estimate": round(reward_net, 2),
+            "rr_gross": round(reward_gross / risk_gross, 4),
+            "rr_net": round(reward_net / risk_cost, 4),
+            "commission_estimate": round(float(reward_calc["commission"]), 2),
+            "spread_estimate": round(float(reward_calc["spread_cost"]), 2),
+            "reason": "estimate uses typical spread and round-turn commission; excludes slippage and swap"}
+
+
+def drawdown_recovery_calculator(current_equity: float, peak_equity: float) -> dict[str, Any]:
+    """Manual-only drawdown and recovery math; reads no runtime account state."""
+    try:
+        current, peak = float(current_equity), float(peak_equity)
+    except (TypeError, ValueError, OverflowError):
+        current, peak = math.nan, math.nan
+    common = {"current_equity": current if math.isfinite(current) else None,
+              "peak_equity": peak if math.isfinite(peak) else None,
+              "source": "manual_sandbox"}
+    if (any(isinstance(value, bool) for value in (current_equity, peak_equity))
+            or not math.isfinite(current) or not math.isfinite(peak) or current <= 0 or peak <= 0):
+        return {**common, "status": "invalid_input", "reason": "equity values must be finite and positive"}
+    if current >= peak:
+        return {**common, "status": "above_peak" if current > peak else "at_peak",
+                "drawdown_amount": 0.0, "drawdown_pct": 0.0,
+                "recovery_amount": 0.0, "recovery_pct": 0.0,
+                "reason": "no recovery gain is needed to reach the supplied peak"}
+    drawdown = peak - current
+    return {**common, "status": "ready", "drawdown_amount": round(drawdown, 2),
+            "drawdown_pct": round(drawdown / peak * 100.0, 4),
+            "recovery_amount": round(drawdown, 2),
+            "recovery_pct": round(drawdown / current * 100.0, 4),
+            "reason": "recovery percentage uses current equity as its denominator; this is not a forecast"}
+
+
+def break_even_win_rate_calculator(gross_reward: float, gross_loss: float,
+                                   estimated_cost: float) -> dict[str, Any]:
+    """Manual expectancy threshold using same-currency per-trade assumptions."""
+    try:
+        reward, loss, cost = (float(value) for value in
+                              (gross_reward, gross_loss, estimated_cost))
+    except (TypeError, ValueError, OverflowError):
+        reward, loss, cost = math.nan, math.nan, math.nan
+    common = {"gross_reward": reward if math.isfinite(reward) else None,
+              "gross_loss": loss if math.isfinite(loss) else None,
+              "estimated_cost": cost if math.isfinite(cost) else None,
+              "source": "manual_sandbox"}
+    if (any(isinstance(value, bool) for value in (gross_reward, gross_loss, estimated_cost))
+            or not all(math.isfinite(value) for value in (reward, loss, cost))
+            or reward <= 0 or loss <= 0 or cost < 0):
+        return {**common, "status": "invalid_input",
+                "reason": "reward/loss must be positive and estimated cost cannot be negative"}
+    net_reward = reward - cost
+    net_loss = loss + cost
+    if net_reward <= 0:
+        return {**common, "status": "unavailable", "net_reward": round(net_reward, 4),
+                "net_loss": round(net_loss, 4), "break_even_win_rate_pct": None,
+                "reason": "estimated per-trade cost equals or exceeds gross reward"}
+    return {**common, "status": "ready", "net_reward": round(net_reward, 4),
+            "net_loss": round(net_loss, 4),
+            "break_even_win_rate_pct": round(net_loss / (net_reward + net_loss) * 100.0, 4),
+            "reason": "mathematical break-even threshold only; not a forecast or recommended win rate"}
+
+
+def trading_costs_calculator(spec: SymbolSpec, side: str, price: float, lot: float,
+                             holding_nights: int, triple_swap_nights: int) -> dict[str, Any]:
+    """Manual holding-cost estimate using the declared broker swap mode/rates."""
+    try:
+        price_value, volume = float(price), float(lot)
+        nights_value, triple_value = float(holding_nights), float(triple_swap_nights)
+    except (TypeError, ValueError, OverflowError):
+        price_value = volume = nights_value = triple_value = math.nan
+    direction = str(side or "").strip().upper()
+    common = {"side": direction if direction in {"BUY", "SELL"} else None,
+              "price": price_value if math.isfinite(price_value) else None,
+              "lot": volume if math.isfinite(volume) else None,
+              "holding_nights": int(nights_value) if math.isfinite(nights_value) and nights_value.is_integer() else None,
+              "triple_swap_nights": int(triple_value) if math.isfinite(triple_value) and triple_value.is_integer() else None,
+              "swap_mode": spec.swap_mode, "currency": spec.account_currency,
+              "source": "manual_sandbox", "spec_source": spec.source}
+    if (any(isinstance(value, bool) for value in
+            (price, lot, holding_nights, triple_swap_nights))
+            or direction not in {"BUY", "SELL"}
+            or not all(math.isfinite(value) for value in
+                       (price_value, volume, nights_value, triple_value))
+            or price_value <= 0 or volume <= 0 or nights_value < 0 or triple_value < 0
+            or not nights_value.is_integer() or not triple_value.is_integer()
+            or triple_value > nights_value):
+        return {**common, "status": "invalid_input",
+                "reason": "price/lot must be positive; nights must be whole numbers and triple nights cannot exceed held nights"}
+    if (spec.sizing_blocked or not math.isfinite(spec.spread_typical_points)
+            or spec.spread_typical_points < 0
+            or not math.isfinite(spec.commission_per_lot_round_turn)
+            or spec.commission_per_lot_round_turn < 0 or spec.swap_days_in_year <= 0):
+        return {**common, "status": "unavailable", "spread_cost": None,
+                "commission_cost": None, "swap_amount_signed": None,
+                "total_cost_estimate": None,
+                "reason": "symbol valuation or cost specification is incomplete"}
+    zero_move = points_calculator(spec, 0, volume)
+    if not zero_move["valuation_valid"]:
+        return {**common, "status": "unavailable", "spread_cost": None,
+                "commission_cost": None, "swap_amount_signed": None,
+                "total_cost_estimate": None, "reason": zero_move["valuation_reason"]}
+    overnight_count = int(nights_value) + 2 * int(triple_value)
+    try:
+        swap_per_night = spec.swap_per_lot_night(direction == "BUY", price_value)
+        swap_total = swap_per_night * volume * overnight_count
+    except (TypeError, ValueError, OverflowError, ZeroDivisionError):
+        swap_total = math.nan
+    if not math.isfinite(swap_total):
+        return {**common, "status": "unavailable", "spread_cost": None,
+                "commission_cost": None, "swap_amount_signed": None,
+                "total_cost_estimate": None, "reason": "swap rate cannot be valued safely"}
+    spread = float(zero_move["spread_cost"])
+    commission = float(zero_move["commission"])
+    return {**common, "status": "ready", "spread_cost": round(spread, 2),
+            "commission_cost": round(commission, 2),
+            "swap_per_night_signed": round(swap_per_night * volume, 4),
+            "swap_nights_applied": overnight_count,
+            "swap_amount_signed": round(swap_total, 2),
+            "total_cost_estimate": round(spread + commission - swap_total, 2),
+            "reason": "spread uses typical spec; swap uses supplied night counts and configured swap mode; actual broker rollover may differ"}
+
+
+def point_tick_converter(spec: SymbolSpec, price_delta: float) -> dict[str, Any]:
+    """Convert a price move without assuming one broker point equals one tick."""
+    try:
+        delta = float(price_delta)
+    except (TypeError, ValueError, OverflowError):
+        delta = math.nan
+    common = {"price_delta": delta if math.isfinite(delta) else None,
+              "point_size": spec.point, "tick_size": spec.tick_size,
+              "source": "manual_sandbox", "spec_source": spec.source}
+    if isinstance(price_delta, bool) or not math.isfinite(delta):
+        return {**common, "status": "invalid_input", "reason": "price delta must be a finite number"}
+    if spec.point <= 0 or spec.tick_size <= 0 or not math.isfinite(spec.point + spec.tick_size):
+        return {**common, "status": "unavailable", "reason": "symbol point or tick specification is invalid"}
+    points = delta / spec.point
+    exact_ticks = delta / spec.tick_size
+    nearest_ticks = round(exact_ticks)
+    aligned = math.isclose(exact_ticks, nearest_ticks, rel_tol=0.0, abs_tol=1e-8)
+    return {**common, "status": "ready", "points": round(points, 8),
+            "exact_ticks": round(exact_ticks, 8),
+            "legal_tick_count": int(nearest_ticks) if aligned else None,
+            "tick_aligned": aligned,
+            "reason": "price delta is not an integer number of broker ticks" if not aligned else ""}
+
+
+def profit_loss_calculator(spec: SymbolSpec, entry: float, exit_price: float,
+                           side: str, lot: float) -> dict[str, Any]:
+    """Manual what-if P&L projection reusing points_calculator and broker specs."""
+    try:
+        entry_value, exit_value, volume = float(entry), float(exit_price), float(lot)
+    except (TypeError, ValueError, OverflowError):
+        entry_value, exit_value, volume = math.nan, math.nan, math.nan
+    direction = str(side or "").strip().upper()
+    common = {"entry": entry_value if math.isfinite(entry_value) else None,
+              "exit": exit_value if math.isfinite(exit_value) else None,
+              "side": direction if direction in {"BUY", "SELL"} else None,
+              "lot": volume if math.isfinite(volume) else None,
+              "source": "manual_sandbox", "currency": spec.account_currency,
+              "spec_source": spec.source, "rate_source": spec.rate_source}
+    if (any(isinstance(value, bool) for value in (entry, exit_price, lot))
+            or not all(math.isfinite(value) for value in (entry_value, exit_value, volume))
+            or min(entry_value, exit_value, volume) <= 0 or direction not in {"BUY", "SELL"}):
+        return {**common, "status": "invalid_input", "reason": "enter positive prices/lot and side BUY or SELL"}
+    if (spec.sizing_blocked or not math.isfinite(spec.commission_per_lot_round_turn)
+            or spec.commission_per_lot_round_turn < 0 or not math.isfinite(spec.spread_typical_points)
+            or spec.spread_typical_points < 0):
+        return {**common, "status": "unavailable", "points": None, "price_move": None,
+                "gross_profit": None, "commission": None, "spread_cost": None,
+                "net_after_known_costs": None, "valuation_valid": False,
+                "reason": "symbol specification, conversion rate, or costs are unavailable"}
+    signed_move = (exit_value - entry_value) if direction == "BUY" else (entry_value - exit_value)
+    points = signed_move / spec.point
+    result = points_calculator(spec, points, volume)
+    if not result["valuation_valid"]:
+        return {**common, "status": "unavailable", "points": None, "price_move": None,
+                "gross_profit": None, "commission": None, "spread_cost": None,
+                "net_after_known_costs": None, "valuation_valid": False,
+                "reason": result["valuation_reason"]}
+    return {**common, "status": "ready", "points": round(points, 4),
+            "price_move": result["price_move"], "gross_profit": result["gross_profit"],
+            "commission": result["commission"], "spread_cost": result["spread_cost"],
+            "net_after_known_costs": result["net_after_known_costs"],
+            "valuation_valid": True,
+            "reason": "estimate uses typical spread and round-turn commission; excludes slippage and swap"}
+
+
+def scenario_simulator(starting_equity: float, risk_pct: float, win_rate_pct: float,
+                       reward_risk: float, trades: int, cost_per_trade: float = 0.0,
+                       runs: int = 300, seed: int = 7) -> dict[str, Any]:
+    """Simulate explicitly assumed wins/losses; this is not a backtest or forecast."""
+    try:
+        equity, risk, win_rate, rr, cost = map(
+            float, (starting_equity, risk_pct, win_rate_pct, reward_risk, cost_per_trade))
+    except (TypeError, ValueError, OverflowError):
+        equity, risk, win_rate, rr, cost = (math.nan,) * 5
+    common = {"source": "manual_sandbox", "starting_equity": equity if math.isfinite(equity) else None,
+              "risk_pct": risk if math.isfinite(risk) else None,
+              "win_rate_pct": win_rate if math.isfinite(win_rate) else None,
+              "reward_risk": rr if math.isfinite(rr) else None,
+              "trades": trades, "runs": runs, "seed": seed}
+    if (any(isinstance(value, bool) for value in
+            (starting_equity, risk_pct, win_rate_pct, reward_risk, trades, cost_per_trade, runs, seed))
+            or not all(math.isfinite(value) for value in (equity, risk, win_rate, rr, cost))
+            or equity <= 0 or not 0 < risk <= 100 or not 0 <= win_rate <= 100
+            or rr <= 0 or cost < 0 or not 1 <= trades <= 1000
+            or not 50 <= runs <= 1000 or not isinstance(seed, int)):
+        return {**common, "status": "invalid_input",
+                "reason": "enter valid assumptions; trades 1–1000 and runs 50–1000"}
+
+    initial_risk_amount = equity * (risk / 100.0)
+    expected_change = ((win_rate / 100.0) * (initial_risk_amount * rr - cost)
+                       + (1 - win_rate / 100.0) * (-initial_risk_amount - cost))
+    if not math.isfinite(initial_risk_amount) or not math.isfinite(expected_change):
+        return {**common, "status": "unavailable",
+                "reason": "assumptions exceed the supported numeric range"}
+
+    rng = random.Random(seed)
+    end_equities: list[float] = []
+    drawdowns: list[float] = []
+    max_streaks: list[int] = []
+    for _ in range(runs):
+        current = peak = equity
+        max_drawdown = 0.0
+        loss_streak = longest_loss_streak = 0
+        for _ in range(trades):
+            if current <= 0:
+                break
+            risk_amount = current * (risk / 100.0)
+            is_win = rng.random() < win_rate / 100.0
+            change = (risk_amount * rr - cost) if is_win else -(risk_amount + cost)
+            if not math.isfinite(risk_amount) or not math.isfinite(change):
+                return {**common, "status": "unavailable",
+                        "reason": "assumptions exceed the supported numeric range"}
+            current += change
+            if not math.isfinite(current):
+                return {**common, "status": "unavailable",
+                        "reason": "assumptions exceed the supported numeric range"}
+            current = max(0.0, current)
+            if is_win:
+                loss_streak = 0
+            else:
+                loss_streak += 1
+                longest_loss_streak = max(longest_loss_streak, loss_streak)
+            peak = max(peak, current)
+            if peak > 0:
+                max_drawdown = max(max_drawdown, (peak - current) / peak * 100.0)
+        end_equities.append(current)
+        drawdowns.append(max_drawdown)
+        max_streaks.append(longest_loss_streak)
+
+    end_equities.sort()
+    drawdowns.sort()
+    def percentile(values: list[float], p: float) -> float:
+        return values[round((len(values) - 1) * p)]
+    return {
+        **common, "status": "ready",
+        "ending_equity_p10": round(percentile(end_equities, 0.10), 2),
+        "ending_equity_median": round(percentile(end_equities, 0.50), 2),
+        "ending_equity_p90": round(percentile(end_equities, 0.90), 2),
+        "max_drawdown_p90_pct": round(percentile(drawdowns, 0.90), 2),
+        "longest_losing_streak_max": max(max_streaks, default=0),
+        "expectancy_per_trade_at_start": round(expected_change, 2),
+        "expectancy_pct_of_starting_equity": round(expected_change / equity * 100.0, 4),
+        "method": "seeded Monte Carlo with per-trade equity risk compounding",
+        "disclaimer": "hypothetical assumptions only; not historical backtest, prediction, or trading advice",
+    }
+
+
+def capital_growth_calculator(starting_capital: float, low_return_pct: float,
+                              base_return_pct: float, high_return_pct: float,
+                              periods: int, risk_pct: float = 0.5,
+                              loss_streak: int = 0) -> dict[str, Any]:
+    """Compound three user-supplied return assumptions; never infer expected return."""
+    try:
+        capital, low, base, high, risk = map(
+            float, (starting_capital, low_return_pct, base_return_pct, high_return_pct, risk_pct))
+    except (TypeError, ValueError, OverflowError):
+        capital, low, base, high, risk = (math.nan,) * 5
+    common = {"source": "manual_sandbox", "starting_capital": capital if math.isfinite(capital) else None,
+              "periods": periods, "risk_pct": risk if math.isfinite(risk) else None,
+              "loss_streak": loss_streak}
+    if (any(isinstance(value, bool) for value in
+            (starting_capital, low_return_pct, base_return_pct, high_return_pct,
+             periods, risk_pct, loss_streak))
+            or not all(math.isfinite(value) for value in (capital, low, base, high, risk))
+            or capital <= 0 or min(low, base, high) <= -100
+            or max(abs(low), abs(base), abs(high)) > 1000
+            or not low <= base <= high
+            or not 1 <= periods <= 1000 or not 0 <= risk <= 100
+            or not 0 <= loss_streak <= 1000):
+        return {**common, "status": "invalid_input",
+                "reason": "returns must be ordered and above -100%; periods 1–1000; risk and streak within bounds"}
+
+    def compound(rate: float) -> float | None:
+        exponent = periods * math.log1p(rate / 100.0)
+        if exponent > math.log(float.fromhex("0x1.fffffffffffffp+1023")):
+            return None
+        value = capital * math.exp(exponent)
+        return round(value, 2) if math.isfinite(value) else None
+
+    after_loss_streak = capital * ((1 - risk / 100.0) ** loss_streak)
+    low_case, base_case, high_case = compound(low), compound(base), compound(high)
+    if low_case is None and base_case is None and high_case is None:
+        return {**common, "status": "unavailable",
+                "reason": "assumptions exceed the supported numeric range"}
+    return {**common, "status": "ready",
+            "low_case": low_case, "base_case": base_case,
+            "high_case": high_case,
+            "after_assumed_losing_streak": round(after_loss_streak, 2),
+            "losing_streak_drawdown_pct": round((1 - after_loss_streak / capital) * 100, 2),
+            "assumed_period_returns_pct": {"low": low, "base": base, "high": high},
+            "disclaimer": "illustrative compounding of user assumptions; not a return forecast"}
+
+
+def currency_conversion_calculator(amount: float, from_currency: str, to_currency: str,
+                                   rate: float, source: str,
+                                   captured_at: float | None) -> dict[str, Any]:
+    """Apply a timestamped resolved FX rate without embedding any currency assumption."""
+    try:
+        value, fx_rate = float(amount), float(rate)
+    except (TypeError, ValueError, OverflowError):
+        value, fx_rate = math.nan, math.nan
+    base, quote = str(from_currency or "").strip().upper(), str(to_currency or "").strip().upper()
+    common = {"amount": value if math.isfinite(value) else None, "from_currency": base,
+              "to_currency": quote, "rate": fx_rate if math.isfinite(fx_rate) else None,
+              "rate_source": source or "unknown", "captured_at": captured_at,
+              "source": "market_fx" if source == "ticker" else source}
+    if (any(isinstance(item, bool) for item in (amount, rate))
+            or not math.isfinite(value) or not math.isfinite(fx_rate)
+            or not base or not quote or len(base) != 3 or len(quote) != 3
+            or fx_rate <= 0):
+        return {**common, "status": "invalid_input", "converted_amount": None,
+                "reason": "amount, three-letter currency codes, and a positive finite rate are required"}
+    if source == "unknown":
+        return {**common, "status": "unavailable", "converted_amount": None,
+                "reason": "no fresh FX quote is available; no fixed rate was assumed"}
+    converted = value * fx_rate
+    if not math.isfinite(converted):
+        return {**common, "status": "unavailable", "converted_amount": None,
+                "reason": "converted amount exceeds the supported numeric range"}
+    return {**common, "status": "ready", "converted_amount": round(converted, 2), "reason": ""}
 
 
 def position_size_calculator(spec: SymbolSpec, equity: float, risk_pct: float,

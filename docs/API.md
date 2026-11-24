@@ -156,7 +156,7 @@ CORS เป็น **allowlist**: ค่าเริ่มต้นไม่ใ�
 | POST | `/api/market/publish/mt5` | dedicated `Bearer` market-publisher token; Demo quotes/rates/specs only, separate from EA bridge poll/command queue |
 | GET | `/api/market/specs?symbol=` | digits/point/tick/contract/lot step/stops level |
 | GET | `/api/market/calculator?symbol=&points=&lot=` | read-only estimate ในสกุลบัญชี; คืน `gross_profit`, `net_profit` หลัง commission, `spread_cost`, `net_after_known_costs`, แหล่ง market/spec/FX และ `valuation_valid`; ไม่คืนยอดเงินเมื่อสเปกหรือ FX ยังไม่ครบ; swap/slippage ไม่รวม |
-| GET | `/api/analysis/{symbol}` | snapshot เต็ม (trend, structure, zones, indicators, regime) |
+| GET | `/api/analysis/{symbol}?fresh=true` | snapshot เต็ม (trend, structure, zones, indicators, regime); indicators expose `atr14_valid` so a display fallback cannot be mistaken for ATR computed from closed bars |
 | GET | `/api/analysis/{symbol}/zones` | supports/resistances พร้อม evidence |
 
 ### TradingView AI Agent Lens (shadow-only, V4 feature branch)
@@ -210,7 +210,10 @@ H080 reload ใช้ approval ของ payload และ DB ร่วมกั
 | GET | `/api/risk/settings` | limits + targets + stops + full_auto requirements |
 | PUT | `/api/risk/settings` | `{limits:{...}}` patch (audit ทุกครั้ง); `full_auto_enabled` เปลี่ยนได้โดย admin เท่านั้น และปิดแล้วจะกลับ Manual หาก Full Auto กำลังเลือกอยู่ |
 | POST | `/api/risk/kill-switch` \| `DELETE` | เปิด/ปิดด้วยมือ |
-| GET | `/api/risk/calculator?symbol=&points=&lot=` | ใช้ math core เดียวกับ market calculator; read-only และคืน provenance สเปก/FX |
+| GET | `/api/risk/calculator?symbol=&points=&lot=` | read-only shared math core; `tool` รองรับ Risk/Reward, drawdown, break-even, trading costs, point/tick, P/L, Auto SL/TP preview, MT5 margin, stateless 100-point preview, scenario, growth, FX, and active-account `trade_review_whatif` (`trade_ticket`, optional `whatif_entry`, `whatif_stop_loss`, `whatif_take_profit`, `whatif_lot`). Tool 16 verifies broker ID and active account ownership and returns actual trade evidence separately from non-executable what-if estimates. No tool calls `order_check`, `order_send`, modify or close; real Demo margin/history acceptance remains NOT TESTED |
+| GET | `/api/risk/calculator/scenarios` | รายการสมมติฐานตัวเลขของ workspace/tenant/user ปัจจุบันเท่านั้น |
+| POST | `/api/risk/calculator/scenarios` | `{name,tool,inputs}` บันทึกเฉพาะ numeric manual inputs สำหรับ `scenario` หรือ `capital_growth` ใน `kv` เดิม; ไม่เก็บยอดบัญชีหรือข้อมูล broker |
+| DELETE | `/api/risk/calculator/scenarios/{scenario_id}` | ลบเฉพาะ scenario ใน namespace ของผู้ใช้ปัจจุบัน |
 
 ## Brokers & backtest
 

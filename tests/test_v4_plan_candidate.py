@@ -181,6 +181,80 @@ def test_atr_structure_candidate_rejects_missing_closed_m5_structure():
     assert "structure_missing" in result.blocker_codes
 
 
+@pytest.mark.parametrize(("direction", "entry", "kind", "swing", "expected"), [
+    (Direction.up, 2000.0, "low", 1998.0, 220),
+    (Direction.down, 2000.0, "high", 2002.0, 220),
+])
+def test_manual_structure_stop_mode_reuses_confirmed_swing_and_atr_buffer(
+        direction, entry, kind, swing, expected):
+    result = PLANNER.build(PlanInputs(
+        direction=direction, entry=entry, spec=SPEC,
+        atr_points=100.0, equity=10_000.0, risk_pct=0.5,
+        spread_points=1.0, supports=[], resistances=[],
+        swings=[{"kind": kind, "price": swing, "idx": 95}],
+        sl_policy="structure", sl_structure_buffer_atr=0.2,
+        swing_lookback_bars=10, m5_bar_count=100,
+        sl_min_points=10, sl_max_points=1000,
+        target_mode="fixed", fixed_points=[500, 750, 1000],
+        min_points=500, max_points=1000, min_rr_net=0.1,
+        respect_zones=False, closes_pct=[100, 0, 0],
+    ))
+    assert result.plan is not None, result.blockers
+    assert result.plan.sl_points == pytest.approx(expected)
+
+
+def test_manual_atr_stop_mode_uses_volatility_floor_and_rejects_max_overflow():
+    base = {
+        "direction": Direction.up, "entry": 2000.0, "spec": SPEC,
+        "atr_points": 100.0, "equity": 10_000.0, "risk_pct": 0.5,
+        "spread_points": 1.0, "supports": [], "resistances": [], "swings": [],
+        "sl_policy": "atr", "sl_atr_multiplier": 1.5,
+        "sl_min_points": 10, "sl_max_points": 1000,
+        "target_mode": "fixed", "fixed_points": [500, 750, 1000],
+        "min_points": 500, "max_points": 1000, "min_rr_net": 0.1,
+        "respect_zones": False, "closes_pct": [100, 0, 0],
+    }
+    assert PLANNER.build(PlanInputs(**base)).plan.sl_points == pytest.approx(150)
+    blocked = PLANNER.build(PlanInputs(**{**base, "sl_max_points": 100}))
+    assert blocked.plan is None
+    assert "stop_distance_max" in blocked.blocker_codes
+
+
+@pytest.mark.parametrize(("direction", "expected_sl"), [
+    (Direction.up, 1999.0),
+    (Direction.down, 2001.0),
+])
+def test_manual_fixed_stop_mode_preserves_user_distance(direction, expected_sl):
+    result = PLANNER.build(PlanInputs(
+        direction=direction, entry=2000.0, spec=SPEC,
+        atr_points=100.0, equity=10_000.0, risk_pct=0.5,
+        spread_points=1.0, supports=[], resistances=[], swings=[],
+        sl_policy="fixed", fixed_sl_points=100,
+        sl_min_points=10, sl_max_points=1000,
+        target_mode="fixed", fixed_points=[500, 750, 1000],
+        min_points=500, max_points=1000, min_rr_net=0.1,
+        respect_zones=False, closes_pct=[100, 0, 0],
+    ))
+    assert result.plan is not None, result.blockers
+    assert result.plan.sl == pytest.approx(expected_sl)
+    assert result.plan.sl_points == pytest.approx(100)
+
+
+def test_manual_fixed_stop_below_volatility_floor_is_rejected():
+    result = PLANNER.build(PlanInputs(
+        direction=Direction.up, entry=2000.0, spec=SPEC,
+        atr_points=100.0, equity=10_000.0, risk_pct=0.5,
+        spread_points=1.0, supports=[], resistances=[], swings=[],
+        sl_policy="fixed", fixed_sl_points=50,
+        sl_min_points=10, sl_max_points=1000,
+        target_mode="fixed", fixed_points=[500, 750, 1000],
+        min_points=500, max_points=1000, min_rr_net=0.1,
+        respect_zones=False, closes_pct=[100, 0, 0],
+    ))
+    assert result.plan is None
+    assert "stop_distance_min" in result.blocker_codes
+
+
 def test_zone_buffer_is_converted_from_points_to_price():
     zone = Zone(id="R1", kind=ZoneKind.resistance, low=2004.5, high=2005.1,
                 mid=2004.8, strength=0.9, quality=ZoneQuality.high,

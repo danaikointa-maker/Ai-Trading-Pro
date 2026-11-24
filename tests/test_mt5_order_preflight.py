@@ -1,4 +1,5 @@
 """MT5 order preflight tests use a fake terminal; no broker command is sent."""
+import time
 from types import SimpleNamespace
 from unittest.mock import Mock
 
@@ -66,6 +67,40 @@ def test_order_check_and_account_currency_margin_pass_before_single_send(preflig
     api.order_send.assert_called_once()
     method_names = [call[0] for call in api.method_calls]
     assert method_names.index("order_check") < method_names.index("order_send")
+
+
+def test_read_only_margin_estimate_uses_broker_calculation_without_order_actions(preflight_terminal):
+    broker, api, _ = preflight_terminal
+    api.account_info.return_value.leverage = 100
+    api.symbol_info.return_value = SimpleNamespace(visible=True)
+    api.symbol_info_tick.return_value = SimpleNamespace(
+        bid=1999.9, ask=2000.0, time=time.time())
+
+    result = broker.calculate_margin("BUY", "XAUUSD", 0.1)
+
+    assert result["status"] == "sufficient"
+    assert result["required_margin"] == 100
+    assert result["projected_free_margin"] == 900
+    assert result["leverage"] == 100
+    api.order_calc_margin.assert_called_once_with(0, "XAUUSD", 0.1, 2000.0)
+    api.order_check.assert_not_called()
+    api.order_send.assert_not_called()
+
+
+def test_read_only_margin_estimate_rejects_stale_quote_and_illegal_volume(preflight_terminal):
+    broker, api, _ = preflight_terminal
+    api.account_info.return_value.leverage = 100
+    api.symbol_info.return_value = SimpleNamespace(visible=True)
+    api.symbol_info_tick.return_value = SimpleNamespace(
+        bid=1999.9, ask=2000.0, time=time.time() - 60)
+
+    with pytest.raises(mt5_live.BrokerError, match="stale"):
+        broker.calculate_margin("BUY", "XAUUSD", 0.1, max_quote_age_seconds=30)
+    api.order_calc_margin.assert_not_called()
+    with pytest.raises(mt5_live.BrokerError, match="legal volume"):
+        broker.calculate_margin("BUY", "XAUUSD", 0.105)
+    api.order_calc_margin.assert_not_called()
+    api.order_send.assert_not_called()
 
 
 @pytest.mark.parametrize("check", [
