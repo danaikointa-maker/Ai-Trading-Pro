@@ -118,10 +118,14 @@ def _metric(values: list[float]) -> dict[str, float | int | None]:
     if not values:
         return {"samples": 0, "mean_net_points": None, "median_net_points": None,
                 "positive_net_pct": None}
+    scale = max(abs(value) for value in values)
+    scaled_values = [value / scale for value in values] if scale else values
+    mean = scale * (math.fsum(scaled_values) / len(values)) if scale else 0.0
+    median = float(pd.Series(scaled_values).median()) * scale if scale else 0.0
     return {
         "samples": len(values),
-        "mean_net_points": round(sum(values) / len(values), 4),
-        "median_net_points": round(float(pd.Series(values).median()), 4),
+        "mean_net_points": round(mean, 4),
+        "median_net_points": round(median, 4),
         "positive_net_pct": round(sum(value > 0 for value in values) / len(values) * 100, 2),
     }
 

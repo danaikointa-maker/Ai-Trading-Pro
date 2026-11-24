@@ -7,6 +7,7 @@ from packages.shared_schemas.models import SymbolSpec
 from services.strategy_engine.tradingview_shadow import (
     ShadowCostAssumptions,
     ShadowNo7Decision,
+    _metric,
     replay_tradingview_shadow,
 )
 
@@ -154,6 +155,10 @@ def test_replay_rejects_overflowed_cost_and_outcome_calculations():
     bars.loc[bars["t"] == 1200, "c"] = 1e308
     with pytest.raises(ValueError, match="replay outcome must remain finite"):
         _replay(bars=bars)
+
+
+def test_metrics_keep_mean_finite_when_finite_samples_would_overflow_sum():
+    assert _metric([1e308, 1e308])["mean_net_points"] == 1e308
 
 
 def test_replay_rejects_duplicate_or_nonchronological_bar_timestamps():
