@@ -128,6 +128,15 @@ def latest_lens(symbol: str, timeframe: str, limit: int = 20,
         "ORDER BY bar_close_utc DESC LIMIT ?", (symbol, stored_timeframe, limit))
     evidence_rows = [json.loads(row["payload"]) for row in rows]
     no7_timeframe = _canonical_no7_timeframe(timeframe)
+    bar_times = sorted({int(item["bar_close_utc"]) for item in evidence_rows})
+    signals_by_time: dict[int, list[dict]] = {}
+    if bar_times:
+        placeholders = ",".join("?" for _ in bar_times)
+        signal_rows = runtime.db.query(
+            f"SELECT t, payload FROM signals WHERE symbol=? AND t IN ({placeholders})",
+            (symbol, *bar_times))
+        for candidate in signal_rows:
+            signals_by_time.setdefault(int(candidate["t"]), []).append(candidate)
     for evidence in evidence_rows:
         age = int(time.time()) - int(evidence["bar_close_utc"])
         max_age = _max_age_seconds(evidence["timeframe"])
@@ -136,11 +145,8 @@ def latest_lens(symbol: str, timeframe: str, limit: int = 20,
             "age_seconds": age,
             "max_age_seconds": max_age,
         }
-        candidates = runtime.db.query(
-            "SELECT payload FROM signals WHERE symbol=? AND t=?",
-            (symbol, evidence["bar_close_utc"]))
         signal = None
-        for candidate in candidates:
+        for candidate in signals_by_time.get(int(evidence["bar_close_utc"]), []):
             if not candidate["payload"]:
                 continue
             try:

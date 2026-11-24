@@ -169,6 +169,39 @@ def test_latest_shadow_view_requires_authenticated_user(client):
     assert response.status_code == 401
 
 
+def test_latest_shadow_view_batches_no7_signal_lookup(client, runtime, auth, monkeypatch):
+    """A full 100-row shadow view uses a bounded number of signal queries."""
+    from integrations.tradingview.normalizer import normalize_lens_packet
+
+    now = datetime.now(timezone.utc)
+    for offset in range(5):
+        packet = _packet()
+        packet["timeframe"] = "5"
+        packet["time"] = (now - timedelta(minutes=5 * offset)).isoformat()
+        evidence = normalize_lens_packet(packet, mapped_symbol="XAUUSD")
+        runtime.db.store_tradingview_evidence(evidence.model_dump(mode="json"))
+
+    original_query = runtime.db.query
+    signal_reads = 0
+
+    def count_signal_reads(sql, params=()):
+        nonlocal signal_reads
+        if "FROM signals WHERE symbol=? AND t IN (" in sql:
+            signal_reads += 1
+        return original_query(sql, params)
+
+    monkeypatch.setattr(runtime.db, "query", count_signal_reads)
+    response = client.get(
+        "/api/integrations/tradingview/ai-agent-lens/latest",
+        params={"symbol": "XAUUSD", "timeframe": "M5", "limit": 100},
+        headers=auth,
+    )
+
+    assert response.status_code == 200, response.text
+    assert len(response.json()["evidence"]) >= 5
+    assert signal_reads == 1
+
+
 @pytest.mark.parametrize("role", ["viewer", "trader"])
 def test_latest_shadow_view_is_readable_for_viewer_and_trader_without_side_effects(
         client, runtime, auth, role):
