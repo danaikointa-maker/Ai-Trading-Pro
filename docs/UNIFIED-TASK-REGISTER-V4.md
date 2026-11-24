@@ -194,7 +194,7 @@ Status definitions: EXISTS_CODE = seen in repository but not live certified; NEE
 
 - Added `test_sqlite_store_is_shared_across_worker_processes`: four independent Python worker processes spent against one temporary SQLite bucket; exactly 40 of 100 attempts were allowed, proving the configured SQLite store enforces one host-wide budget across processes.
 - `tests/test_ratelimit.py`: **17 passed**, one existing Starlette/httpx deprecation warning; Ruff E9/F/I passed for the changed test file. This proves the store implementation, not VM100 deployment configuration or production load.
-- `config/app.yaml` still defaults to `ratelimit.store=memory`, which multiplies limits across workers. Any multi-worker host must explicitly select SQLite (same host) or Redis (cross-host), then verify `/api/system/health → ratelimit` reports the shared backend. VM100's active app config and worker count remain NOT TESTED; no config/service was changed.
+- `config/app.yaml` still defaults to `ratelimit.store=memory`, which multiplies limits across workers. The isolated VM100 V4 staging health on 18082 also reports `requested=memory`, `shared=false`, and the same warning. Any multi-worker host must explicitly select SQLite (same host) or Redis (cross-host), then verify `/api/system/health → ratelimit` reports the shared backend. VM100 staging worker count remains NOT TESTED; no config/service was changed.
 
 ## Anti-duplication ledger
 - Do NOT let TradingView/Lens/LLM/webhook create executable signals, alter MT5 canonical prices/specs, approve risk, toggle Auto, or call execution. Use U14?U18 as the only TradingView queue; do not add a parallel plan/backlog.
