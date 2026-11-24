@@ -39,6 +39,7 @@
         <button v-if="result && (tool !== 'size' || positionSize)" type="button" class="btn py-1.5" @click="copyResult">Copy result</button>
         <button v-if="result && (tool !== 'size' || positionSize)" type="button" class="btn py-1.5" @click="downloadResult('json')">JSON</button>
         <button v-if="result && (tool !== 'size' || positionSize)" type="button" class="btn py-1.5" @click="downloadResult('csv')">CSV</button>
+        <button v-if="result && (tool !== 'size' || positionSize)" type="button" class="btn py-1.5" title="พิมพ์หรือบันทึกเป็น PDF จากหน้าต่างเบราว์เซอร์" @click="printResult">PDF</button>
       </div>
     </div>
     <section v-if="learningVisible" class="border-b border-ink-700 bg-ink-900/50 px-4 py-3" aria-label="Calculator learning center">
@@ -421,7 +422,7 @@ import { computed, onBeforeUnmount, ref, watch } from 'vue'
 import { api } from '../lib/api'
 import { projectAtrVolatility, projectSupportResistance } from '../lib/calculatorAnalysis'
 import { fmt, money } from '../lib/format'
-import { calculatorCsv, calculatorJson } from '../lib/calculatorExport'
+import { calculatorCsv, calculatorJson, calculatorPrintDocument } from '../lib/calculatorExport'
 import { lotPrecision } from '../lib/lotPrecision'
 import { state } from '../lib/store'
 
@@ -651,6 +652,30 @@ function downloadResult(format) {
   anchor.click()
   anchor.remove()
   setTimeout(() => URL.revokeObjectURL(url), 0)
+}
+
+function printResult() {
+  const payload = copyPayload.value
+  if (!payload) return
+  error.value = ''
+  try {
+    const printWindow = window.open('', '_blank', 'popup,width=900,height=700')
+    if (!printWindow) {
+      error.value = 'เบราว์เซอร์บล็อกหน้าต่างพิมพ์ กรุณาอนุญาต pop-up แล้วลองใหม่'
+      return
+    }
+    printWindow.opener = null
+    printWindow.document.open()
+    printWindow.document.write(calculatorPrintDocument({
+      ...payload,
+      exported_at: new Date().toISOString(),
+    }))
+    printWindow.document.close()
+    printWindow.focus()
+    printWindow.print()
+  } catch {
+    error.value = 'เปิดหน้าต่างพิมพ์ไม่ได้ กรุณาลองอีกครั้งจาก browser'
+  }
 }
 
 function accountMoney(value) {
