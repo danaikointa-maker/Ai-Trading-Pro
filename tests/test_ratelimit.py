@@ -169,6 +169,37 @@ def test_sqlite_store_is_shared_between_limiter_instances(tmp_path):
     assert worker_a.check("user:x", "default")[0] is False
 
 
+def test_sqlite_store_retries_transient_wal_startup_lock(tmp_path, monkeypatch):
+    import sqlite3
+
+    from services.api_gateway import ratelimit
+
+    class ContendedConnection:
+        def __init__(self):
+            self.wal_attempts = 0
+
+        def execute(self, statement):
+            if statement == "PRAGMA journal_mode=WAL":
+                self.wal_attempts += 1
+                if self.wal_attempts == 1:
+                    raise sqlite3.OperationalError("database is locked")
+            return self
+
+        def close(self):
+            pass
+
+    connection = ContendedConnection()
+    monkeypatch.setattr(ratelimit.sqlite3, "connect", lambda *args, **kwargs: connection)
+    sleeps = []
+    monkeypatch.setattr(ratelimit.time, "sleep", sleeps.append)
+
+    store = ratelimit.SqliteBucketStore(tmp_path / "startup.sqlite3")
+    store.close()
+
+    assert connection.wal_attempts == 2
+    assert sleeps == [0.05]
+
+
 def test_sqlite_store_is_shared_across_worker_processes(tmp_path):
     """Four independent workers must spend one host-wide SQLite budget."""
     path = tmp_path / "ratelimit-workers.sqlite3"
