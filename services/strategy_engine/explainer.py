@@ -44,7 +44,11 @@ class TradeExplainer:
                 "strategy": signal.strategy,
                 "regime": signal.regime,
                 "reasons": signal.reasons[:8],
-                "blockers": signal.blockers[:8],
+                # Raw blocker prose may contain an account-derived cash budget.
+                # This route has no selected-account ownership proof, so expose
+                # stable reason codes (or one generic marker) instead.
+                "blockers": (signal.blocker_codes[:8] if signal.blocker_codes else
+                             (["details_unavailable"] if signal.blockers else [])),
                 "components": [{"name": c.label, "score": c.score, "max": c.max_score, "detail": c.detail}
                                for c in signal.components],
                 "conditions": signal.explanation.get("conditions"),
@@ -57,11 +61,10 @@ class TradeExplainer:
                 facts["plan"] = {
                     "entry": p.entry, "sl": p.sl, "sl_points": p.sl_points,
                     "tp_ladder": [{"level": t.level, "points": t.points, "price": t.price,
-                                   "close_pct": t.close_pct, "lot": t.volume, "feasible": t.feasible}
+                                   "close_pct": t.close_pct, "feasible": t.feasible}
                                   for t in p.partials],
-                    "lot": p.lot, "risk_usd": p.risk_amount, "risk_pct": p.risk_pct,
                     "rr_gross": p.reward_risk, "rr_net": p.reward_risk_net,
-                    "costs_points": p.estimated_cost, "expected_value_usd": p.expected_value,
+                    "costs_points": p.estimated_cost,
                 }
         if snapshot:
             facts["trend"] = [{"tf": t.timeframe, "direction": t.direction.value, "strength": t.strength}
@@ -229,7 +232,10 @@ class TradeExplainer:
                     "bullets": [], "citations": []}
 
         if "why" in q and ("not" in q or "ไม่" in q):
-            bullets = [f"Blocker: {b}" for b in signal.blockers[:5]] or \
+            safe_codes = signal.blocker_codes[:5]
+            bullets = [f"เงื่อนไขที่ยังไม่ผ่าน: {code}" for code in safe_codes] or \
+                      (["มีเงื่อนไขที่ยังไม่ผ่าน; รายละเอียดเชิงบัญชีไม่แสดงในคำอธิบายที่ยังไม่ผูกบัญชี"]
+                       if signal.blockers else []) or \
                       [f"Score {signal.score:.0f} is below the execution threshold."]
             answer = "ยังไม่เข้าเทรดเพราะเงื่อนไขเหล่านี้:" if signal.blockers else "ยังไม่เข้าเทรดเพราะคะแนนยังไม่ผ่านเกณฑ์"
         elif signal.action in (SignalAction.buy, SignalAction.sell):
@@ -237,10 +243,10 @@ class TradeExplainer:
             bullets = [f"{c.label}: {c.score:.0f}/{c.max_score:.0f} — {c.detail}" for c in signal.components]
             if plan:
                 bullets.append(
-                    f"Lot {plan.lot} จากความเสี่ยง {plan.risk_pct:.2f}% ของทุน "
-                    f"(${plan.risk_amount:.2f}) และ SL {plan.sl_points:.0f} points")
+                    f"แผนมี SL {plan.sl_points:.0f} points; ไม่แสดง lot หรือวงเงินเสี่ยง "
+                    "เพราะยังไม่ได้ยืนยันขอบเขตบัญชีของผู้ใช้")
                 bullets.append(
-                    f"TP ladder {', '.join(f'{t.points:.0f}' for t in plan.tp_points)} points, "
+                    f"TP ladder {', '.join(f'{points:.0f}' for points in plan.tp_points)} points, "
                     f"R:R สุทธิ {plan.reward_risk_net:.2f} หลังหัก spread/commission")
                 bullets.append(
                     f"โอกาสถึง TP ก่อน SL ≈ {plan.p_tp_before_sl:.0%} "
@@ -249,7 +255,9 @@ class TradeExplainer:
                       f"ด้วยคะแนน {signal.score:.0f}/100 ใน regime {signal.regime}")
         else:
             bullets = [f"{c.label}: {c.score:.0f}/{c.max_score:.0f} — {c.detail}" for c in signal.components]
-            bullets += [f"Blocker: {b}" for b in signal.blockers[:4]]
+            bullets += [f"เงื่อนไขที่ยังไม่ผ่าน: {code}" for code in signal.blocker_codes[:4]]
+            if signal.blockers and not signal.blocker_codes:
+                bullets.append("มีเงื่อนไขที่ยังไม่ผ่าน; รายละเอียดเชิงบัญชีไม่แสดงในคำอธิบายที่ยังไม่ผูกบัญชี")
             answer = f"สถานะ {signal.action.value} (คะแนน {signal.score:.0f}/100) — ยังไม่มี setup ที่ผ่านทุกเงื่อนไข"
 
         if forecast and forecast.horizons:

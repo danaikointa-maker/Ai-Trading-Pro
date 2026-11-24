@@ -13,6 +13,9 @@
   และไม่มี execution capability. Structure/signal/chair ต้องได้ทั้ง quote สดและ `data_quality.ok=true`;
   quote สดอย่างเดียวไม่รับรองคุณภาพของ analysis snapshot. Independent security review และ
   account-boundary acceptance ยังไม่ผ่าน.
+- `/api/explain` ยังไม่มี selected-account authorization จึงซ่อน lot, risk amount/percent, expected value,
+  partial volume และข้อความ blocker ดิบจาก response/model context; แสดง stable blocker code แทน.
+  ระดับราคาและ RR ยังคงเป็น market-plan context ไม่ใช่การยืนยันว่าบัญชีผู้ใช้รับความเสี่ยงได้.
 - Explain ปฏิเสธคำขอที่มีเจตนาสั่งซื้อ/ขายก่อนส่งข้อความให้ local LLM. Local model ยังปิดเป็นค่าเริ่มต้น;
   officer cards เป็น deterministic source projection ไม่ใช่คำตอบ LLM แยกตามตัวละคร และไม่เปลี่ยน Auto.
 - การตรวจเจตนาสั่งงานเป็นตัวกรองข้อความแบบ deterministic ไม่ใช่ระบบ authorization; คำสั่งจริงยังต้องผ่าน

@@ -238,6 +238,9 @@ H080 reload ใช้ approval ของ payload และ DB ร่วมกั
 `facts.observability` (เมื่อ route อ่าน metadata ได้) มีเฉพาะ `feed_mode`, `quote_status`,
 `quote_source`, `display_basis` และ `server_utc_offset_seconds`; ป้ายที่ไม่รู้จักถูกแทนด้วย
 `unknown`/`unavailable`. ไม่มี account ID, credential, position หรือ command payload ในส่วนนี้.
+เนื่องจาก `/api/explain` ยังไม่มี selected-account authorization ข้อมูล plan ใน `facts` แสดงเฉพาะ
+ระดับราคา/ระยะ SL-TP และ reward/risk; ไม่ส่ง lot, risk amount/percent, expected value, partial volume
+หรือข้อความ blocker ดิบที่อาจเปิดเผยมูลค่าจากบัญชี runtime. ใช้ blocker code ที่ไม่ระบุจำนวนเงินแทน.
 คำถามที่ตรวจพบเจตนาสั่งซื้อ/ขายจะได้คำตอบปฏิเสธแบบ deterministic และไม่ถูกส่งให้ local LLM.
 Endpoint นี้เป็น read-only explanation; ไม่เรียก ExecutionGateway.
 

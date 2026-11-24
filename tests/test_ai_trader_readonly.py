@@ -2,8 +2,33 @@ import json
 from types import SimpleNamespace
 from unittest.mock import Mock
 
+from packages.shared_schemas.models import (
+    Direction,
+    PartialTarget,
+    Signal,
+    SignalAction,
+    SignalStatus,
+    TradePlan,
+)
 from services.api_gateway.routes.explain import _research_observability
 from services.strategy_engine.explainer import TradeExplainer
+
+
+def _account_sized_signal() -> Signal:
+    plan = TradePlan(
+        direction=Direction.up, entry=2000, sl=1990, tp1=2020, tp2=2040, tp3=2060,
+        sl_points=1000, tp_points=[2000, 4000, 6000], lot=0.3719,
+        risk_amount=98765.43, risk_pct=19.73, reward_risk=2.0, reward_risk_net=1.8,
+        estimated_cost=12, expected_value=54321.87,
+        partials=[PartialTarget(level=1, price=2020, points=2000, close_pct=33,
+                                volume=0.3719)],
+    )
+    return Signal(
+        id="scope-test", t=1, symbol="XAUUSD", timeframe="M5", broker_id="runtime",
+        action=SignalAction.buy, status=SignalStatus.valid, score=80, strategy="test",
+        regime="trend", plan=plan, blockers=["risk budget $98765.43 cannot fund account lot"],
+        blocker_codes=["risk_budget_min_lot"],
+    )
 
 
 def test_research_observability_is_small_and_marks_stale_source():
@@ -65,6 +90,26 @@ def test_fact_sheet_keeps_only_allowlisted_observability():
         "feed_mode": "simulate", "quote_status": "fresh", "quote_source": "broker",
         "display_basis": "utc", "server_utc_offset_seconds": 0,
     }
+
+
+def test_unscoped_explanation_hides_account_sizing_and_raw_risk_blockers():
+    signal = _account_sized_signal()
+    explainer = TradeExplainer(SimpleNamespace(enabled=False))
+    facts = explainer.fact_sheet(signal, None, None)
+    rendered_facts = json.dumps(facts, sort_keys=True)
+
+    assert facts["plan"]["entry"] == 2000
+    assert facts["plan"]["sl"] == 1990
+    assert facts["blockers"] == ["risk_budget_min_lot"]
+    for private_value in ("0.3719", "98765.43", "19.73", "54321.87", "cannot fund account lot"):
+        assert private_value not in rendered_facts
+
+    no_trade = signal.model_copy(update={"action": SignalAction.no_trade, "plan": None})
+    answer = explainer.deterministic_answer("why not buy?", no_trade, None, None)
+    rendered_answer = json.dumps(answer, sort_keys=True)
+    assert "risk_budget_min_lot" in rendered_answer
+    assert "98765.43" not in rendered_answer
+    assert "cannot fund account lot" not in rendered_answer
 
 
 def test_officer_team_reuses_allowlisted_facts_and_never_infers_risk():
@@ -146,6 +191,7 @@ def test_explain_endpoint_returns_audited_read_only_officer_team(client, auth, r
         "feed_mode": "simulate", "quote_status": "fresh", "quote_source": "broker",
         "display_basis": "utc", "server_utc_offset_seconds": 0,
     })
+    runtime.signals["XAUUSD"] = _account_sized_signal()
     submit = Mock()
     modify = Mock()
     close = Mock()
@@ -161,6 +207,9 @@ def test_explain_endpoint_returns_audited_read_only_officer_team(client, auth, r
     assert body["officer_team"]["account_specific"] is False
     assert body["officer_team"]["execution_capability"] is False
     assert len(body["officer_team"]["officers"]) == 5
+    serialized_body = json.dumps(body, sort_keys=True)
+    for private_value in ("0.3719", "98765.43", "19.73", "54321.87", "cannot fund account lot"):
+        assert private_value not in serialized_body
     submit.assert_not_called()
     modify.assert_not_called()
     close.assert_not_called()
