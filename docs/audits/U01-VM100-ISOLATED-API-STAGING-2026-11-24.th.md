@@ -42,3 +42,7 @@ The focused 18-file U01–U05 suite was rerun against this base: **350 passed**,
 ## Status
 
 U01 remains **PARTIAL / BLOCKED**. Route parity is verified on a separate loopback-only staging artifact. Fresh, identity-matched MT5 Demo quotes and publisher acceptance remain outstanding, as do U05 persistence/restart parity prerequisites before any whole-checkout replacement.
+
+## Publisher URL example correction (2026-11-24)
+
+The generic `.env.example` and RUNBOOK previously pointed to local port `18181`, the tunnel used for the older VM100 staging service on `18081`. The isolated API documented here listens on VM100 loopback `18082`; its corresponding PC loopback forward is `18182`. Updated the example and RUNBOOK to match `ssh -N -L 18182:127.0.0.1:18082 danai@192.168.1.10`. This fixes setup guidance only: no tunnel, credential, publisher process, MT5 session, or quote was changed or started. U01 remains blocked pending a fresh identity-matched Demo quote.
