@@ -61,7 +61,7 @@ import { computed, onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue'
 import { createChart } from 'lightweight-charts'
 import { api } from '../lib/api'
 import { positions, state } from '../lib/store'
-import { canApplyLiveQuote, clampBarSpacing, latestLogicalRange, matchesChartSymbol, needsCandleReloadOnRecovery, nextBarCount, nextBarSpacing, shortMarkerSpan, validPriceRange, validTimeRange } from '../lib/chartViewport'
+import { canApplyLiveQuote, clampBarSpacing, followLatestTimeRange, fullPlotLineSpan, latestLogicalRange, matchesChartSymbol, needsCandleReloadOnRecovery, nextBarCount, nextBarSpacing, priceLineDash, shortMarkerSpan, shouldResetPriceScaleForViewChange, validPriceRange, validTimeRange } from '../lib/chartViewport'
 
 const container = ref(null)
 const segmentCanvas = ref(null)
@@ -74,7 +74,6 @@ let candleSeries = null
 let ema20 = null
 let ema50 = null
 let ema200 = null
-let priceLines = []
 let shortMarkers = []
 let lastCandle = null
 let resizeObs = null
@@ -143,8 +142,7 @@ function goLatest() {
   const range = latestRange()
   if (!chart || !range) return
   autoScroll.value = true
-  chart.priceScale('right').applyOptions({ autoScale: true })
-  chart.timeScale().setVisibleLogicalRange(range)
+  followLatestTimeRange(chart, range)
   saveViewPrefs()
 }
 
@@ -173,6 +171,7 @@ function toggleShift() {
 function fitAll() {
   if (!chart || !bars.value) return
   autoScroll.value = false
+  chart.priceScale('right').applyOptions({ autoScale: true })
   chart.timeScale().fitContent()
   syncViewport()
 }
@@ -373,6 +372,11 @@ async function load({ silent = false } = {}) {
     try {
       storedRange = JSON.parse(localStorage.getItem(`${VIEW_PREFS_KEY}:${nextViewKey}`) || 'null')
     } catch { /* ignore invalid saved viewport */ }
+    if (shouldResetPriceScaleForViewChange(previousViewKey, nextViewKey)) {
+      // A different feed/symbol/timeframe has a different price domain. Reset
+      // only on that intentional context change, never on a score refresh.
+      chart.priceScale('right').applyOptions({ autoScale: true })
+    }
     if (autoScroll.value) {
       goLatest()
     } else if (previousViewKey === nextViewKey && validTimeRange(previousRange, firstTime, lastTime)) {
@@ -403,28 +407,15 @@ function refreshAfterRecovery() {
   }, 150)
 }
 
-function clearLines() {
-  priceLines.forEach(({ series, line }) => {
-    try {
-      series.removePriceLine(line)
-    } catch {
-      /* noop */
-    }
-  })
-  priceLines = []
-}
-
 function addLine(price, color, title, style = 2, width = 1) {
   if (!price || !Number.isFinite(Number(price))) return
-  const line = candleSeries.createPriceLine({
-    price: Number(price),
-    color,
-    lineWidth: width,
-    lineStyle: style,
-    axisLabelVisible: true,
-    title,
+  // Analysis levels belong on the presentation canvas, not the candle
+  // series. PriceLines participate in price-scale range calculation, so a
+  // changing score could stretch the candles to include a distant zone.
+  shortMarkers.push({
+    price: Number(price), color, label: title, fullWidth: true,
+    lineStyle: style, lineWidth: width,
   })
-  priceLines.push({ series: candleSeries, line })
 }
 
 function drawShortMarkers() {
@@ -442,16 +433,18 @@ function drawShortMarkers() {
   if (!ctx) return
   ctx.setTransform(ratio, 0, 0, ratio, 0, 0)
   ctx.clearRect(0, 0, width, height)
-  const span = shortMarkerSpan(width)
-  if (!span) return
+  const markerSpan = shortMarkerSpan(width)
+  const plotSpan = fullPlotLineSpan(Math.min(width, chart.timeScale().width()))
   for (const marker of shortMarkers) {
+    const span = marker.fullWidth ? plotSpan : markerSpan
+    if (!span) continue
     const y = candleSeries.priceToCoordinate(marker.price)
     if (!Number.isFinite(y) || y < 1 || y > height - 1) continue
     ctx.save()
     ctx.strokeStyle = marker.color
     ctx.fillStyle = marker.color
-    ctx.lineWidth = marker.emphasis ? 2 : 1.5
-    ctx.setLineDash(marker.dashed ? [5, 3] : [])
+    ctx.lineWidth = marker.lineWidth || (marker.emphasis ? 2 : 1.5)
+    ctx.setLineDash(marker.fullWidth ? priceLineDash(marker.lineStyle) : (marker.dashed ? [5, 3] : []))
     ctx.beginPath()
     ctx.moveTo(span.left, y)
     ctx.lineTo(span.right, y)
@@ -460,9 +453,11 @@ function drawShortMarkers() {
     ctx.font = '10px ui-monospace, monospace'
     const label = `${marker.label} ${Number(marker.price).toFixed(priceDigits)}`
     const labelWidth = ctx.measureText(label).width + 8
-    const labelLeft = Math.max(span.left, span.right - labelWidth)
+    const labelLeft = marker.fullWidth
+      ? Math.max(span.left + 3, span.right - labelWidth - 3)
+      : Math.max(span.left, span.right - labelWidth)
     ctx.globalAlpha = 0.9
-    ctx.fillRect(labelLeft, y - 11, span.right - labelLeft, 12)
+    ctx.fillRect(labelLeft, y - 11, Math.min(labelWidth, span.right - labelLeft), 12)
     ctx.globalAlpha = 1
     ctx.fillStyle = '#071018'
     ctx.fillText(label, labelLeft + 4, y - 2)
@@ -472,7 +467,6 @@ function drawShortMarkers() {
 
 function drawOverlays() {
   if (!candleSeries) return
-  clearLines()
   shortMarkers = []
   const signal = state.live?.signal
   const analysis = state.live?.analysis

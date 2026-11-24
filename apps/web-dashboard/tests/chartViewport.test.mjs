@@ -4,11 +4,15 @@ import assert from 'node:assert/strict'
 import {
   canApplyLiveQuote,
   clampBarSpacing,
+  followLatestTimeRange,
+  fullPlotLineSpan,
   latestLogicalRange,
   matchesChartSymbol,
   needsCandleReloadOnRecovery,
   nextBarCount,
   nextBarSpacing,
+  priceLineDash,
+  shouldResetPriceScaleForViewChange,
   shortMarkerSpan,
   validPriceRange,
   validTimeRange,
@@ -28,6 +32,35 @@ test('latest range retains a bounded view and configurable right margin', () => 
   assert.deepEqual(latestLogicalRange(100, 40, 8), { from: 67, to: 107 })
   assert.equal(latestLogicalRange(0, 40), null)
   assert.equal(latestLogicalRange(100, 0).from, 97)
+})
+
+test('following the latest candle changes only the horizontal viewport', () => {
+  const applied = []
+  const chart = {
+    timeScale: () => ({ setVisibleLogicalRange: range => applied.push(range) }),
+    priceScale: () => { throw new Error('latest-bar follow must preserve vertical zoom') },
+  }
+  const range = { from: 20, to: 60 }
+  assert.equal(followLatestTimeRange(chart, range), true)
+  assert.deepEqual(applied, [range])
+  assert.equal(followLatestTimeRange(chart, null), false)
+})
+
+test('price autoscale resets only when feed, symbol, or timeframe changes', () => {
+  assert.equal(shouldResetPriceScaleForViewChange('', 'mt5:XAUUSD:M5'), false)
+  assert.equal(shouldResetPriceScaleForViewChange('mt5:XAUUSD:M5', 'mt5:XAUUSD:M5'), false)
+  assert.equal(shouldResetPriceScaleForViewChange('mt5:XAUUSD:M5', 'mt5:XAUUSD:M15'), true)
+  assert.equal(shouldResetPriceScaleForViewChange('mt5:XAUUSD:M5', 'sim:XAUUSD:M5'), true)
+})
+
+test('analysis level canvas lines use the plot area and preserve line styles', () => {
+  assert.deepEqual(fullPlotLineSpan(640), { left: 0, right: 640 })
+  assert.equal(fullPlotLineSpan(0), null)
+  assert.deepEqual(priceLineDash(0), [])
+  assert.deepEqual(priceLineDash(1), [2, 3])
+  assert.deepEqual(priceLineDash(2), [5, 3])
+  assert.deepEqual(priceLineDash(3), [10, 4, 3, 4])
+  assert.deepEqual(priceLineDash(4), [1, 4])
 })
 
 test('appending a new candle advances the latest-bar count', () => {

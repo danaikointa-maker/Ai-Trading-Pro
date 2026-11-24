@@ -35,6 +35,34 @@ Continue the existing U09 Dashboard implementation in `PriceChart.vue`; do not c
 
 U09 remains **PARTIAL** until the outstanding runtime acceptance is recorded.
 
+## Score-update chart scale stability (2026-11-24)
+
+### Gap
+
+- Every live score/version update redraws the analysis overlays. The old implementation recreated Support/Resistance, Fibonacci and market-structure levels as `PriceLine`s attached to the candle series. Those lines share the candle price scale, so a newly reported distant level can stretch the visible candle range.
+- Latest-bar follow also reapplied `autoScale: true`; a new bar or chart resize could therefore undo a user's manually selected vertical zoom.
+
+### Changes
+
+- Draw analysis levels on the existing non-interactive overlay canvas, using the chart's current price-to-coordinate mapping. The overlay cannot contribute prices to chart auto-scaling; full-width lines, labels and line styles remain visible.
+- Make latest-bar follow update only the horizontal time range. The explicit **Fit All** action remains the user-controlled path that restores automatic price scaling.
+- Reset automatic price scaling only when the selected feed/symbol/timeframe changes; a same-view score refresh or reconnect keeps the user's chosen scale.
+- Added focused helper tests for horizontal-only follow, plot-width bounds and the supported line styles.
+
+### Verification
+
+- `npm run test:chart-viewport`: **12 passed, 0 failed**.
+- `npm run build`: **passed**, Vite 8.3.8, 666 modules transformed.
+- `git diff --check`: **passed**.
+- No MT5 account, order, Auto setting, broker, Cloudflare tunnel, VM service or runtime was changed.
+
+### Acceptance still outstanding
+
+- Authenticated visual review of manual vertical zoom during score updates and chart resize: **NOT TESTED**.
+- Live MT5 publisher stale-to-fresh recovery and missed-bar reconciliation: **NOT TESTED**.
+
+U09 remains **PARTIAL** until desktop/mobile visual and live-feed acceptance evidence is collected.
+
 ## Base consolidation (2026-11-24)
 
 - U08 PR #71 merged into the V4 planning branch as `fd17eee`. U09 was rebased onto the current `plan/unified-development-v4` base after that merge; its diff now contains six U09 files and no duplicate calculator files.

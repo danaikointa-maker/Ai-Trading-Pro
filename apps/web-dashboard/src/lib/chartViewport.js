@@ -20,6 +20,34 @@ export function latestLogicalRange(count, visibleBars, rightGap = 0) {
   return { from: to - width, to }
 }
 
+// Latest-bar following is a horizontal navigation action. Keep it separate
+// from price-scale autoscaling so ticks, overlays, and container resizes do
+// not undo a user's vertical zoom.
+export function followLatestTimeRange(chart, range) {
+  if (!range || typeof chart?.timeScale !== 'function') return false
+  const timeScale = chart.timeScale()
+  if (typeof timeScale?.setVisibleLogicalRange !== 'function') return false
+  timeScale.setVisibleLogicalRange(range)
+  return true
+}
+
+export function shouldResetPriceScaleForViewChange(previousViewKey, nextViewKey) {
+  return Boolean(previousViewKey && nextViewKey && previousViewKey !== nextViewKey)
+}
+
+export function fullPlotLineSpan(width) {
+  if (!Number.isFinite(width) || width < 1) return null
+  return { left: 0, right: width }
+}
+
+export function priceLineDash(style) {
+  if (style === 0) return []
+  if (style === 1) return [2, 3]
+  if (style === 3) return [10, 4, 3, 4]
+  if (style === 4) return [1, 4]
+  return [5, 3]
+}
+
 export function nextBarCount(currentCount) {
   const count = Number(currentCount)
   return (Number.isFinite(count) ? Math.max(0, Math.trunc(count)) : 0) + 1
