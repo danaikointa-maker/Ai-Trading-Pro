@@ -30,8 +30,8 @@ from packages.strategy_rules.retracement import confirmed_fibonacci_band
 from packages.strategy_rules.stochastic_readings import three_tf_stochastic
 from packages.strategy_rules.trend import alignment_score, read_trend
 from packages.strategy_rules.zones import ZoneEngineConfig, build_zones
-from services.market_data.service import MarketDataService
 from services.market_data.news import NewsService
+from services.market_data.service import MarketDataService
 
 
 def _round_step(price: float) -> float:
@@ -45,6 +45,23 @@ def _round_step(price: float) -> float:
     if price >= 1:
         return 0.05
     return 0.005
+
+
+def closed_atr_value(raw_value: Any, fallback_price: float) -> tuple[float, bool]:
+    """Keep the legacy display fallback while exposing whether closed-bar ATR exists."""
+    try:
+        value = float(raw_value)
+        valid = bool(np.isfinite(value) and value > 0)
+    except (TypeError, ValueError, OverflowError):
+        value, valid = 0.0, False
+    if valid:
+        return value, True
+    try:
+        price = float(fallback_price)
+    except (TypeError, ValueError, OverflowError):
+        price = 0.0
+    fallback = price * 0.001 if np.isfinite(price) and price > 0 else 0.0
+    return fallback, False
 
 
 @dataclass
@@ -144,7 +161,7 @@ class AnalysisService:
             pivots = {k: round(v, spec.digits) for k, v in ta.pivot_points(
                 float(prev["h"]), float(prev["l"]), float(prev["c"])).items()}
 
-        atr_value = float(base["atr"].iloc[-1]) if np.isfinite(base["atr"].iloc[-1]) else price * 0.001
+        atr_value, atr14_valid = closed_atr_value(base["atr"].iloc[-1], price)
         vwap = strip_nan(base["vwap"].iloc[-1], price)
         ema50 = strip_nan(base["ema50"].iloc[-1], price)
         ema200 = strip_nan(base["ema200"].iloc[-1], price)
@@ -167,6 +184,7 @@ class AnalysisService:
             rsi14=round(strip_nan(last["rsi14"], 50.0), 2),
             atr14=round(atr_value, spec.digits),
             atr_points=round(atr_value / spec.point, 1),
+            atr14_valid=atr14_valid,
             adx14=round(strip_nan(last["adx14"]), 2),
             macd=round(strip_nan(last["macd"]), 3),
             macd_signal=round(strip_nan(last["macd_signal"]), 3),

@@ -1,6 +1,6 @@
 # Trading Calculator & Learning Center — 16-tool catalog (V4)
 
-Status: **partial implementation**. Tools 1, 2, 4, 5, 6, 7, and 12 have read-only/sandbox UI and shared backend math. The other tools, full exports, and lessons are not implemented. No calculator may call an order, modify, or close endpoint.
+Status: **partial implementation**. Tools 1, 2, 4, 5, 6, 7, 10, 11, and 12 have read-only/sandbox UI and shared backend math or existing analysis snapshots. The other tools, full exports, and lessons are not implemented. No calculator may call an order, modify, or close endpoint.
 
 ## Shared rules
 
@@ -23,8 +23,8 @@ Status: **partial implementation**. Tools 1, 2, 4, 5, 6, 7, and 12 have read-onl
 | 7 | Price & costs — Spread / Commission / Swap | Side, price, lot, holding nights, triple-swap nights | Typical spread, round-turn commission, signed swap estimate, and total holding cost | Implemented as a manual sandbox using `SymbolSpec` spread/commission/swap mode; triple-swap night count is user-supplied using the broker's schedule. Rate comparison with a real broker and slippage remain NOT TESTED |
 | 8 | Price & costs — Margin / Leverage | Side, symbol, lot, price, leverage, equity/free margin | Estimated required margin and projected free margin; never label margin as maximum loss | Prefer MT5 `order_calc_margin`; unavailable or stale values are marked NOT AVAILABLE, not guessed |
 | 9 | AI & strategy — 100-Point Confirmation | Side, reference Bid/Ask, current price, broker point, closed M1/M5 context | Threshold `100 × point`, directional progress, and confirmation blockers | Reuse the existing confirmation state/read-only readiness; reaching 100 points alone is not order approval |
-| 10 | AI & strategy — ATR & Volatility | Closed bars, period, symbol price/point | ATR in price and points, ATR/price %, volatility label with timeframe | Reuse analysis snapshot; only closed bars and source timestamp are accepted |
-| 11 | AI & strategy — Support & Resistance | Analysis snapshot, timeframe, zones and quality | Nearby support/resistance distances and zone quality/confluence | Reuse existing zone builder/snapshot; do not recompute or promote candidate zones to confirmed |
+| 10 | AI & strategy — ATR & Volatility | Closed bars, period, symbol price/point | ATR in price and points, ATR/price %, volatility label with timeframe | Implemented as a read-only view of the fresh AnalysisService snapshot; M5 ATR requires the new `atr14_valid` flag, source quote must pass freshness, and close UTC is derived from the closed candle open time |
+| 11 | AI & strategy — Support & Resistance | Analysis snapshot, timeframe, zones and quality | Nearby support/resistance distances and zone quality/confluence | Implemented as a view of existing AnalysisService zones; candidates keep their candidate label, nearest zones are sorted by ATR distance, and stale data suppresses the list |
 | 12 | AI & strategy — Break-Even Win Rate | Gross reward, gross loss, estimated same-currency cost per trade | Required win rate for zero expectancy: `net loss / (net win + net loss) × 100` | Implemented as a manual sandbox; cost is applied to both winning and losing outcomes; non-positive net reward is unavailable; not a forecast |
 | 13 | Planning & education — Trading Scenario Simulator | Manual/demo-only entry, SL/TP, outcomes, costs, sample size | Hypothetical outcome distribution and expectancy; no broker actions | Reuse sandbox/backtest primitives where appropriate; never label a scenario as historical backtest |
 | 14 | Planning & education — Capital Growth Simulator | Starting capital, risk/return assumptions, number of periods | Compounded illustrative range using explicit user assumptions | New sandbox calculation; show drawdown and losing-streak examples, not a return prediction |
@@ -49,4 +49,4 @@ Status: **partial implementation**. Tools 1, 2, 4, 5, 6, 7, and 12 have read-onl
 
 ## Implemented slice boundary
 
-`GET /api/risk/calculator` is extended; no new database/table or account-balance read is added. The UI has a source label, reset, JSON copy, formulas/help text and manual-sandbox inputs. PDF export, save-scenario features, learning lessons, account-owned live values, MT5 margin calculation and tools 3, 8–11, 13–16 remain queued separately under U08 and subject to the shared read-only boundary above.
+`GET /api/risk/calculator` is extended; the ATR and zone views reuse the existing authenticated `/api/analysis/{symbol}?fresh=true` route. No new database/table or account-balance read is added. The UI labels these as read-only analysis (not manual sandbox). PDF export, save-scenario features, learning lessons, account-owned live values, MT5 margin calculation and tools 3, 8, 9, 13–16 remain queued separately under U08 and subject to the shared read-only boundary above.

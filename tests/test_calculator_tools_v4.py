@@ -136,3 +136,22 @@ def test_calculator_api_is_read_only_and_returns_manual_provenance(client, auth,
     submit.assert_not_called()
     modify.assert_not_called()
     close.assert_not_called()
+
+
+def test_calculator_analysis_source_reuses_fresh_closed_bar_snapshot(client, auth, runtime, monkeypatch):
+    from unittest.mock import Mock
+
+    submit, modify, close = Mock(), Mock(), Mock()
+    monkeypatch.setattr(runtime.gateway, "submit", submit)
+    monkeypatch.setattr(runtime.gateway, "modify", modify)
+    monkeypatch.setattr(runtime.gateway, "close", close)
+    response = client.get("/api/analysis/XAUUSD?fresh=true", headers=auth)
+    assert response.status_code == 200
+    snapshot = response.json()["snapshot"]
+    assert snapshot["timeframe"] == "M5"
+    assert isinstance(snapshot["server_time"], int)
+    assert isinstance(snapshot["data_quality"].get("ok"), bool)
+    assert isinstance(snapshot["indicators"].get("atr14_valid"), bool)
+    submit.assert_not_called()
+    modify.assert_not_called()
+    close.assert_not_called()

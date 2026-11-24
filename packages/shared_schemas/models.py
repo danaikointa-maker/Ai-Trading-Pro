@@ -438,6 +438,7 @@ class IndicatorSnapshot(BaseModel):
     rsi14: float = 50.0
     atr14: float = 0.0
     atr_points: float = 0.0
+    atr14_valid: bool = False
     adx14: float = 0.0
     macd: float = 0.0
     macd_signal: float = 0.0

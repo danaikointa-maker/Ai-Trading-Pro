@@ -8,7 +8,8 @@
     "build": "vite build",
     "preview": "vite preview --host 0.0.0.0",
     "smoke:trades-review": "node scripts/trade-review-smoke.mjs",
-    "test:chart-viewport": "node --test tests/chartViewport.test.mjs"
+    "test:chart-viewport": "node --test tests/chartViewport.test.mjs",
+    "test:calculator-analysis": "node --test tests/calculatorAnalysis.test.mjs"
   },
   "dependencies": {
     "echarts": "^6.1.0",

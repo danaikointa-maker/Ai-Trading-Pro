@@ -15,7 +15,7 @@
 
 ## Trading Calculator (U08)
 
-- Implemented read-only/manual-sandbox tools: Position Size, Risk/Reward, Drawdown Recovery, Break-even Win Rate, Point/Tick conversion, and Profit/Loss. Price math reuses broker/declared `SymbolSpec` and existing `points_calculator`; manual equity inputs do not read or write account state.
+- Implemented read-only tools/views: Position Size, Risk/Reward, Drawdown Recovery, Break-even Win Rate, Spread/Commission/Swap, Point/Tick conversion, Profit/Loss, ATR/Volatility and Support/Resistance. Price math reuses broker/declared `SymbolSpec`, `points_calculator` and the authenticated AnalysisService snapshot; manual equity inputs do not read or write account state.
 - `GET /api/risk/calculator` is not an MT5 order preflight and does not call order/modify/close. Monetary outputs are suppressed if symbol/currency valuation is unknown. Risk/Reward and Profit/Loss use typical spread and commission and exclude swap/slippage. The Trading Costs sandbox also uses the selected spec's declared swap mode/rate, with triple-swap night count entered manually; it does not certify actual broker rollover or include slippage.
 - Remaining calculator tools, owned account data/history, MT5 margin results, save/export, learning content, and authenticated desktop/mobile visual acceptance remain NOT TESTED or NOT IMPLEMENTED. See the V4 16-tool catalog.
 

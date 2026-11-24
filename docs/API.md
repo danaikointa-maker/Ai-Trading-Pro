@@ -156,7 +156,7 @@ CORS เป็น **allowlist**: ค่าเริ่มต้นไม่ใ�
 | POST | `/api/market/publish/mt5` | dedicated `Bearer` market-publisher token; Demo quotes/rates/specs only, separate from EA bridge poll/command queue |
 | GET | `/api/market/specs?symbol=` | digits/point/tick/contract/lot step/stops level |
 | GET | `/api/market/calculator?symbol=&points=&lot=` | read-only estimate ในสกุลบัญชี; คืน `gross_profit`, `net_profit` หลัง commission, `spread_cost`, `net_after_known_costs`, แหล่ง market/spec/FX และ `valuation_valid`; ไม่คืนยอดเงินเมื่อสเปกหรือ FX ยังไม่ครบ; swap/slippage ไม่รวม |
-| GET | `/api/analysis/{symbol}` | snapshot เต็ม (trend, structure, zones, indicators, regime) |
+| GET | `/api/analysis/{symbol}?fresh=true` | snapshot เต็ม (trend, structure, zones, indicators, regime); indicators expose `atr14_valid` so a display fallback cannot be mistaken for ATR computed from closed bars |
 | GET | `/api/analysis/{symbol}/zones` | supports/resistances พร้อม evidence |
 
 ### TradingView AI Agent Lens (shadow-only, V4 feature branch)

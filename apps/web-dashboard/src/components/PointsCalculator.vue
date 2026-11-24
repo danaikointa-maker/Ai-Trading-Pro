@@ -2,8 +2,8 @@
   <section class="panel">
     <div class="panel-head">
       <div>
-        <div class="panel-title">Points → Profit Calculator</div>
-        <div class="panel-sub">{{ sourceLabel }} · {{ spec?.account_currency || '—' }} · FX {{ spec?.rate_source || '—' }}</div>
+        <div class="panel-title">Trading Calculators</div>
+        <div class="panel-sub">{{ sourceLabel }} · {{ sourceContext }}</div>
       </div>
       <span class="chip" :class="spec?.source === 'broker' ? 'chip-up' : 'chip-gold'" :title="`Feed: ${provenance?.market_feed || '—'}`">
         {{ spec?.symbol || state.symbol }} · {{ spec?.source || '—' }}
@@ -13,6 +13,8 @@
       <label class="flex min-w-0 items-center gap-2">
         <span class="label shrink-0">เครื่องมือคำนวณ</span>
         <select v-model="tool" class="input min-w-0 py-1.5" aria-label="Calculator tool">
+          <option value="atr_volatility">ATR &amp; volatility</option>
+          <option value="support_resistance">Support / resistance</option>
           <option value="points">Points → P&amp;L</option>
           <option value="size">Position size</option>
           <option value="risk_reward">Risk / Reward</option>
@@ -24,7 +26,7 @@
         </select>
       </label>
       <div class="flex items-center gap-1.5">
-        <span class="chip chip-gold">MANUAL · SANDBOX</span>
+        <span class="chip" :class="isAnalysisTool ? 'chip-up' : 'chip-gold'">{{ isAnalysisTool ? 'READ ONLY · ANALYSIS' : 'MANUAL · SANDBOX' }}</span>
         <button type="button" class="btn py-1.5" @click="resetInputs">Reset</button>
         <button v-if="result && (tool !== 'size' || positionSize)" type="button" class="btn py-1.5" @click="copyResult">Copy result</button>
       </div>
@@ -147,6 +149,44 @@
       <p v-else-if="result" class="text-xs text-amber-300">{{ result.reason }}</p>
       <p class="text-[10px] leading-relaxed text-muted">ใช้ swap mode/rate จาก {{ result?.spec_source || spec?.source || 'สเปกสัญลักษณ์' }}; จำนวนคืน 3 เท่าต้องกรอกตามวัน rollover ของโบรกเกอร์เอง. ถ้าสเปกยังไม่ยืนยัน ให้ถือเป็นตัวอย่างเท่านั้น</p>
     </div>
+    <div v-else-if="tool === 'atr_volatility'" class="space-y-3 px-4 py-3">
+      <div v-if="result?.status === 'ready'" class="grid gap-2 rounded-lg border border-ink-700 bg-ink-900/60 p-3 sm:grid-cols-2 lg:grid-cols-4">
+        <div class="kv"><dt>ATR 14 · {{ result.timeframe }}</dt><dd>{{ fmt(result.atr14, spec?.digits ?? 2) }} {{ spec?.profit_currency || '' }}</dd></div>
+        <div class="kv"><dt>ATR points</dt><dd>{{ fmt(result.atr_points, 1) }}</dd></div>
+        <div class="kv"><dt>ATR ต่อราคา</dt><dd>{{ fmt(result.atr_percent, 3) }}%</dd></div>
+        <div class="kv"><dt>Regime · ADX</dt><dd>{{ result.regime?.regime || '—' }} · {{ fmt(result.regime?.adx, 1) }}</dd></div>
+        <div class="kv"><dt>ATR percentile · M15</dt><dd>{{ fmt(Number(result.regime?.atr_percentile) * 100, 1) }}%</dd></div>
+        <div class="kv"><dt>Feed · spec</dt><dd>{{ result.feed }} · {{ result.spec_source }}</dd></div>
+        <div class="kv"><dt>อายุ quote</dt><dd>{{ result.quote_age_seconds ?? '—' }}s</dd></div>
+        <div class="kv"><dt>แท่ง M5 ปิด UTC</dt><dd class="text-[10px]">{{ result.closed_bar_close_utc }}</dd></div>
+      </div>
+      <p v-else-if="result" class="rounded-lg border border-amber-400/30 bg-amber-400/5 px-3 py-2 text-xs text-amber-200">{{ result.reason }} · ไม่แสดงค่า ATR เมื่อข้อมูลตลาดไม่สดหรือแท่งปิดไม่ครบ</p>
+      <p class="text-[10px] leading-relaxed text-muted">อ่านจาก Analysis Snapshot เดิม; ATR ใช้แท่ง M5 ที่ปิดแล้ว ส่วน regime/ADX เป็นข้อมูล M15. เป็นข้อมูลวิเคราะห์ ไม่ใช่แผนหรือคำสั่งซื้อขาย</p>
+    </div>
+    <div v-else-if="tool === 'support_resistance'" class="space-y-3 px-4 py-3">
+      <div v-if="result?.status === 'ready'" class="grid gap-3 md:grid-cols-2">
+        <div class="rounded-lg border border-up/25 bg-up/5 p-3">
+          <h3 class="mb-2 text-xs font-semibold text-up">Support ใกล้ราคา · {{ fmt(result.price, spec?.digits ?? 2) }}</h3>
+          <p v-if="!result.supports.length" class="text-xs text-muted">ไม่พบ zone สำหรับแสดง</p>
+          <div v-for="zone in result.supports" :key="zone.id" class="mb-2 grid grid-cols-[1fr_auto] gap-2 border-b border-ink-700/70 pb-2 last:mb-0 last:border-0 last:pb-0">
+            <span class="text-xs">{{ fmt(zone.low, spec?.digits ?? 2) }}–{{ fmt(zone.high, spec?.digits ?? 2) }} · {{ zone.status }}</span>
+            <span class="text-right text-[10px] text-muted">{{ zone.quality }} · {{ fmt(zone.distance_atr, 2) }} ATR</span>
+          </div>
+        </div>
+        <div class="rounded-lg border border-down/25 bg-down/5 p-3">
+          <h3 class="mb-2 text-xs font-semibold text-down">Resistance</h3>
+          <p v-if="!result.resistances.length" class="text-xs text-muted">ไม่พบ zone สำหรับแสดง</p>
+          <div v-for="zone in result.resistances" :key="zone.id" class="mb-2 grid grid-cols-[1fr_auto] gap-2 border-b border-ink-700/70 pb-2 last:mb-0 last:border-0 last:pb-0">
+            <span class="text-xs">{{ fmt(zone.low, spec?.digits ?? 2) }}–{{ fmt(zone.high, spec?.digits ?? 2) }} · {{ zone.status }}</span>
+            <span class="text-right text-[10px] text-muted">{{ zone.quality }} · {{ fmt(zone.distance_atr, 2) }} ATR</span>
+          </div>
+        </div>
+        <div class="kv"><dt>Feed · timeframe</dt><dd>{{ result.feed }} · {{ result.timeframe }}</dd></div>
+        <div class="kv"><dt>แท่งปิด UTC</dt><dd class="text-[10px]">{{ result.closed_bar_close_utc }}</dd></div>
+      </div>
+      <p v-else-if="result" class="rounded-lg border border-amber-400/30 bg-amber-400/5 px-3 py-2 text-xs text-amber-200">{{ result.reason }} · ซ่อนโซนจนกว่าข้อมูลตลาดจะผ่าน freshness check</p>
+      <p class="text-[10px] leading-relaxed text-muted">แสดง zones จาก Analysis Service เดิม เรียงตามระยะ ATR และคงสถานะ candidate/confirmed กับ quality ไว้ครบ. ไม่คำนวณโซนซ้ำและไม่ใช่คำสั่ง</p>
+    </div>
     <div v-else-if="tool === 'point_tick'" class="space-y-3 px-4 py-3">
       <label class="block max-w-sm"><span class="label">ระยะราคา (price units)</span><input v-model.number="priceDelta" type="number" step="0.01" class="input mt-1 num" /></label>
       <div v-if="result?.status === 'ready'" class="grid gap-2 rounded-lg border border-ink-700 bg-ink-900/60 p-3 sm:grid-cols-3">
@@ -188,6 +228,7 @@
 <script setup>
 import { computed, ref, watch } from 'vue'
 import { api } from '../lib/api'
+import { projectAtrVolatility, projectSupportResistance } from '../lib/calculatorAnalysis'
 import { fmt } from '../lib/format'
 import { lotPrecision } from '../lib/lotPrecision'
 import { state } from '../lib/store'
@@ -220,7 +261,13 @@ const error = ref('')
 let requestId = 0
 
 const symbol = computed(() => state.symbol)
-const sourceLabel = computed(() => spec.value?.source === 'broker' ? 'Broker symbol spec' : 'Declared symbol spec')
+const isAnalysisTool = computed(() => ['atr_volatility', 'support_resistance'].includes(tool.value))
+const sourceLabel = computed(() => isAnalysisTool.value
+  ? `Analysis snapshot · ${spec.value?.source || '—'}`
+  : spec.value?.source === 'broker' ? 'Broker symbol spec' : 'Declared symbol spec')
+const sourceContext = computed(() => isAnalysisTool.value
+  ? `feed ${provenance.value?.market_feed || '—'}`
+  : `${spec.value?.account_currency || '—'} · FX ${spec.value?.rate_source || '—'}`)
 
 function accountMoney(value) {
   if (value === null || value === undefined || Number.isNaN(Number(value))) return '—'
@@ -234,6 +281,25 @@ async function load() {
   error.value = ''
   positionSize.value = null
   try {
+    if (isAnalysisTool.value) {
+      result.value = null
+      spec.value = null
+      provenance.value = null
+      const data = await api.get(`/api/analysis/${encodeURIComponent(symbol.value)}?fresh=true`)
+      if (activeRequest !== requestId) return
+      spec.value = data.snapshot?.spec || null
+      provenance.value = {
+        market_feed: data.snapshot?.data_quality?.feed,
+        spec_source: data.snapshot?.spec?.source,
+        bar_open_utc: data.snapshot?.server_time,
+      }
+      result.value = tool.value === 'atr_volatility'
+        ? projectAtrVolatility(data)
+        : projectSupportResistance(data)
+      copyPayload.value = { tool: tool.value, result: result.value,
+        source: provenance.value, symbol: spec.value?.symbol }
+      return
+    }
     const query = new URLSearchParams({
       symbol: symbol.value,
       points: String(tool.value === 'size' ? slPoints.value : points.value),
@@ -327,8 +393,8 @@ async function copyResult() {
   }
 }
 
-watch([symbol, points, lot, tool, equity, riskPct, slPoints, side, entry, stopLoss,
-  takeProfit, exitPrice, grossReward, grossLoss, estimatedCost, holdingNights,
-  tripleSwapNights, currentEquity, peakEquity,
-  priceDelta], load, { immediate: true })
+watch([symbol, tool], load, { immediate: true })
+watch([points, lot, equity, riskPct, slPoints, side, entry, stopLoss, takeProfit, exitPrice,
+  grossReward, grossLoss, estimatedCost, holdingNights, tripleSwapNights, currentEquity,
+  peakEquity, priceDelta], () => { if (!isAnalysisTool.value) load() })
 </script>
