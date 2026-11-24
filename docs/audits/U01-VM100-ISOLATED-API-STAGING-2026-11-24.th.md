@@ -43,6 +43,15 @@ The focused 18-file U01–U05 suite was rerun against this base: **350 passed**,
 
 U01 remains **PARTIAL / BLOCKED**. Route parity is verified on a separate loopback-only staging artifact. Fresh, identity-matched MT5 Demo quotes and publisher acceptance remain outstanding, as do U05 persistence/restart parity prerequisites before any whole-checkout replacement.
 
+## Windows-to-VM100 private tunnel recheck — 2026-11-24 21:46 ICT
+
+- From the Windows PC, SSH to `danai@192.168.1.10:22` succeeded. A loopback-only forward now maps PC `127.0.0.1:18182` to VM100 `127.0.0.1:18082`; it does not expose the API on the LAN or public Internet.
+- Through that forward, `GET /api/system/health` returned `status=ok`, `feed_mode=simulate`; OpenAPI lists `POST /api/market/publish/mt5`. The correct health path is `/api/system/health`; `/health` returns 404.
+- This proves private SSH transport and simulated staging reachability only. The PC MT5 terminal was not open, no publisher token or expected Demo identity was configured, and no quote/order/position request was sent.
+- The SSH forward is a temporary foreground session, not a persistent service. Rollback is to stop only this forwarding session after verifying local listener `127.0.0.1:18182`; do not stop VM100 ports 8000, 18081 or 18082.
+
+U01 remains **PARTIAL / BLOCKED** until an identity-matched, fresh MT5 Demo quote and rates/spec/freshness/reconnect receipts are obtained.
+
 ## Publisher URL example correction (2026-11-24)
 
 The generic `.env.example` and RUNBOOK previously pointed to local port `18181`, the tunnel used for the older VM100 staging service on `18081`. The isolated API documented here listens on VM100 loopback `18082`; its corresponding PC loopback forward is `18182`. Updated the example and RUNBOOK to match `ssh -N -L 18182:127.0.0.1:18082 danai@192.168.1.10`. This fixes setup guidance only: no tunnel, credential, publisher process, MT5 session, or quote was changed or started. U01 remains blocked pending a fresh identity-matched Demo quote.
