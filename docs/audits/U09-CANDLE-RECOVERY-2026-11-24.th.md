@@ -34,3 +34,9 @@ Continue the existing U09 Dashboard implementation in `PriceChart.vue`; do not c
 - Real Demo order behavior: **NOT TESTED / not in scope**; no order was sent.
 
 U09 remains **PARTIAL** until the outstanding runtime acceptance is recorded.
+
+## Base consolidation (2026-11-24)
+
+- U08 PR #71 merged into the V4 planning branch as `fd17eee`. U09 was rebased onto the current `plan/unified-development-v4` base after that merge; its diff now contains six U09 files and no duplicate calculator files.
+- Post-rebase local checks: chart viewport **9/9**, stale-quote API regression **1/1**, Vite build **666 modules**, Ruff E9/F/I, compileall and `git diff --check` passed. Hosted Gate after this rebase is pending.
+- Read-only browser inventory found Chrome open to its Settings page, and the browser access host was unavailable; no authenticated Trading Pro page was accessible. MT5 was not running. Authenticated desktop/mobile visual review and a real MT5 stale-to-fresh recovery therefore remain **NOT TESTED**. No UI control, account, tunnel, publisher, broker or order was changed.
