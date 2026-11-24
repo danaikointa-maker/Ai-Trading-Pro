@@ -392,22 +392,19 @@ def test_auto_sl_tp_calculator_fails_closed_on_stale_market_data(
     close.assert_not_called()
 
 
-def test_auto_sl_tp_calculator_rejects_invalid_manual_inputs(client, auth, runtime, monkeypatch):
-    from unittest.mock import Mock
+def test_auto_sl_tp_calculator_rejects_invalid_manual_inputs():
+    from services.api_gateway.routes.risk import calculator
 
-    snapshot = Mock()
-    monkeypatch.setattr(runtime.analysis, "snapshot", snapshot)
-    response = client.get(
-        "/api/risk/calculator?tool=auto_sl_tp&symbol=XAUUSD&entry=2000&side=BUY"
-        "&risk_pct=0.5&stop_mode=fixed",
-        headers=auth,
+    # Invoke the invalid-input branch directly: the session TestClient starts a
+    # background market worker which can independently call analysis.snapshot.
+    response = calculator(
+        tool="auto_sl_tp", symbol="XAUUSD", entry=2000, side="BUY",
+        risk_pct=0.5, stop_mode="fixed", runtime=object(), user=None,
     )
 
-    assert response.status_code == 200, response.text
-    result = response.json()["result"]
+    result = response["result"]
     assert result["status"] == "invalid_input"
     assert result["plan"] is None
-    snapshot.assert_not_called()
 
 
 def test_read_only_scenario_and_growth_tools_use_user_inputs(client, auth, runtime, monkeypatch):
