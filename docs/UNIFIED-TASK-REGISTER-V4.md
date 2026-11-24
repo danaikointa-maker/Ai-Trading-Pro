@@ -179,6 +179,11 @@ Status definitions: EXISTS_CODE = seen in repository but not live certified; NEE
 - Updated `.env.example` and the current publisher setup paragraph in `docs/RUNBOOK.md` to match the isolated VM100 staging artifact: PC loopback `18182` forwards to VM100 loopback `18082` via `ssh -N -L 18182:127.0.0.1:18082 danai@192.168.1.10`. Kept historical checks for the older `18181 → 18081` runtime intact and explicitly labeled them as historical.
 - `rg` confirms the active generic publisher URL example uses `18182`; `git diff --check` passes. No `.env`, tokens, MT5 session, SSH process, publisher, staging process, quote, account, or trading action was accessed or changed. U01 remains PARTIAL / BLOCKED pending identity-matched fresh Demo quote and rate/spec/freshness acceptance.
 
+## Latest field evidence — 2026-11-24 21:46 ICT
+
+- **U01:** PC SSH forwarding to isolated VM100 staging is verified: `127.0.0.1:18182 -> 192.168.1.10 / 127.0.0.1:18082`; health is `ok` in `simulate` mode, and OpenAPI lists the publisher route. No MT5 terminal, publisher token, identity-matched Demo quote, or trade command was present. U01 remains blocked on fresh Demo feed/identity evidence.
+- **U15:** `agent.youridea168.com` still responds `502` from Cloudflare with TLS verified; `cloudflared.service` is active, but VM100 has no listener on configured origin `:8080`. Do not repoint to Trading Pro ports; Access and dedicated Office API acceptance remain unverified.
+
 ## Anti-duplication ledger
 - Do NOT let TradingView/Lens/LLM/webhook create executable signals, alter MT5 canonical prices/specs, approve risk, toggle Auto, or call execution. Use U14?U18 as the only TradingView queue; do not add a parallel plan/backlog.
 - Do NOT create a second RiskEngine or PositionManager. Existing: `services/risk_engine/engine.py`, `manager.py`.
