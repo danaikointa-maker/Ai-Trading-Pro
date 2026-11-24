@@ -24,7 +24,7 @@ Continue the existing U09 Dashboard implementation in `PriceChart.vue`; do not c
 - `npm run build`: **passed**, Vite 8.3.8, 666 modules transformed.
 - GitHub Actions Gate **#185 passed** on code commit `b6a2369d9bbeb83c4a4e9bf702508bb9515d6dcc`; Draft PR [#72](https://github.com/danaikointa-maker/Ai-Trading-Pro/pull/72) targets the U08 feature branch while PR #71 remains open.
 - `git diff --check`: **passed**.
-- The documentation follow-up triggered Gate #186, which found a session-scoped simulated-feed race in the existing API stale-quote regression. The test now freezes the simulator tick around that assertion; the targeted regression passes locally (**1 passed**). Full workflow rerun is pending; no production code changed for this test stabilization.
+- Gate #186 found a session-scoped simulated-feed race in the existing API stale-quote regression. The test now freezes the simulator tick around that assertion; the targeted regression passed locally (**1 passed**). Full GitHub Actions Gate **#187 passed** on `de48308fe259ac8e07ca0738971541ea50c97059`. This test stabilization changed no production behavior.
 - No MT5 account, broker setting, Auto mode, order, or Cloudflare/VM configuration was changed.
 
 ## Acceptance still outstanding
