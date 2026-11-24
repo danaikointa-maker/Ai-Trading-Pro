@@ -13,6 +13,12 @@
 - การตรวจเจตนาสั่งงานเป็นตัวกรองข้อความแบบ deterministic ไม่ใช่ระบบ authorization; คำสั่งจริงยังต้องผ่าน
   API/RBAC, Risk Engine และ ExecutionGateway ที่มีอยู่. การทดสอบนี้ไม่ใช่ Demo หรือ broker acceptance.
 
+## Trading Calculator (U08)
+
+- Implemented read-only/manual-sandbox tools: Position Size, Risk/Reward, Drawdown Recovery, Point/Tick conversion, and Profit/Loss. Price math reuses broker/declared `SymbolSpec` and existing `points_calculator`; manual equity inputs do not read or write account state.
+- `GET /api/risk/calculator` is not an MT5 order preflight and does not call order/modify/close. Monetary outputs are suppressed if symbol/currency valuation is unknown. Cost estimates use typical spread and commission, and exclude swap/slippage except where a future tool explicitly models them.
+- Remaining calculator tools, owned account data/history, MT5 margin results, save/export, learning content, and authenticated desktop/mobile visual acceptance remain NOT TESTED or NOT IMPLEMENTED. See the V4 16-tool catalog.
+
 เอกสารนี้เขียนขึ้นเพื่อกันความเข้าใจผิดก่อนเอาเงินจริงเข้าไปเกี่ยวข้อง
 ทุกข้อคือสิ่งที่ **ยังไม่จริง** หรือ **ยังไม่ครบ** ใน V1 นี้
 

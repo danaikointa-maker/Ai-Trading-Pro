@@ -1,6 +1,6 @@
 # Trading Calculator & Learning Center — 16-tool catalog (V4)
 
-Status: **requirements/catalog only**. This document does not claim that all 16 tools, exports, or lessons are implemented. The calculators are read-only or sandbox simulations and must never call an order, modify, or close endpoint.
+Status: **partial implementation**. Tools 1, 2, 4, 5, and 6 have read-only/sandbox UI and shared backend math. The other tools, full exports, and lessons are not implemented. No calculator may call an order, modify, or close endpoint.
 
 ## Shared rules
 
@@ -15,11 +15,11 @@ Status: **requirements/catalog only**. This document does not claim that all 16 
 | # | Group / tool | Main inputs | Core result / calculation | Reuse and current evidence |
 |---:|---|---|---|---|
 | 1 | Capital & risk — Position Size / Lot | Equity, risk %, entry, SL, symbol spec, account currency | Maximum legal lot at or below the risk budget, using adverse P/L at SL and broker lot min/max/step | First read-only manual sandbox version reuses the shared calculator endpoint and `SymbolSpec`; known spread/commission are included and below-minimum budgets are rejected. MT5 account/spec comparison, entry-price constraints and remaining acceptance are NOT TESTED |
-| 2 | Capital & risk — Risk Reward | Entry, SL, TP, side, volume, spread, commission | Gross RR and net RR after known costs; show risk and reward in account currency | Reuse `TradePlan` and shared cost/math logic; verify rounding and cost provenance |
+| 2 | Capital & risk — Risk Reward | Entry, SL, TP, side, volume, spread, commission | Gross RR and net RR after known costs; show risk and reward in account currency | Implemented as a manual sandbox via `risk_reward_calculator`; uses symbol spec, typical spread and commission; slippage/swap excluded; not an order plan |
 | 3 | Capital & risk — Auto SL/TP | Entry, side, closed M5 ATR, confirmed swings/zones, broker constraints | Fixed / ATR / Structure / ATR+Structure candidates, lot-at-risk, RR and blocking reasons | Reuse `TradePlanner`; V4 ATR+structure profile is inactive and must remain so without migration approval |
-| 4 | Capital & risk — Drawdown & Recovery | Balance/equity/peak, loss %, recovery target | Drawdown from peak and gain needed to recover: `loss / remaining_equity` | Read-only Risk Engine view or manual sandbox; no simulator values mixed with a linked broker account |
-| 5 | Price & costs — Point / Pip / Tick Converter | Price delta, point, digits, tick size | Point distance, price delta, and legal tick count; a tick is not assumed to equal a point | Reuse `SymbolSpec.points_to_price` / `price_to_points`; add instrument edge cases |
-| 6 | Price & costs — Profit & Loss | Side, entry/exit, lot, symbol spec, account currency | Gross broker-aware P/L plus separately itemized known costs and net estimate | Reuse `points_calculator` / `SymbolSpec.pnl_in_account_currency`; unresolved FX suppresses money values |
+| 4 | Capital & risk — Drawdown & Recovery | Balance/equity/peak, loss %, recovery target | Drawdown from peak and gain needed to recover: `loss / remaining_equity` | Implemented as manual-only arithmetic; does not read simulator or broker equity |
+| 5 | Price & costs — Point / Pip / Tick Converter | Price delta, point, digits, tick size | Point distance, price delta, and legal tick count; a tick is not assumed to equal a point | Implemented using declared/broker `SymbolSpec`; fractional tick counts are explicitly marked unaligned |
+| 6 | Price & costs — Profit & Loss | Side, entry/exit, lot, symbol spec, account currency | Gross broker-aware P/L plus separately itemized known costs and net estimate | Implemented by reusing `points_calculator`; unresolved FX suppresses monetary output |
 | 7 | Price & costs — Spread / Commission / Swap | Bid/Ask, volume, commission, swap mode/rates, holding nights | Spread cost, commission, swap estimate, and total known cost by account currency | Reuse broker `SymbolSpec`; identify excluded slippage and unknown broker charges |
 | 8 | Price & costs — Margin / Leverage | Side, symbol, lot, price, leverage, equity/free margin | Estimated required margin and projected free margin; never label margin as maximum loss | Prefer MT5 `order_calc_margin`; unavailable or stale values are marked NOT AVAILABLE, not guessed |
 | 9 | AI & strategy — 100-Point Confirmation | Side, reference Bid/Ask, current price, broker point, closed M1/M5 context | Threshold `100 × point`, directional progress, and confirmation blockers | Reuse the existing confirmation state/read-only readiness; reaching 100 points alone is not order approval |
@@ -47,6 +47,6 @@ Status: **requirements/catalog only**. This document does not claim that all 16 
 - UI tests cover reset, copy/export totals, refresh while editing, Thai formatting, desktop/mobile, access control, and no order/modify calls.
 - Learning quizzes and scenario exercises are simulation-only and must never be presented as broker results.
 
-## Out of scope for this catalog slice
+## Implemented slice boundary
 
-No route, database table, live MT5 read, user-facing calculator UI, export/PDF feature, save-scenario feature, or learning lesson is added by this document. Implementation is queued separately under U08 and remains subject to the shared tests and read-only boundary above.
+`GET /api/risk/calculator` is extended; no new database/table or account-balance read is added. The UI has a source label, reset, JSON copy, formulas/help text and manual-sandbox inputs. PDF export, save-scenario features, learning lessons, account-owned live values, MT5 margin calculation and tools 3, 7–16 remain queued separately under U08 and subject to the shared read-only boundary above.

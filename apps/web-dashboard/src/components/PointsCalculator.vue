@@ -9,15 +9,23 @@
         {{ spec?.symbol || state.symbol }} · {{ spec?.source || '—' }}
       </span>
     </div>
-    <div class="flex gap-1 border-b border-ink-700 px-4 pt-3" role="tablist" aria-label="Calculator tools">
-      <button type="button" role="tab" :aria-selected="tool === 'points'" class="btn py-1.5"
-        :class="tool === 'points' ? 'border-gold-400/50 text-gold-300' : 'text-muted'" @click="tool = 'points'">
-        Points → P&amp;L
-      </button>
-      <button type="button" role="tab" :aria-selected="tool === 'size'" class="btn py-1.5"
-        :class="tool === 'size' ? 'border-gold-400/50 text-gold-300' : 'text-muted'" @click="tool = 'size'">
-        Position size
-      </button>
+    <div class="flex flex-wrap items-center justify-between gap-2 border-b border-ink-700 px-4 pt-3">
+      <label class="flex min-w-0 items-center gap-2">
+        <span class="label shrink-0">เครื่องมือคำนวณ</span>
+        <select v-model="tool" class="input min-w-0 py-1.5" aria-label="Calculator tool">
+          <option value="points">Points → P&amp;L</option>
+          <option value="size">Position size</option>
+          <option value="risk_reward">Risk / Reward</option>
+          <option value="drawdown">Drawdown recovery</option>
+          <option value="point_tick">Points / Ticks</option>
+          <option value="profit_loss">Profit &amp; Loss</option>
+        </select>
+      </label>
+      <div class="flex items-center gap-1.5">
+        <span class="chip chip-gold">MANUAL · SANDBOX</span>
+        <button type="button" class="btn py-1.5" @click="resetInputs">Reset</button>
+        <button v-if="result && (tool !== 'size' || positionSize)" type="button" class="btn py-1.5" @click="copyResult">Copy result</button>
+      </div>
     </div>
     <div v-if="tool === 'points'" class="grid gap-3 px-4 py-3 sm:grid-cols-2">
       <label class="block">
@@ -41,7 +49,7 @@
       <div class="kv"><dt>Spread @ typical</dt><dd class="text-down">{{ accountMoney(result?.spread_cost) }}</dd></div>
       <div class="kv"><dt>Net after known costs</dt><dd class="text-gold-400">{{ accountMoney(result?.net_after_known_costs) }}</dd></div>
     </div>
-    <div v-else class="space-y-3 px-4 py-3">
+    <div v-else-if="tool === 'size'" class="space-y-3 px-4 py-3">
       <div class="flex flex-wrap items-center justify-between gap-2">
         <span class="chip chip-gold">MANUAL · SANDBOX</span>
         <span class="text-[10px] text-muted">ไม่มีการอ่านหรือบันทึกยอดเงินในบัญชี</span>
@@ -74,10 +82,67 @@
         *คำนวณจากสเปก {{ spec?.source || 'ที่ยังไม่ทราบ' }} พร้อม spread ทั่วไปและ commission; ไม่รวม slippage/swap และไม่ใช่คำสั่งซื้อขาย
       </p>
     </div>
-    <p v-if="result && !result.valuation_valid" class="border-t border-amber-400/30 px-4 py-2 text-[10px] leading-relaxed text-amber-300">
+    <div v-else-if="tool === 'risk_reward'" class="space-y-3 px-4 py-3">
+      <div class="grid gap-3 sm:grid-cols-2 lg:grid-cols-5">
+        <label class="block"><span class="label">Side</span><select v-model="side" class="input mt-1"><option>BUY</option><option>SELL</option></select></label>
+        <label class="block"><span class="label">Entry</span><input v-model.number="entry" type="number" min="0.000001" step="0.01" class="input mt-1 num" /></label>
+        <label class="block"><span class="label">Stop Loss</span><input v-model.number="stopLoss" type="number" min="0.000001" step="0.01" class="input mt-1 num" /></label>
+        <label class="block"><span class="label">Take Profit</span><input v-model.number="takeProfit" type="number" min="0.000001" step="0.01" class="input mt-1 num" /></label>
+        <label class="block"><span class="label">Lot</span><input v-model.number="lot" type="number" min="0.000001" step="0.01" class="input mt-1 num" /></label>
+      </div>
+      <div v-if="result?.status === 'ready'" class="grid gap-2 rounded-lg border border-ink-700 bg-ink-900/60 p-3 sm:grid-cols-2 lg:grid-cols-4">
+        <div class="kv"><dt>Gross R:R</dt><dd>{{ fmt(result.rr_gross, 2) }}R</dd></div>
+        <div class="kv"><dt>Net estimate R:R</dt><dd class="text-gold-300">{{ fmt(result.rr_net, 2) }}R</dd></div>
+        <div class="kv"><dt>Risk estimate</dt><dd class="text-down">{{ accountMoney(result.risk_amount_estimate) }}</dd></div>
+        <div class="kv"><dt>Reward after known costs</dt><dd class="text-up">{{ accountMoney(result.reward_amount_net_estimate) }}</dd></div>
+      </div>
+      <p v-else-if="result" class="text-xs text-amber-300">{{ result.reason }}</p>
+      <p class="text-[10px] leading-relaxed text-muted">สูตร: ระยะ TP ÷ ระยะ SL; Net estimate รวม typical spread และ commission. เป็นค่าประเมิน ไม่ใช่สัญญาณเข้าเทรด</p>
+    </div>
+    <div v-else-if="tool === 'drawdown'" class="space-y-3 px-4 py-3">
+      <div class="grid gap-3 sm:grid-cols-2">
+        <label class="block"><span class="label">Equity ปัจจุบันแบบจำลอง ({{ spec?.account_currency || 'สกุลบัญชี' }})</span><input v-model.number="currentEquity" type="number" min="0.01" step="100" class="input mt-1 num" /></label>
+        <label class="block"><span class="label">Peak Equity แบบจำลอง ({{ spec?.account_currency || 'สกุลบัญชี' }})</span><input v-model.number="peakEquity" type="number" min="0.01" step="100" class="input mt-1 num" /></label>
+      </div>
+      <div v-if="result?.status === 'ready'" class="grid gap-2 rounded-lg border border-ink-700 bg-ink-900/60 p-3 sm:grid-cols-2 lg:grid-cols-4">
+        <div class="kv"><dt>Drawdown</dt><dd class="text-down">{{ fmt(result.drawdown_pct, 2) }}%</dd></div>
+        <div class="kv"><dt>Drawdown amount</dt><dd>{{ accountMoney(result.drawdown_amount) }}</dd></div>
+        <div class="kv"><dt>ต้องเพิ่มจาก equity ปัจจุบัน</dt><dd>{{ fmt(result.recovery_pct, 2) }}%</dd></div>
+        <div class="kv"><dt>จำนวนเงินเพื่อกลับ peak</dt><dd>{{ accountMoney(result.recovery_amount) }}</dd></div>
+      </div>
+      <p v-else-if="result" class="text-xs text-amber-300">{{ result.reason }}</p>
+      <p class="text-[10px] leading-relaxed text-muted">สูตร recovery = (Peak − Equity) ÷ Equity. กรอกค่าจำลองเอง ระบบไม่ดึงยอดจริงในบัญชี</p>
+    </div>
+    <div v-else-if="tool === 'point_tick'" class="space-y-3 px-4 py-3">
+      <label class="block max-w-sm"><span class="label">ระยะราคา (price units)</span><input v-model.number="priceDelta" type="number" step="0.01" class="input mt-1 num" /></label>
+      <div v-if="result?.status === 'ready'" class="grid gap-2 rounded-lg border border-ink-700 bg-ink-900/60 p-3 sm:grid-cols-3">
+        <div class="kv"><dt>Points</dt><dd>{{ fmt(result.points, 4) }}</dd></div>
+        <div class="kv"><dt>จำนวน Tick แบบคำนวณ</dt><dd>{{ fmt(result.exact_ticks, 4) }}</dd></div>
+        <div class="kv"><dt>จำนวน Tick ที่ถูกต้อง</dt><dd>{{ result.tick_aligned ? result.legal_tick_count : 'ไม่ตรง tick size' }}</dd></div>
+      </div>
+      <p v-else-if="result" class="text-xs text-amber-300">{{ result.reason }}</p>
+      <p class="text-[10px] leading-relaxed text-muted">Points = ระยะราคา ÷ Point; Ticks = ระยะราคา ÷ Tick Size. Point และ Tick อาจไม่เท่ากัน</p>
+    </div>
+    <div v-else-if="tool === 'profit_loss'" class="space-y-3 px-4 py-3">
+      <div class="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
+        <label class="block"><span class="label">Side</span><select v-model="side" class="input mt-1"><option>BUY</option><option>SELL</option></select></label>
+        <label class="block"><span class="label">Entry</span><input v-model.number="entry" type="number" min="0.000001" step="0.01" class="input mt-1 num" /></label>
+        <label class="block"><span class="label">Exit สมมติ</span><input v-model.number="exitPrice" type="number" min="0.000001" step="0.01" class="input mt-1 num" /></label>
+        <label class="block"><span class="label">Lot</span><input v-model.number="lot" type="number" min="0.000001" step="0.01" class="input mt-1 num" /></label>
+      </div>
+      <div v-if="result?.status === 'ready'" class="grid gap-2 rounded-lg border border-ink-700 bg-ink-900/60 p-3 sm:grid-cols-2 lg:grid-cols-4">
+        <div class="kv"><dt>ผลต่าง</dt><dd>{{ fmt(result.points, 1) }} points</dd></div>
+        <div class="kv"><dt>Gross P&amp;L</dt><dd :class="result.gross_profit >= 0 ? 'text-up' : 'text-down'">{{ accountMoney(result.gross_profit) }}</dd></div>
+        <div class="kv"><dt>Known costs</dt><dd class="text-down">{{ accountMoney((result.commission || 0) + (result.spread_cost || 0)) }}</dd></div>
+        <div class="kv"><dt>Net estimate</dt><dd :class="result.net_after_known_costs >= 0 ? 'text-up' : 'text-down'">{{ accountMoney(result.net_after_known_costs) }}</dd></div>
+      </div>
+      <p v-else-if="result" class="text-xs text-amber-300">{{ result.reason }}</p>
+      <p class="text-[10px] leading-relaxed text-muted">คำนวณแบบจำลองจากราคาที่กรอกและสเปกสัญลักษณ์ ไม่อ่าน position หรือยอดจริงจากบัญชี</p>
+    </div>
+    <p v-if="result?.valuation_valid === false" class="border-t border-amber-400/30 px-4 py-2 text-[10px] leading-relaxed text-amber-300">
       สเปกหรืออัตราแปลงสกุลเงินยังไม่ครบ จึงไม่แสดงยอดกำไร/ขาดทุนเป็นตัวเลข
     </p>
-    <p class="border-t border-ink-700/60 px-4 py-2 text-[10px] leading-relaxed text-muted">
+    <p v-if="tool === 'points' || tool === 'size'" class="border-t border-ink-700/60 px-4 py-2 text-[10px] leading-relaxed text-muted">
       ตัวอย่าง: XAUUSD ที่ point = 0.01 → 500 points = $5.00, 750 = $7.50, 1,000 = $10.00 ต่อราคา
       แต่ถ้า point = 0.001 ระยะ 500 points จะเหลือเพียง $0.50 ของการเคลื่อนไหวราคา
       Net after known costs หัก typical spread และ commission แล้ว; ยังไม่รวม swap และ slippage
@@ -99,10 +164,19 @@ const tool = ref('points')
 const equity = ref(null)
 const riskPct = ref(0.5)
 const slPoints = ref(400)
+const side = ref('BUY')
+const entry = ref(2000)
+const stopLoss = ref(1990)
+const takeProfit = ref(2020)
+const exitPrice = ref(2010)
+const currentEquity = ref(9000)
+const peakEquity = ref(10000)
+const priceDelta = ref(5)
 const spec = ref(null)
 const result = ref(null)
 const positionSize = ref(null)
 const provenance = ref(null)
+const copyPayload = ref(null)
 const error = ref('')
 let requestId = 0
 
@@ -130,10 +204,33 @@ async function load() {
     if (tool.value === 'size') {
       endpoint = '/api/risk/calculator'
       if (equity.value !== null && equity.value !== '' && Number.isFinite(Number(equity.value))) {
+        query.set('tool', 'size')
         query.set('balance', String(equity.value))
         query.set('risk_pct', String(riskPct.value))
         query.set('sl_points', String(slPoints.value))
       }
+    } else if (tool.value === 'risk_reward') {
+      endpoint = '/api/risk/calculator'
+      query.set('tool', 'risk_reward')
+      query.set('entry', String(entry.value))
+      query.set('stop_loss', String(stopLoss.value))
+      query.set('take_profit', String(takeProfit.value))
+      query.set('side', side.value)
+    } else if (tool.value === 'drawdown') {
+      endpoint = '/api/risk/calculator'
+      query.set('tool', 'drawdown')
+      query.set('current_equity', String(currentEquity.value))
+      query.set('peak_equity', String(peakEquity.value))
+    } else if (tool.value === 'point_tick') {
+      endpoint = '/api/risk/calculator'
+      query.set('tool', 'point_tick')
+      query.set('price_delta', String(priceDelta.value))
+    } else if (tool.value === 'profit_loss') {
+      endpoint = '/api/risk/calculator'
+      query.set('tool', 'profit_loss')
+      query.set('entry', String(entry.value))
+      query.set('exit_price', String(exitPrice.value))
+      query.set('side', side.value)
     }
     const data = await api.get(`${endpoint}?${query.toString()}`)
     if (activeRequest !== requestId) return
@@ -141,11 +238,38 @@ async function load() {
     spec.value = data.spec
     provenance.value = data.provenance || null
     positionSize.value = data.position_size || null
+    copyPayload.value = { tool: tool.value, result: positionSize.value || result.value,
+      source: provenance.value, symbol: spec.value?.symbol }
   } catch (err) {
     if (activeRequest !== requestId) return
     error.value = err.message
   }
 }
 
-watch([symbol, points, lot, tool, equity, riskPct, slPoints], load, { immediate: true })
+function resetInputs() {
+  points.value = 750
+  lot.value = 0.01
+  equity.value = null
+  riskPct.value = 0.5
+  slPoints.value = 400
+  side.value = 'BUY'
+  entry.value = 2000
+  stopLoss.value = 1990
+  takeProfit.value = 2020
+  exitPrice.value = 2010
+  currentEquity.value = 9000
+  peakEquity.value = 10000
+  priceDelta.value = 5
+}
+
+async function copyResult() {
+  try {
+    await navigator.clipboard.writeText(JSON.stringify(copyPayload.value, null, 2))
+  } catch {
+    error.value = 'คัดลอกไม่ได้ใน browser นี้'
+  }
+}
+
+watch([symbol, points, lot, tool, equity, riskPct, slPoints, side, entry, stopLoss,
+  takeProfit, exitPrice, currentEquity, peakEquity, priceDelta], load, { immediate: true })
 </script>

@@ -557,6 +557,159 @@ def points_calculator(spec: SymbolSpec, points: float, lot: float) -> dict[str, 
     }
 
 
+def risk_reward_calculator(spec: SymbolSpec, entry: float, stop_loss: float,
+                          take_profit: float, side: str, lot: float) -> dict[str, Any]:
+    """Read-only risk/reward estimate using the shared broker-aware P&L maths."""
+    try:
+        values = tuple(float(value) for value in (entry, stop_loss, take_profit, lot))
+    except (TypeError, ValueError, OverflowError):
+        values = (math.nan, math.nan, math.nan, math.nan)
+    entry_value, sl_value, tp_value, volume = values
+    direction = str(side or "").strip().upper()
+    common = {"entry": entry_value if math.isfinite(entry_value) else None,
+              "stop_loss": sl_value if math.isfinite(sl_value) else None,
+              "take_profit": tp_value if math.isfinite(tp_value) else None,
+              "side": direction if direction in {"BUY", "SELL"} else None,
+              "lot": volume if math.isfinite(volume) else None,
+              "currency": spec.account_currency, "source": "manual_sandbox",
+              "spec_source": spec.source, "rate_source": spec.rate_source}
+    if (any(isinstance(value, bool) for value in (entry, stop_loss, take_profit, lot))
+            or not all(math.isfinite(value) for value in values)
+            or min(entry_value, sl_value, tp_value, volume) <= 0
+            or direction not in {"BUY", "SELL"} or volume <= 0):
+        return {**common, "status": "invalid_input", "reason": "enter positive prices/lot and side BUY or SELL"}
+    if direction == "BUY":
+        risk_delta, reward_delta = entry_value - sl_value, tp_value - entry_value
+    else:
+        risk_delta, reward_delta = sl_value - entry_value, entry_value - tp_value
+    if risk_delta <= 0 or reward_delta <= 0:
+        return {**common, "status": "invalid_levels",
+                "reason": "BUY requires SL < entry < TP; SELL requires TP < entry < SL"}
+    if (spec.sizing_blocked or not math.isfinite(spec.commission_per_lot_round_turn)
+            or spec.commission_per_lot_round_turn < 0 or not math.isfinite(spec.spread_typical_points)
+            or spec.spread_typical_points < 0):
+        return {**common, "status": "unavailable", "risk_points": None,
+                "reward_points": None, "rr_gross": None, "rr_net": None,
+                "reason": "symbol specification, conversion rate, or costs are unavailable"}
+    risk_points, reward_points = risk_delta / spec.point, reward_delta / spec.point
+    risk_calc = points_calculator(spec, risk_points, volume)
+    reward_calc = points_calculator(spec, reward_points, volume)
+    if not risk_calc["valuation_valid"] or not reward_calc["valuation_valid"]:
+        return {**common, "status": "unavailable", "risk_points": risk_points,
+                "reward_points": reward_points, "rr_gross": None, "rr_net": None,
+                "reason": risk_calc["valuation_reason"]}
+    risk_cost = (abs(float(risk_calc["gross_profit"])) + float(risk_calc["commission"])
+                 + float(risk_calc["spread_cost"]))
+    reward_net = (float(reward_calc["gross_profit"]) - float(reward_calc["commission"])
+                  - float(reward_calc["spread_cost"]))
+    reward_gross = float(reward_calc["gross_profit"])
+    risk_gross = abs(float(risk_calc["gross_profit"]))
+    if risk_cost <= 0 or risk_gross <= 0:
+        return {**common, "status": "unavailable", "risk_points": risk_points,
+                "reward_points": reward_points, "rr_gross": None, "rr_net": None,
+                "reason": "risk amount cannot be valued from the supplied symbol specification"}
+    return {**common, "status": "ready", "risk_points": round(risk_points, 4),
+            "reward_points": round(reward_points, 4),
+            "risk_amount_estimate": round(risk_cost, 2),
+            "reward_amount_gross": round(reward_gross, 2),
+            "reward_amount_net_estimate": round(reward_net, 2),
+            "rr_gross": round(reward_gross / risk_gross, 4),
+            "rr_net": round(reward_net / risk_cost, 4),
+            "commission_estimate": round(float(reward_calc["commission"]), 2),
+            "spread_estimate": round(float(reward_calc["spread_cost"]), 2),
+            "reason": "estimate uses typical spread and round-turn commission; excludes slippage and swap"}
+
+
+def drawdown_recovery_calculator(current_equity: float, peak_equity: float) -> dict[str, Any]:
+    """Manual-only drawdown and recovery math; reads no runtime account state."""
+    try:
+        current, peak = float(current_equity), float(peak_equity)
+    except (TypeError, ValueError, OverflowError):
+        current, peak = math.nan, math.nan
+    common = {"current_equity": current if math.isfinite(current) else None,
+              "peak_equity": peak if math.isfinite(peak) else None,
+              "source": "manual_sandbox"}
+    if (any(isinstance(value, bool) for value in (current_equity, peak_equity))
+            or not math.isfinite(current) or not math.isfinite(peak) or current <= 0 or peak <= 0):
+        return {**common, "status": "invalid_input", "reason": "equity values must be finite and positive"}
+    if current >= peak:
+        return {**common, "status": "above_peak" if current > peak else "at_peak",
+                "drawdown_amount": 0.0, "drawdown_pct": 0.0,
+                "recovery_amount": 0.0, "recovery_pct": 0.0,
+                "reason": "no recovery gain is needed to reach the supplied peak"}
+    drawdown = peak - current
+    return {**common, "status": "ready", "drawdown_amount": round(drawdown, 2),
+            "drawdown_pct": round(drawdown / peak * 100.0, 4),
+            "recovery_amount": round(drawdown, 2),
+            "recovery_pct": round(drawdown / current * 100.0, 4),
+            "reason": "recovery percentage uses current equity as its denominator; this is not a forecast"}
+
+
+def point_tick_converter(spec: SymbolSpec, price_delta: float) -> dict[str, Any]:
+    """Convert a price move without assuming one broker point equals one tick."""
+    try:
+        delta = float(price_delta)
+    except (TypeError, ValueError, OverflowError):
+        delta = math.nan
+    common = {"price_delta": delta if math.isfinite(delta) else None,
+              "point_size": spec.point, "tick_size": spec.tick_size,
+              "source": "manual_sandbox", "spec_source": spec.source}
+    if isinstance(price_delta, bool) or not math.isfinite(delta):
+        return {**common, "status": "invalid_input", "reason": "price delta must be a finite number"}
+    if spec.point <= 0 or spec.tick_size <= 0 or not math.isfinite(spec.point + spec.tick_size):
+        return {**common, "status": "unavailable", "reason": "symbol point or tick specification is invalid"}
+    points = delta / spec.point
+    exact_ticks = delta / spec.tick_size
+    nearest_ticks = round(exact_ticks)
+    aligned = math.isclose(exact_ticks, nearest_ticks, rel_tol=0.0, abs_tol=1e-8)
+    return {**common, "status": "ready", "points": round(points, 8),
+            "exact_ticks": round(exact_ticks, 8),
+            "legal_tick_count": int(nearest_ticks) if aligned else None,
+            "tick_aligned": aligned,
+            "reason": "price delta is not an integer number of broker ticks" if not aligned else ""}
+
+
+def profit_loss_calculator(spec: SymbolSpec, entry: float, exit_price: float,
+                           side: str, lot: float) -> dict[str, Any]:
+    """Manual what-if P&L projection reusing points_calculator and broker specs."""
+    try:
+        entry_value, exit_value, volume = float(entry), float(exit_price), float(lot)
+    except (TypeError, ValueError, OverflowError):
+        entry_value, exit_value, volume = math.nan, math.nan, math.nan
+    direction = str(side or "").strip().upper()
+    common = {"entry": entry_value if math.isfinite(entry_value) else None,
+              "exit": exit_value if math.isfinite(exit_value) else None,
+              "side": direction if direction in {"BUY", "SELL"} else None,
+              "lot": volume if math.isfinite(volume) else None,
+              "source": "manual_sandbox", "currency": spec.account_currency,
+              "spec_source": spec.source, "rate_source": spec.rate_source}
+    if (any(isinstance(value, bool) for value in (entry, exit_price, lot))
+            or not all(math.isfinite(value) for value in (entry_value, exit_value, volume))
+            or min(entry_value, exit_value, volume) <= 0 or direction not in {"BUY", "SELL"}):
+        return {**common, "status": "invalid_input", "reason": "enter positive prices/lot and side BUY or SELL"}
+    if (spec.sizing_blocked or not math.isfinite(spec.commission_per_lot_round_turn)
+            or spec.commission_per_lot_round_turn < 0 or not math.isfinite(spec.spread_typical_points)
+            or spec.spread_typical_points < 0):
+        return {**common, "status": "unavailable", "points": None, "price_move": None,
+                "gross_profit": None, "commission": None, "spread_cost": None,
+                "net_after_known_costs": None, "valuation_valid": False,
+                "reason": "symbol specification, conversion rate, or costs are unavailable"}
+    signed_move = (exit_value - entry_value) if direction == "BUY" else (entry_value - exit_value)
+    points = signed_move / spec.point
+    result = points_calculator(spec, points, volume)
+    if not result["valuation_valid"]:
+        return {**common, "status": "unavailable", "points": None, "price_move": None,
+                "gross_profit": None, "commission": None, "spread_cost": None,
+                "net_after_known_costs": None, "valuation_valid": False,
+                "reason": result["valuation_reason"]}
+    return {**common, "status": "ready", "points": round(points, 4),
+            "price_move": result["price_move"], "gross_profit": result["gross_profit"],
+            "commission": result["commission"], "spread_cost": result["spread_cost"],
+            "net_after_known_costs": result["net_after_known_costs"],
+            "valuation_valid": True,
+            "reason": "estimate uses typical spread and round-turn commission; excludes slippage and swap"}
+
+
 def position_size_calculator(spec: SymbolSpec, equity: float, risk_pct: float,
                              sl_points: float) -> dict[str, Any]:
     """Return a read-only, cost-aware lot estimate that never exceeds the budget.

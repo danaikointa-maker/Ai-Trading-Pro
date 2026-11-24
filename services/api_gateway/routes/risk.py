@@ -7,7 +7,14 @@ from packages.shared_schemas.models import TradeMode
 from services.api_gateway.deps import current_user, get_runtime
 from services.api_gateway.roles import ADMIN, at_least
 from services.api_gateway.state import TradingRuntime
-from services.risk_engine.planner import points_calculator, position_size_calculator
+from services.risk_engine.planner import (
+    drawdown_recovery_calculator,
+    point_tick_converter,
+    points_calculator,
+    position_size_calculator,
+    profit_loss_calculator,
+    risk_reward_calculator,
+)
 
 router = APIRouter(prefix="/api/risk", tags=["risk"])
 
@@ -101,26 +108,51 @@ def loss_streak_release(runtime: TradingRuntime = Depends(get_runtime),
 def calculator(symbol: str = "XAUUSD", points: float = 750, lot: float = 0.01,
                balance: float | None = None, risk_pct: float | None = None,
                sl_points: float | None = None,
+               tool: str | None = None, entry: float | None = None,
+               stop_loss: float | None = None, take_profit: float | None = None,
+               side: str | None = None, exit_price: float | None = None,
+               current_equity: float | None = None, peak_equity: float | None = None,
+               price_delta: float | None = None,
                runtime: TradingRuntime = Depends(get_runtime), user=Depends(current_user)):
+    """Read-only calculators; only symbol metadata is sourced from the selected market feed."""
+    allowed_tools = {None, "points", "size", "position_size", "risk_reward", "drawdown",
+                     "point_tick", "profit_loss"}
+    if tool not in allowed_tools:
+        raise HTTPException(status_code=422, detail="unsupported calculator tool")
     # Use the same selected market-data specification as chart and points math.
     # This includes a fresh, allowlisted MT5 Demo publisher spec when configured.
     spec = runtime.market.spec(symbol)
+    provenance = {"market_feed": runtime.market.effective_mode,
+                  "spec_source": spec.source, "rate_source": spec.rate_source,
+                  "account_currency": spec.account_currency,
+                  "spec_complete": spec.spec_complete}
+    disclaimer = ("ผลลัพธ์เป็นแบบจำลองจากข้อมูลที่กรอกและสเปกที่ระบุ ไม่ใช่คำสั่งซื้อขาย; "
+                  "ค่ากำไร/ขาดทุนหักเฉพาะ spread ทั่วไปและ commission ไม่รวม slippage/swap")
+
+    if tool in {"risk_reward", "drawdown", "point_tick", "profit_loss"}:
+        if tool == "risk_reward":
+            result = risk_reward_calculator(spec, entry, stop_loss, take_profit, side, lot)
+        elif tool == "drawdown":
+            result = drawdown_recovery_calculator(current_equity, peak_equity)
+        elif tool == "point_tick":
+            result = point_tick_converter(spec, price_delta)
+        else:
+            result = profit_loss_calculator(spec, entry, exit_price, side, lot)
+        return {"tool": tool, "result": result, "spec": spec.model_dump(),
+                "provenance": provenance, "disclaimer": disclaimer}
+
     out = {"points": points_calculator(spec, points, lot), "spec": spec.model_dump(),
-           "provenance": {"market_feed": runtime.market.effective_mode,
-                          "spec_source": spec.source, "rate_source": spec.rate_source,
-                          "account_currency": spec.account_currency,
-                          "spec_complete": spec.spec_complete}}
+           "provenance": provenance}
     sizing_inputs = (balance, risk_pct, sl_points)
+    if tool in {"size", "position_size"} and any(value is None for value in sizing_inputs):
+        raise HTTPException(status_code=422, detail="size tool requires balance, risk_pct, and sl_points")
     if any(value is not None for value in sizing_inputs):
         if not all(value is not None for value in sizing_inputs):
             raise HTTPException(status_code=422,
                                 detail="balance, risk_pct, and sl_points must be supplied together")
         size = position_size_calculator(spec, balance, risk_pct, sl_points)
-        # Keep the legacy response key while making its value safe for display:
-        # a below-minimum budget is reported as zero, never rounded up to min lot.
+        # This input is a manual sandbox value; the route never reads account equity.
         out["position_size"] = {**size, "source": "manual_sandbox"}
         out["lot_for_risk"] = size["lot"]
-    out["disclaimer"] = ("Gross and net are estimates in account currency. Net after known costs "
-                         "subtracts typical spread and commission; swap and slippage are excluded. "
-                         "The result is not a profit guarantee.")
+    out["disclaimer"] = disclaimer
     return out
