@@ -23,10 +23,11 @@
           <option value="drawdown">Drawdown recovery</option>
           <option value="point_tick">Points / Ticks</option>
           <option value="profit_loss">Profit &amp; Loss</option>
+          <option value="auto_sl_tp">Auto SL/TP preview</option>
         </select>
       </label>
       <div class="flex items-center gap-1.5">
-        <span class="chip" :class="isAnalysisTool ? 'chip-up' : 'chip-gold'">{{ isAnalysisTool ? 'READ ONLY · ANALYSIS' : 'MANUAL · SANDBOX' }}</span>
+        <span class="chip" :class="isReadOnlyTool ? 'chip-up' : 'chip-gold'">{{ isPlanPreviewTool ? 'READ ONLY · PLAN PREVIEW' : isAnalysisTool ? 'READ ONLY · ANALYSIS' : 'MANUAL · SANDBOX' }}</span>
         <button type="button" class="btn py-1.5" @click="resetInputs">Reset</button>
         <button v-if="result && (tool !== 'size' || positionSize)" type="button" class="btn py-1.5" @click="copyResult">Copy result</button>
       </div>
@@ -213,6 +214,43 @@
       <p v-else-if="result" class="text-xs text-amber-300">{{ result.reason }}</p>
       <p class="text-[10px] leading-relaxed text-muted">คำนวณแบบจำลองจากราคาที่กรอกและสเปกสัญลักษณ์ ไม่อ่าน position หรือยอดจริงจากบัญชี</p>
     </div>
+    <div v-else-if="tool === 'auto_sl_tp'" class="space-y-3 px-4 py-3">
+      <div class="rounded-lg border border-amber-400/30 bg-amber-400/5 px-3 py-2 text-[10.5px] leading-relaxed text-amber-200">
+        ตัวอย่างแผนแบบอ่านอย่างเดียว · ใช้ทุนจำลองที่กรอกเองและแท่ง M5 ที่ปิดแล้ว · ไม่อ่านยอดบัญชี ไม่บันทึกโปรไฟล์ และไม่ส่งคำสั่ง
+      </div>
+      <div class="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
+        <label class="block"><span class="label">ฝั่ง</span><select v-model="side" class="input mt-1"><option>BUY</option><option>SELL</option></select></label>
+        <label class="block"><span class="label">ราคาเข้า (กรอกเอง)</span><input v-model.number="previewEntry" type="number" min="0.000001" step="0.01" class="input mt-1 num" placeholder="กรอกราคาเข้า" /></label>
+        <label class="block"><span class="label">ทุนจำลอง ({{ spec?.account_currency || 'สกุลบัญชี' }})</span><input v-model.number="manualEquity" type="number" min="0.01" step="100" class="input mt-1 num" placeholder="กรอกทุนจำลอง" /></label>
+        <label class="block"><span class="label">งบเสี่ยง (%)</span><input v-model.number="riskPct" type="number" min="0.01" max="100" step="0.05" class="input mt-1 num" /></label>
+        <label class="block"><span class="label">วิธีวาง SL</span><select v-model="stopMode" class="input mt-1"><option value="atr_structure">ATR + Structure</option><option value="atr">ATR</option><option value="structure">Structure</option><option value="fixed">Fixed points</option></select></label>
+        <label v-if="stopMode === 'fixed'" class="block"><span class="label">ระยะ SL (points)</span><input v-model.number="fixedSlPoints" type="number" min="0.01" step="10" class="input mt-1 num" /></label>
+        <label v-if="stopMode === 'atr' || stopMode === 'atr_structure'" class="block"><span class="label">ATR multiplier</span><input v-model.number="atrMultiplier" type="number" min="0.01" step="0.1" class="input mt-1 num" /></label>
+        <label v-if="stopMode === 'structure' || stopMode === 'atr_structure'" class="block"><span class="label">Structure buffer (ATR)</span><input v-model.number="structureBufferAtr" type="number" min="0" step="0.05" class="input mt-1 num" /></label>
+        <label v-if="stopMode === 'structure' || stopMode === 'atr_structure'" class="block"><span class="label">Swing lookback (M5 bars)</span><input v-model.number="swingLookbackBars" type="number" min="1" max="100" step="1" class="input mt-1 num" /></label>
+        <label class="block"><span class="label">วิธีตั้ง TP</span><select v-model="previewTargetMode" class="input mt-1"><option value="adaptive">Adaptive ตาม ATR/Zone</option><option value="fixed">Fixed ladder</option><option value="single_r">เป้าหมายเดียวตาม R</option></select></label>
+        <label v-if="previewTargetMode === 'single_r'" class="block"><span class="label">เป้าหมาย (R)</span><input v-model.number="targetR" type="number" min="0.1" max="10" step="0.1" class="input mt-1 num" /></label>
+      </div>
+      <div v-if="result?.status === 'ready' && result.plan" class="space-y-2 rounded-lg border border-up/30 bg-up/5 p-3">
+        <div class="flex flex-wrap items-center justify-between gap-2"><strong class="text-sm text-up">คำนวณแผนได้ · ยังไม่ใช่การอนุมัติเทรด</strong><span class="chip chip-gold">manual preview</span></div>
+        <div class="grid gap-2 sm:grid-cols-2 lg:grid-cols-4">
+          <div class="kv"><dt>Entry · {{ side }}</dt><dd>{{ fmt(result.plan.entry, spec?.digits ?? 2) }}</dd></div>
+          <div class="kv"><dt>Stop Loss</dt><dd class="text-down">{{ fmt(result.plan.sl, spec?.digits ?? 2) }} · {{ fmt(result.plan.sl_points, 1) }} pts</dd></div>
+          <div class="kv"><dt>Take Profit 1</dt><dd class="text-up">{{ fmt(result.plan.tp1, spec?.digits ?? 2) }} · {{ fmt(result.plan.tp_points?.[0], 1) }} pts</dd></div>
+          <div class="kv"><dt>TP2 · TP3</dt><dd>{{ fmt(result.plan.tp2, spec?.digits ?? 2) }} · {{ fmt(result.plan.tp3, spec?.digits ?? 2) }}</dd></div>
+          <div class="kv"><dt>Lot ประเมิน</dt><dd>{{ fmt(result.plan.lot, lotPrecision(spec?.lot_step)) }}</dd></div>
+          <div class="kv"><dt>Risk estimate</dt><dd class="text-down">{{ accountMoney(result.plan.risk_amount) }} · {{ fmt(result.plan.risk_pct, 2) }}%</dd></div>
+          <div class="kv"><dt>Net Reward / Risk</dt><dd>{{ fmt(result.plan.reward_risk_net, 2) }}R</dd></div>
+          <div class="kv"><dt>ATR(14) ปิด M5</dt><dd>{{ fmt(result.atr_points, 1) }} points</dd></div>
+        </div>
+        <ul v-if="result.notes?.length" class="space-y-1 text-[10px] leading-relaxed text-muted"><li v-for="note in result.notes" :key="note">{{ note }}</li></ul>
+      </div>
+      <div v-else-if="result" class="rounded-lg border border-amber-400/30 bg-amber-400/5 p-3 text-xs text-amber-200">
+        <strong>{{ result.status === 'blocked' ? 'แผนถูกบล็อกโดยเงื่อนไข Risk/Planner' : result.status === 'invalid_input' ? 'ตรวจข้อมูลที่กรอก' : 'ยังคำนวณไม่ได้' }}</strong>
+        <ul class="mt-1 space-y-1"><li v-for="(reason, index) in result.blockers || []" :key="index">{{ reason }}</li></ul>
+      </div>
+      <p class="text-[10px] leading-relaxed text-muted">ใช้ TradePlanner เดิม ตรวจ spread/spec, ATR และ swing ที่ยืนยันแล้ว; หากข้อมูลไม่สดหรือระยะ SL/TP ไม่ผ่านกฎ จะซ่อนแผนหรือแสดงเหตุผลบล็อก. ไม่มีการอ่าน equity จาก MT5 และไม่มีปุ่มส่งคำสั่งในเครื่องมือนี้</p>
+    </div>
     <p v-if="result?.valuation_valid === false" class="border-t border-amber-400/30 px-4 py-2 text-[10px] leading-relaxed text-amber-300">
       สเปกหรืออัตราแปลงสกุลเงินยังไม่ครบ จึงไม่แสดงยอดกำไร/ขาดทุนเป็นตัวเลข
     </p>
@@ -226,7 +264,7 @@
 </template>
 
 <script setup>
-import { computed, ref, watch } from 'vue'
+import { computed, onBeforeUnmount, ref, watch } from 'vue'
 import { api } from '../lib/api'
 import { projectAtrVolatility, projectSupportResistance } from '../lib/calculatorAnalysis'
 import { fmt } from '../lib/format'
@@ -238,9 +276,11 @@ const lot = ref(0.01)
 const tool = ref('points')
 const equity = ref(null)
 const riskPct = ref(0.5)
+const manualEquity = ref(null)
 const slPoints = ref(400)
 const side = ref('BUY')
 const entry = ref(2000)
+const previewEntry = ref(null)
 const stopLoss = ref(1990)
 const takeProfit = ref(2020)
 const exitPrice = ref(2010)
@@ -252,6 +292,13 @@ const tripleSwapNights = ref(1)
 const currentEquity = ref(9000)
 const peakEquity = ref(10000)
 const priceDelta = ref(5)
+const stopMode = ref('atr_structure')
+const fixedSlPoints = ref(500)
+const atrMultiplier = ref(1.5)
+const structureBufferAtr = ref(0.2)
+const swingLookbackBars = ref(10)
+const previewTargetMode = ref('adaptive')
+const targetR = ref(2)
 const spec = ref(null)
 const result = ref(null)
 const positionSize = ref(null)
@@ -259,14 +306,19 @@ const provenance = ref(null)
 const copyPayload = ref(null)
 const error = ref('')
 let requestId = 0
+let loadTimer = null
 
 const symbol = computed(() => state.symbol)
 const isAnalysisTool = computed(() => ['atr_volatility', 'support_resistance'].includes(tool.value))
+const isPlanPreviewTool = computed(() => tool.value === 'auto_sl_tp')
+const isReadOnlyTool = computed(() => isAnalysisTool.value || isPlanPreviewTool.value)
 const sourceLabel = computed(() => isAnalysisTool.value
   ? `Analysis snapshot · ${spec.value?.source || '—'}`
+  : isPlanPreviewTool.value ? 'Manual SL/TP preview · read only'
   : spec.value?.source === 'broker' ? 'Broker symbol spec' : 'Declared symbol spec')
 const sourceContext = computed(() => isAnalysisTool.value
   ? `feed ${provenance.value?.market_feed || '—'}`
+  : isPlanPreviewTool.value ? `fresh ${provenance.value?.market_feed || 'market'} · manual equity`
   : `${spec.value?.account_currency || '—'} · FX ${spec.value?.rate_source || '—'}`)
 
 function accountMoney(value) {
@@ -349,6 +401,20 @@ async function load() {
       query.set('entry', String(entry.value))
       query.set('exit_price', String(exitPrice.value))
       query.set('side', side.value)
+    } else if (tool.value === 'auto_sl_tp') {
+      endpoint = '/api/risk/calculator'
+      query.set('tool', 'auto_sl_tp')
+      if (previewEntry.value !== null && previewEntry.value !== '') query.set('entry', String(previewEntry.value))
+      query.set('side', side.value)
+      if (manualEquity.value !== null && manualEquity.value !== '') query.set('manual_equity', String(manualEquity.value))
+      query.set('risk_pct', String(riskPct.value))
+      query.set('stop_mode', stopMode.value)
+      query.set('fixed_sl_points', String(fixedSlPoints.value))
+      query.set('atr_multiplier', String(atrMultiplier.value))
+      query.set('structure_buffer_atr', String(structureBufferAtr.value))
+      query.set('swing_lookback_bars', String(swingLookbackBars.value))
+      query.set('target_mode', previewTargetMode.value)
+      query.set('target_r', String(targetR.value))
     }
     const data = await api.get(`${endpoint}?${query.toString()}`)
     if (activeRequest !== requestId) return
@@ -364,14 +430,27 @@ async function load() {
   }
 }
 
+function scheduleLoad() {
+  if (loadTimer !== null) clearTimeout(loadTimer)
+  if (isPlanPreviewTool.value) {
+    requestId += 1
+    result.value = null
+    loadTimer = setTimeout(load, 350)
+  } else {
+    load()
+  }
+}
+
 function resetInputs() {
   points.value = 750
   lot.value = 0.01
   equity.value = null
+  manualEquity.value = null
   riskPct.value = 0.5
   slPoints.value = 400
   side.value = 'BUY'
   entry.value = 2000
+  previewEntry.value = null
   stopLoss.value = 1990
   takeProfit.value = 2020
   exitPrice.value = 2010
@@ -383,6 +462,13 @@ function resetInputs() {
   currentEquity.value = 9000
   peakEquity.value = 10000
   priceDelta.value = 5
+  stopMode.value = 'atr_structure'
+  fixedSlPoints.value = 500
+  atrMultiplier.value = 1.5
+  structureBufferAtr.value = 0.2
+  swingLookbackBars.value = 10
+  previewTargetMode.value = 'adaptive'
+  targetR.value = 2
 }
 
 async function copyResult() {
@@ -393,8 +479,13 @@ async function copyResult() {
   }
 }
 
-watch([symbol, tool], load, { immediate: true })
-watch([points, lot, equity, riskPct, slPoints, side, entry, stopLoss, takeProfit, exitPrice,
+watch([symbol, tool], scheduleLoad, { immediate: true })
+watch([points, lot, equity, manualEquity, riskPct, slPoints, side, entry, stopLoss, takeProfit, exitPrice,
   grossReward, grossLoss, estimatedCost, holdingNights, tripleSwapNights, currentEquity,
-  peakEquity, priceDelta], () => { if (!isAnalysisTool.value) load() })
+  peakEquity, priceDelta, previewEntry, stopMode, fixedSlPoints, atrMultiplier, structureBufferAtr,
+  swingLookbackBars, previewTargetMode, targetR], () => { if (!isAnalysisTool.value) scheduleLoad() })
+
+onBeforeUnmount(() => {
+  if (loadTimer !== null) clearTimeout(loadTimer)
+})
 </script>

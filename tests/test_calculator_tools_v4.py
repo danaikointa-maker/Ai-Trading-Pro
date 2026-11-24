@@ -155,3 +155,110 @@ def test_calculator_analysis_source_reuses_fresh_closed_bar_snapshot(client, aut
     submit.assert_not_called()
     modify.assert_not_called()
     close.assert_not_called()
+
+
+def _ready_manual_preview_context(runtime, monkeypatch):
+    from packages.shared_schemas.models import SymbolSpec
+
+    ctx = runtime.analysis.snapshot("XAUUSD")
+    ctx.snapshot.spec = SymbolSpec(
+        symbol="XAUUSD", digits=2, point=0.01, tick_size=0.05,
+        contract_size=100, min_lot=0.01, max_lot=50, lot_step=0.01,
+        spread_typical_points=2, commission_per_lot_round_turn=7,
+        profit_currency="USD", account_currency="USD",
+        quote_to_account_rate=1, rate_source="identity", spec_complete=True,
+    )
+    ctx.snapshot.data_quality = {
+        "ok": True, "health": "connected", "feed": "simulated",
+        "staleness_seconds": 0, "spread_points": 2, "reason": "",
+    }
+    ctx.snapshot.indicators.atr14_valid = True
+    ctx.snapshot.indicators.atr_points = 100
+    ctx.frames["M5"] = ctx.frames["M5"].tail(100).copy()
+    closed_at = int(ctx.frames["M5"]["t"].iloc[-1]) + 300
+    monkeypatch.setattr(runtime.market, "now", lambda: closed_at)
+    monkeypatch.setattr(runtime.analysis, "snapshot", lambda _symbol: ctx)
+    return ctx
+
+
+def test_auto_sl_tp_calculator_uses_fresh_snapshot_and_never_executes(
+        client, auth, runtime, monkeypatch):
+    import copy
+    from unittest.mock import Mock
+
+    _ready_manual_preview_context(runtime, monkeypatch)
+    submit, modify, close = Mock(), Mock(), Mock()
+    monkeypatch.setattr(runtime.gateway, "submit", submit)
+    monkeypatch.setattr(runtime.gateway, "modify", modify)
+    monkeypatch.setattr(runtime.gateway, "close", close)
+    orders_before = runtime.db.query_one("SELECT COUNT(*) AS n FROM orders")["n"]
+    risk_config_before = copy.deepcopy(runtime.settings.risk_cfg())
+
+    response = client.get(
+        "/api/risk/calculator?tool=auto_sl_tp&symbol=XAUUSD&entry=2000&side=BUY"
+        "&manual_equity=12345&risk_pct=0.5&stop_mode=atr&target_mode=fixed",
+        headers=auth,
+    )
+
+    assert response.status_code == 200, response.text
+    body = response.json()
+    preview = body["result"]
+    assert preview["status"] in {"ready", "blocked"}
+    assert preview["source"] == "manual_sandbox"
+    assert preview["execution_approved"] is False
+    assert preview["risk_budget"] == pytest.approx(61.725)
+    assert body["provenance"]["equity_source"] == "manual_sandbox"
+    assert body["provenance"]["closed_m5_age_seconds"] == 0
+    assert runtime.db.query_one("SELECT COUNT(*) AS n FROM orders")["n"] == orders_before
+    assert runtime.settings.risk_cfg() == risk_config_before
+    submit.assert_not_called()
+    modify.assert_not_called()
+    close.assert_not_called()
+
+
+def test_auto_sl_tp_calculator_fails_closed_on_stale_market_data(
+        client, auth, runtime, monkeypatch):
+    from unittest.mock import Mock
+
+    ctx = _ready_manual_preview_context(runtime, monkeypatch)
+    ctx.snapshot.data_quality = {
+        "ok": False, "health": "disconnected", "feed": "simulated",
+        "staleness_seconds": 999, "spread_points": None, "reason": "stale test quote",
+    }
+    submit, modify, close = Mock(), Mock(), Mock()
+    monkeypatch.setattr(runtime.gateway, "submit", submit)
+    monkeypatch.setattr(runtime.gateway, "modify", modify)
+    monkeypatch.setattr(runtime.gateway, "close", close)
+
+    response = client.get(
+        "/api/risk/calculator?tool=auto_sl_tp&symbol=XAUUSD&entry=2000&side=SELL"
+        "&manual_equity=10000&risk_pct=0.5&stop_mode=atr_structure",
+        headers=auth,
+    )
+
+    assert response.status_code == 200, response.text
+    preview = response.json()["result"]
+    assert preview["status"] == "unavailable"
+    assert preview["plan"] is None
+    assert preview["blockers"] == ["stale test quote"]
+    submit.assert_not_called()
+    modify.assert_not_called()
+    close.assert_not_called()
+
+
+def test_auto_sl_tp_calculator_rejects_invalid_manual_inputs(client, auth, runtime, monkeypatch):
+    from unittest.mock import Mock
+
+    snapshot = Mock()
+    monkeypatch.setattr(runtime.analysis, "snapshot", snapshot)
+    response = client.get(
+        "/api/risk/calculator?tool=auto_sl_tp&symbol=XAUUSD&entry=2000&side=BUY"
+        "&risk_pct=0.5&stop_mode=fixed",
+        headers=auth,
+    )
+
+    assert response.status_code == 200, response.text
+    result = response.json()["result"]
+    assert result["status"] == "invalid_input"
+    assert result["plan"] is None
+    snapshot.assert_not_called()

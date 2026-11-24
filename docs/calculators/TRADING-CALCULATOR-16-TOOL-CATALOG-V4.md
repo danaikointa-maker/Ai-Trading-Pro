@@ -1,6 +1,6 @@
 # Trading Calculator & Learning Center — 16-tool catalog (V4)
 
-Status: **partial implementation**. Tools 1, 2, 4, 5, 6, 7, 10, 11, and 12 have read-only/sandbox UI and shared backend math or existing analysis snapshots. The other tools, full exports, and lessons are not implemented. No calculator may call an order, modify, or close endpoint.
+Status: **partial implementation**. Tools 1–7, 10–12 have read-only/sandbox UI and shared backend math or existing analysis snapshots. Tools 8, 9, 13–16, full exports, and lessons are not implemented. No calculator may call an order, modify, or close endpoint.
 
 ## Shared rules
 
@@ -16,7 +16,7 @@ Status: **partial implementation**. Tools 1, 2, 4, 5, 6, 7, 10, 11, and 12 have 
 |---:|---|---|---|---|
 | 1 | Capital & risk — Position Size / Lot | Equity, risk %, entry, SL, symbol spec, account currency | Maximum legal lot at or below the risk budget, using adverse P/L at SL and broker lot min/max/step | First read-only manual sandbox version reuses the shared calculator endpoint and `SymbolSpec`; known spread/commission are included and below-minimum budgets are rejected. MT5 account/spec comparison, entry-price constraints and remaining acceptance are NOT TESTED |
 | 2 | Capital & risk — Risk Reward | Entry, SL, TP, side, volume, spread, commission | Gross RR and net RR after known costs; show risk and reward in account currency | Implemented as a manual sandbox via `risk_reward_calculator`; uses symbol spec, typical spread and commission; slippage/swap excluded; not an order plan |
-| 3 | Capital & risk — Auto SL/TP | Entry, side, closed M5 ATR, confirmed swings/zones, broker constraints | Fixed / ATR / Structure / ATR+Structure candidates, lot-at-risk, RR and blocking reasons | Reuse `TradePlanner`; V4 ATR+structure profile is inactive and must remain so without migration approval |
+| 3 | Capital & risk — Auto SL/TP | Manually entered equity, entry, side, closed M5 ATR, confirmed swings/zones, broker symbol spec | Fixed / ATR / Structure / ATR+Structure preview, estimated lot, RR and blocking reasons | Implemented as a read-only manual preview through the existing `TradePlanner`; requires fresh quote, valid closed-M5 ATR and complete spec. It does not read account equity, check free margin, approve an order, or write/activate a profile. V4 runtime profile stays unchanged |
 | 4 | Capital & risk — Drawdown & Recovery | Balance/equity/peak, loss %, recovery target | Drawdown from peak and gain needed to recover: `loss / remaining_equity` | Implemented as manual-only arithmetic; does not read simulator or broker equity |
 | 5 | Price & costs — Point / Pip / Tick Converter | Price delta, point, digits, tick size | Point distance, price delta, and legal tick count; a tick is not assumed to equal a point | Implemented using declared/broker `SymbolSpec`; fractional tick counts are explicitly marked unaligned |
 | 6 | Price & costs — Profit & Loss | Side, entry/exit, lot, symbol spec, account currency | Gross broker-aware P/L plus separately itemized known costs and net estimate | Implemented by reusing `points_calculator`; unresolved FX suppresses monetary output |
@@ -49,4 +49,4 @@ Status: **partial implementation**. Tools 1, 2, 4, 5, 6, 7, 10, 11, and 12 have 
 
 ## Implemented slice boundary
 
-`GET /api/risk/calculator` is extended; the ATR and zone views reuse the existing authenticated `/api/analysis/{symbol}?fresh=true` route. No new database/table or account-balance read is added. The UI labels these as read-only analysis (not manual sandbox). PDF export, save-scenario features, learning lessons, account-owned live values, MT5 margin calculation and tools 3, 8, 9, 13–16 remain queued separately under U08 and subject to the shared read-only boundary above.
+`GET /api/risk/calculator` is extended; the ATR and zone views reuse the existing authenticated `/api/analysis/{symbol}?fresh=true` route. The Auto SL/TP preview takes a fresh `AnalysisService.snapshot` directly, requires closed-M5 ATR and current spread quality, and passes manual values through the existing `TradePlanner`. No new database/table or account-balance read is added. The preview cannot submit, modify, or close trades and is not a full Risk Engine authorization or broker margin preflight. PDF export, save-scenario features, learning lessons, account-owned live values, MT5 margin calculation and tools 8, 9, 13–16 remain queued separately under U08 and subject to the shared read-only boundary above.

@@ -53,6 +53,7 @@ class PlanInputs:
     # Candidate-only: legacy keeps nearest-tick rounding until profile migration.
     directional_tick_rounding: bool = False
     sl_policy: str = "legacy"
+    fixed_sl_points: float | None = None
     sl_structure_buffer_atr: float = 0.35
     swing_lookback_bars: int = 0
     m5_bar_count: int = 0
@@ -323,6 +324,58 @@ class TradePlanner:
                       f"{ctx.sl_max_points:.0f}; reject instead of narrowing protection")
                 return PlanResult(plan=None, blockers=blockers,
                                   blocker_codes=codes, notes=notes + [sl_note])
+        elif ctx.sl_policy == "fixed":
+            if (ctx.fixed_sl_points is None or not math.isfinite(ctx.fixed_sl_points)
+                    or ctx.fixed_sl_points <= 0
+                    or not math.isfinite(ctx.sl_max_points) or ctx.sl_max_points <= 0):
+                block("invalid_stop_policy", "fixed stop distance must be a positive finite value")
+                return PlanResult(plan=None, blockers=blockers,
+                                  blocker_codes=codes, notes=notes)
+            sl_points = float(ctx.fixed_sl_points)
+            if sl_points < vol_floor:
+                block("stop_distance_min",
+                      f"fixed stop {sl_points:.0f} points is below the volatility floor "
+                      f"{vol_floor:.0f}; do not narrow protective distance")
+                return PlanResult(plan=None, blockers=blockers,
+                                  blocker_codes=codes, notes=notes)
+            if sl_points > ctx.sl_max_points:
+                block("stop_distance_max",
+                      f"fixed stop {sl_points:.0f} points exceeds configured maximum "
+                      f"{ctx.sl_max_points:.0f}")
+                return PlanResult(plan=None, blockers=blockers,
+                                  blocker_codes=codes, notes=notes)
+            sl_note = f"Manual fixed stop distance: {sl_points:.0f} points"
+        elif ctx.sl_policy in {"atr", "structure"}:
+            if (not math.isfinite(ctx.atr_points) or ctx.atr_points <= 0
+                    or not math.isfinite(ctx.sl_max_points) or ctx.sl_max_points <= 0
+                    or ctx.swing_lookback_bars < 0 or ctx.m5_bar_count < 0
+                    or not math.isfinite(ctx.sl_atr_multiplier) or ctx.sl_atr_multiplier <= 0
+                    or not math.isfinite(ctx.sl_structure_buffer_atr)
+                    or ctx.sl_structure_buffer_atr < 0):
+                block("invalid_stop_policy", "ATR/structure stop parameters are invalid")
+                return PlanResult(plan=None, blockers=blockers,
+                                  blocker_codes=codes, notes=notes)
+            if ctx.sl_policy == "atr":
+                atr_reference = ctx.atr_points * ctx.sl_atr_multiplier
+                sl_points = max(atr_reference, vol_floor)
+                sl_note = (f"ATR stop: max({ctx.sl_atr_multiplier:.2f} ATR, "
+                           "volatility floor)")
+            else:
+                structure_points, structure_note = self._candidate_structure_distance(
+                    direction, ctx.entry, ctx)
+                if structure_points <= 0:
+                    block("structure_missing", structure_note)
+                    return PlanResult(plan=None, blockers=blockers,
+                                      blocker_codes=codes, notes=notes)
+                sl_points = max(structure_points, vol_floor)
+                sl_note = (f"Structure stop: max({structure_points:.0f}-point confirmed "
+                           f"swing + ATR buffer, volatility floor); {structure_note}")
+            if sl_points > ctx.sl_max_points:
+                block("stop_distance_max",
+                      f"required stop {sl_points:.0f} points exceeds configured maximum "
+                      f"{ctx.sl_max_points:.0f}; reject instead of narrowing protection")
+                return PlanResult(plan=None, blockers=blockers,
+                                  blocker_codes=codes, notes=notes + [sl_note])
         elif ctx.sl_policy == "legacy":
             if self.stops.get("use_structure_stop", True):
                 sl_points, sl_note = self._stop_from_structure(direction, ctx.entry, ctx)
@@ -342,7 +395,12 @@ class TradePlanner:
                               blocker_codes=codes, notes=notes)
         min_stop = float(spec.stops_level_points)
         if min_stop > 0 and sl_points < min_stop + 1:
-            if ctx.sl_policy == "atr_structure" and min_stop + 1 > ctx.sl_max_points:
+            if ctx.sl_policy == "fixed":
+                block("broker_stop_distance",
+                      "fixed stop is inside the broker stops level; increase the manual distance")
+                return PlanResult(plan=None, blockers=blockers,
+                                  blocker_codes=codes, notes=notes)
+            if ctx.sl_policy in {"atr_structure", "atr", "structure"} and min_stop + 1 > ctx.sl_max_points:
                 block("broker_stop_distance", "broker stops level exceeds candidate maximum stop distance")
                 return PlanResult(plan=None, blockers=blockers,
                                   blocker_codes=codes, notes=notes)
