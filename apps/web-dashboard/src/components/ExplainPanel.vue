@@ -25,6 +25,29 @@
               <span class="mt-1 h-1 w-1 shrink-0 rounded-full bg-gold-400"></span>{{ b }}
             </li>
           </ul>
+          <section v-if="answer.officer_team" class="space-y-2 rounded-lg border border-ink-700 bg-ink-850/60 p-3">
+            <div class="flex items-center justify-between gap-2">
+              <div class="text-[11.5px] font-semibold text-slate-200">ทีมวิเคราะห์ · อ่านอย่างเดียว</div>
+              <span class="chip">{{ answer.officer_team.mode }}</span>
+            </div>
+            <p class="text-[9.5px] leading-relaxed text-muted">
+              ใช้ facts ชุดเดียว ไม่แสดงยอด/ตำแหน่งบัญชี และไม่มีสิทธิ์ส่งคำสั่งซื้อขาย
+            </p>
+            <div class="space-y-1.5">
+              <article v-for="officer in answer.officer_team.officers" :key="officer.role_id" class="rounded-md border border-ink-700/80 bg-ink-900/80 p-2">
+                <div class="flex items-center justify-between gap-2">
+                  <div class="text-[10.5px] font-medium text-slate-200">{{ officer.title }}</div>
+                  <span class="text-[9px]" :class="officer.status === 'available' ? 'text-emerald-400' : officer.status === 'stale' ? 'text-amber-400' : 'text-muted'">
+                    {{ officer.status }}
+                  </span>
+                </div>
+                <p class="mt-1 text-[10.5px] leading-relaxed text-slate-300">{{ officer.summary }}</p>
+                <div v-if="officer.fact_refs?.length" class="mt-1 flex flex-wrap gap-1">
+                  <span v-for="ref in officer.fact_refs" :key="ref" class="chip text-[8px]">{{ ref }}</span>
+                </div>
+              </article>
+            </div>
+          </section>
           <div class="flex flex-wrap items-center gap-1.5">
             <span class="chip chip-gold">engine: {{ answer.model_used }}</span>
             <span v-for="c in answer.citations || []" :key="c" class="chip">{{ c }}</span>

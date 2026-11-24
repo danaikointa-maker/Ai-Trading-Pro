@@ -233,13 +233,27 @@ H080 reload ใช้ approval ของ payload และ DB ร่วมกั
 
 | Method | Path | Notes |
 |---|---|---|
-| POST | `/api/explain` | `{question,symbol}` → `{answer,bullets,citations,model_used,facts}`; ห้ามสั่งออร์เดอร์ |
+| POST | `/api/explain` | `{question,symbol}` → `{answer,bullets,citations,model_used,facts,officer_team}`; ห้ามสั่งออร์เดอร์ |
 
 `facts.observability` (เมื่อ route อ่าน metadata ได้) มีเฉพาะ `feed_mode`, `quote_status`,
 `quote_source`, `display_basis` และ `server_utc_offset_seconds`; ป้ายที่ไม่รู้จักถูกแทนด้วย
 `unknown`/`unavailable`. ไม่มี account ID, credential, position หรือ command payload ในส่วนนี้.
+เนื่องจาก `/api/explain` ยังไม่มี selected-account authorization ข้อมูล plan ใน `facts` แสดงเฉพาะ
+ระดับราคา/ระยะ SL-TP และ reward/risk; ไม่ส่ง lot, risk amount/percent, expected value, partial volume
+หรือข้อความ blocker ดิบที่อาจเปิดเผยมูลค่าจากบัญชี runtime. ใช้ blocker code ที่ไม่ระบุจำนวนเงินแทน.
 คำถามที่ตรวจพบเจตนาสั่งซื้อ/ขายจะได้คำตอบปฏิเสธแบบ deterministic และไม่ถูกส่งให้ local LLM.
 Endpoint นี้เป็น read-only explanation; ไม่เรียก ExecutionGateway.
+
+`officer_team` เป็น deterministic role projection จาก facts ชุดเดียว มี `market_data_steward`,
+`structure_analyst`, `signal_analyst`, `risk_officer` และ `desk_chair`; ทุก card ส่ง `status`,
+`summary`, `fact_refs`, `source_timestamp`, `time_basis`, quote `freshness` และ `analysis_quality`.
+Structure/signal/chair สรุปได้ต่อเมื่อ quote สดและ `facts.data_quality.ok` เป็น `true`; quote สดอย่างเดียว
+ไม่รับรองว่า analysis snapshot ผ่าน quality gate. ผลลัพธ์ตั้ง
+`account_specific:false` และ `execution_capability:false`; Risk Officer ต้องแสดง unavailable
+จนกว่าจะมี Risk Engine read model ที่ผ่าน account authorization. ระบบบันทึกเฉพาะ request ID,
+runtime scope hash, source timestamp/freshness, officer version, output hash และ safety outcome
+ใน audit table เดิม — ไม่เก็บ raw question หรือ prompt. นี่ไม่ใช่ service connector ไป VM100,
+ไม่สั่ง Auto และไม่อนุมัติ/ส่งคำสั่งซื้อขาย.
 
 ## WebSocket
 
