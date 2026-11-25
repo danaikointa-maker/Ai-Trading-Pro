@@ -118,10 +118,14 @@ def _metric(values: list[float]) -> dict[str, float | int | None]:
     if not values:
         return {"samples": 0, "mean_net_points": None, "median_net_points": None,
                 "positive_net_pct": None}
+    scale = max(abs(value) for value in values)
+    scaled_values = [value / scale for value in values] if scale else values
+    mean = scale * (math.fsum(scaled_values) / len(values)) if scale else 0.0
+    median = float(pd.Series(scaled_values).median()) * scale if scale else 0.0
     return {
         "samples": len(values),
-        "mean_net_points": round(sum(values) / len(values), 4),
-        "median_net_points": round(float(pd.Series(values).median()), 4),
+        "mean_net_points": round(mean, 4),
+        "median_net_points": round(median, 4),
         "positive_net_pct": round(sum(value > 0 for value in values) / len(values) * 100, 2),
     }
 
@@ -161,11 +165,19 @@ def replay_tradingview_shadow(
     if not math.isfinite(spec.commission_per_lot_round_turn) or spec.commission_per_lot_round_turn < 0:
         raise ValueError("broker commission must be finite and non-negative")
 
+    value_per_point = spec.value_per_point_per_lot
+    reference_value = value_per_point * costs.reference_lot
+    if (not math.isfinite(value_per_point) or value_per_point <= 0
+            or not math.isfinite(reference_value) or reference_value <= 0):
+        raise ValueError("broker point value must be finite and positive for the reference lot")
+
     times, opens, closes = _validate_bars(closed_bars)
     time_to_index = {timestamp: index for index, timestamp in enumerate(times)}
 
     evidence_by_key: dict[tuple[str, str, int], list[ExternalAnalysisEvidence]] = defaultdict(list)
     filtered_evidence = 0
+    filtered_evidence_quality = 0
+    quality_counts: dict[str, int] = defaultdict(int)
     for item in evidence:
         parsed = (item if isinstance(item, ExternalAnalysisEvidence)
                   else ExternalAnalysisEvidence.model_validate(item))
@@ -173,6 +185,10 @@ def replay_tradingview_shadow(
                canonical_no7_timeframe(parsed.timeframe), parsed.bar_close_utc)
         if key[:2] != (canonical_symbol, canonical_tf):
             filtered_evidence += 1
+            continue
+        quality_counts[parsed.quality] += 1
+        if parsed.quality != "accepted_shadow":
+            filtered_evidence_quality += 1
             continue
         evidence_by_key[key].append(parsed)
 
@@ -191,16 +207,15 @@ def replay_tradingview_shadow(
     duplicate_decisions = sum(len(rows) - 1 for rows in decisions_by_key.values() if len(rows) > 1)
     cost_money = (
         (costs.spread_points + 2 * costs.slippage_points_per_side)
-        * spec.value_per_point_per_lot * costs.reference_lot
+        * reference_value
         + spec.commission_per_lot_round_turn * costs.reference_lot
     )
-    cost_points = cost_money / (spec.value_per_point_per_lot * costs.reference_lot)
+    cost_points = cost_money / reference_value
+    if not math.isfinite(cost_money) or cost_money < 0 or not math.isfinite(cost_points):
+        raise ValueError("estimated broker costs must remain finite for the reference lot")
 
     unique_evidence = {key: rows[0] for key, rows in evidence_by_key.items() if len(rows) == 1}
     unique_decisions = {key: rows[0] for key, rows in decisions_by_key.items() if len(rows) == 1}
-    quality_counts: dict[str, int] = defaultdict(int)
-    for item in unique_evidence.values():
-        quality_counts[item.quality] += 1
     comparison_keys = sorted(set(unique_evidence) & set(unique_decisions))
     agreement = disagreement = neutral_comparisons = 0
     score_gaps: list[float] = []
@@ -255,7 +270,10 @@ def replay_tradingview_shadow(
                 price_move = direction * (closes[exit_index] - opens[entry_index])
                 gross_money = spec.pnl_in_account_currency(price_move, costs.reference_lot)
                 net_money = gross_money - cost_money
-                net_points = net_money / (spec.value_per_point_per_lot * costs.reference_lot)
+                net_points = net_money / reference_value
+                if not math.isfinite(gross_money) or not math.isfinite(net_money) \
+                        or not math.isfinite(net_points):
+                    raise ValueError("replay outcome must remain finite with the supplied broker spec")
                 outcome_lists[horizon][system_name].append(net_points)
 
     return {
@@ -283,6 +301,7 @@ def replay_tradingview_shadow(
             "evidence_with_exact_closed_bar": used_evidence,
             "evidence_without_exact_bar": missing_bar,
             "duplicate_evidence_excluded": duplicate_evidence,
+            "evidence_excluded_by_quality": filtered_evidence_quality,
             "duplicate_no7_decisions_excluded": duplicate_decisions,
             "filtered_evidence_symbol_or_timeframe": filtered_evidence,
             "filtered_no7_symbol_or_timeframe": filtered_decisions,

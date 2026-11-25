@@ -66,3 +66,19 @@
 - `cloudflared.service` reports `active`. VM100 still has no listener on origin port 8080; `ss -ltn` shows the Trading Pro services on loopback only, including V4 staging `127.0.0.1:18082`.
 - The staging API is reachable from the PC only through the temporary loopback SSH forward `127.0.0.1:18182 -> VM100 127.0.0.1:18082`, and reports simulation mode. It is not a reviewed Office API and must not be made the public origin.
 - No public route, tunnel origin, Access policy, firewall, service, secret or broker state was changed. Do not repoint the hostname until a dedicated authenticated Office API origin and its security/rollback checks are ready.
+
+### Read-only recheck — 2026-11-25
+
+- SSH to `danai@192.168.1.10` succeeded; `cloudflared.service` is active. VM100 still listens on `127.0.0.1:8000`, `127.0.0.1:18081` and `127.0.0.1:18082`; there is no listener on `:8080`.
+- Status-only GET probes to `/api/system/health` returned HTTP 200 on 8000, 18081 and 18082; the response bodies were discarded. Port 8080 returned connection refused. These are Trading Pro endpoints, not a dedicated Office API.
+- `https://agent.youridea168.com/` returned HTTP 502 from Cloudflare with TLS verification successful (`ssl_verify_result=0`).
+- The isolated V4 staging health response on loopback `18082`, filtered to its rate-limit section, reports `requested=memory`, `shared=false` and warns that the request budget multiplies across workers. `ss` showed one Python process owning the listener and `ps` showed no child under it, consistent with a single-process service; the launch configuration was not inspected. Multi-worker rate-limit acceptance remains NOT TESTED.
+- No `.env`, token or credential was read or printed. No DNS, route, tunnel, Access policy, firewall, service, broker/account state or trading command was changed. Access allow/deny and Office API authentication remain NOT TESTED; see the current direct-LAN result below.
+
+### Windows PC + VM100 reachability recheck — 2026-11-25
+
+- DNS for `agent.youridea168.com` resolved to Cloudflare edge IPs. HTTPS GET `/health` returned HTTP **502**, confirming TLS/edge reachability but not an available origin.
+- SSH to `danai@192.168.1.10:22` succeeded and `cloudflared.service` reported `active`. VM100 `ss -ltn` showed ports 8000, 18081 and 18082 bound only to `127.0.0.1`; no listener exists on tunnel origin port 8080.
+- From the Windows PC, TCP 22 was reachable; TCP ports 8000, 18081, 18082 and 8080 were not. Status-only loopback GET probes on VM100 returned 200 for `/api/system/health` on 8000/18081/18082 and refused 8080; response bodies were discarded because those Trading Pro endpoints include operational metadata and are not an Office API.
+- The focused TradingView contract/ingress/persistence/shadow-replay/rate-limit regression passed **59 tests** with one existing Starlette/httpx deprecation warning.
+- This recheck changed no Cloudflare route, Tunnel origin, Access policy, firewall, service, database, secret, broker/account or trading state. Access allow/deny, proxy body-log redaction, service identity, LAN API access and multi-worker deployment remain NOT TESTED/BLOCKED.

@@ -5,6 +5,11 @@ ASGI app, so no real order is ever sent to prove a limit works.
 """
 from __future__ import annotations
 
+import subprocess
+import sys
+import textwrap
+from pathlib import Path
+
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
@@ -20,6 +25,9 @@ class Clock:
 
     def advance(self, seconds: float) -> None:
         self.now += seconds
+
+
+ROOT = Path(__file__).resolve().parents[1]
 
 
 # --------------------------------------------------------------------- buckets
@@ -159,6 +167,76 @@ def test_sqlite_store_is_shared_between_limiter_instances(tmp_path):
     # the fourth request is refused no matter which worker takes it
     assert worker_b.check("user:x", "default")[0] is False
     assert worker_a.check("user:x", "default")[0] is False
+
+
+def test_sqlite_store_retries_transient_wal_startup_lock(tmp_path, monkeypatch):
+    import sqlite3
+
+    from services.api_gateway import ratelimit
+
+    class ContendedConnection:
+        def __init__(self):
+            self.wal_attempts = 0
+
+        def execute(self, statement):
+            if statement == "PRAGMA journal_mode=WAL":
+                self.wal_attempts += 1
+                if self.wal_attempts == 1:
+                    raise sqlite3.OperationalError("database is locked")
+            return self
+
+        def close(self):
+            pass
+
+    connection = ContendedConnection()
+    monkeypatch.setattr(ratelimit.sqlite3, "connect", lambda *args, **kwargs: connection)
+    sleeps = []
+    monkeypatch.setattr(ratelimit.time, "sleep", sleeps.append)
+
+    store = ratelimit.SqliteBucketStore(tmp_path / "startup.sqlite3")
+    store.close()
+
+    assert connection.wal_attempts == 2
+    assert sleeps == [0.05]
+
+
+def test_sqlite_store_is_shared_across_worker_processes(tmp_path):
+    """Four independent workers must spend one host-wide SQLite budget."""
+    path = tmp_path / "ratelimit-workers.sqlite3"
+    worker = textwrap.dedent(
+        """
+        import sys
+        sys.path.insert(0, {root!r})
+        from services.api_gateway.ratelimit import RateLimiter, SqliteBucketStore
+
+        store = SqliteBucketStore({path!r})
+        try:
+            limiter = RateLimiter({{"default": {{"limit": 40, "window_seconds": 36000}}}},
+                                 clock=lambda: 7000.0, store=store)
+            allowed = sum(limiter.check("user:shared", "default")[0] for _ in range(25))
+            print(allowed)
+        finally:
+            store.close()
+        """
+    ).format(root=str(ROOT), path=str(path))
+    processes = [
+        subprocess.Popen([sys.executable, "-c", worker], stdout=subprocess.PIPE,
+                         stderr=subprocess.PIPE, text=True)
+        for _ in range(4)
+    ]
+    results = []
+    try:
+        for process in processes:
+            stdout, stderr = process.communicate(timeout=60)
+            assert process.returncode == 0, f"worker failed: {stderr}"
+            results.append(int(stdout.strip()))
+    finally:
+        for process in processes:
+            if process.poll() is None:
+                process.kill()
+                process.wait(timeout=5)
+
+    assert sum(results) == 40, f"limit 40 was handed out {sum(results)} times across {results}"
 
 
 def test_sqlite_store_survives_a_restart(tmp_path):

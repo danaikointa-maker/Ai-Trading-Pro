@@ -111,6 +111,23 @@ class MemoryBucketStore:
         return len(self._buckets)
 
 
+def _enable_sqlite_wal(connection: sqlite3.Connection, busy_timeout: float) -> None:
+    """Retry transient WAL-mode lock contention during concurrent worker startup."""
+    deadline = time.monotonic() + max(1.0, min(10.0, busy_timeout * 3))
+    while True:
+        try:
+            connection.execute("PRAGMA journal_mode=WAL")
+            return
+        except sqlite3.OperationalError as exc:
+            message = str(exc).lower()
+            if "locked" not in message and "busy" not in message:
+                raise
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                raise
+            time.sleep(min(0.05, remaining))
+
+
 class SqliteBucketStore:
     """Token buckets in a small SQLite file, shared by every worker on this host.
 
@@ -131,7 +148,7 @@ class SqliteBucketStore:
         self._lock = threading.Lock()
         self._spends = 0
         self._conn = sqlite3.connect(self.path, timeout=busy_timeout, check_same_thread=False)
-        self._conn.execute("PRAGMA journal_mode=WAL")
+        _enable_sqlite_wal(self._conn, busy_timeout)
         self._conn.execute("PRAGMA synchronous=NORMAL")
         self._conn.execute(
             "CREATE TABLE IF NOT EXISTS buckets("

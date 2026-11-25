@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import uuid
 from datetime import datetime, timedelta, timezone
 
 import pytest
@@ -168,6 +169,113 @@ def test_latest_shadow_view_requires_authenticated_user(client):
     assert response.status_code == 401
 
 
+def test_latest_shadow_view_rejects_non_default_tenant(client, runtime, settings):
+    """A tenant without an isolated trading runtime cannot read shared shadow data."""
+    from integrations.tradingview.normalizer import normalize_lens_packet
+    from services.api_gateway.auth import create_token
+    from services.api_gateway.tenants import create_tenant
+
+    email = f"lens-tenant-{uuid.uuid4().hex[:12]}@no7.ai"
+    created = create_tenant(runtime.db, "Lens isolation test", email,
+                            "longenough1", "test")
+    payload_sha256 = None
+    try:
+        evidence = normalize_lens_packet(_packet(), mapped_symbol="XAUUSD")
+        payload_sha256 = evidence.payload_sha256
+        runtime.db.store_tradingview_evidence(evidence.model_dump(mode="json"))
+        token, _ = create_token(settings, email, "admin")
+        response = client.get(
+            "/api/integrations/tradingview/ai-agent-lens/latest",
+            params={"symbol": "XAUUSD", "timeframe": "M5"},
+            headers={"Authorization": f"Bearer {token}"},
+        )
+        assert response.status_code == 403
+        assert "evidence" not in response.json()
+    finally:
+        if payload_sha256:
+            runtime.db.execute("DELETE FROM tradingview_evidence WHERE payload_sha256=?",
+                               (payload_sha256,))
+        runtime.db.execute("DELETE FROM users WHERE email=?", (email,))
+        runtime.db.execute("DELETE FROM tenants WHERE id=?", (created["tenant"]["id"],))
+
+
+def test_latest_shadow_view_batches_no7_signal_lookup(client, runtime, auth, monkeypatch):
+    """A full 100-row shadow view uses a bounded number of signal queries."""
+    from integrations.tradingview.normalizer import normalize_lens_packet
+
+    now = datetime.now(timezone.utc)
+    for offset in range(5):
+        packet = _packet()
+        packet["timeframe"] = "5"
+        packet["time"] = (now - timedelta(minutes=5 * offset)).isoformat()
+        evidence = normalize_lens_packet(packet, mapped_symbol="XAUUSD")
+        runtime.db.store_tradingview_evidence(evidence.model_dump(mode="json"))
+
+    original_query = runtime.db.query
+    signal_reads = 0
+
+    def count_signal_reads(sql, params=()):
+        nonlocal signal_reads
+        if "FROM signals WHERE symbol=? AND t IN (" in sql:
+            signal_reads += 1
+        return original_query(sql, params)
+
+    monkeypatch.setattr(runtime.db, "query", count_signal_reads)
+    response = client.get(
+        "/api/integrations/tradingview/ai-agent-lens/latest",
+        params={"symbol": "XAUUSD", "timeframe": "M5", "limit": 100},
+        headers=auth,
+    )
+
+    assert response.status_code == 200, response.text
+    assert len(response.json()["evidence"]) >= 5
+    assert signal_reads == 1
+
+
+@pytest.mark.parametrize("role", ["admin", "viewer", "trader"])
+def test_latest_shadow_view_is_readable_for_authenticated_tenant_roles_without_side_effects(
+        client, runtime, auth, role):
+    """Authenticated tenant roles can read advisory evidence without trading side effects."""
+    from integrations.tradingview.normalizer import normalize_lens_packet
+
+    packet = _packet()
+    evidence = normalize_lens_packet(packet, mapped_symbol="XAUUSD")
+    assert runtime.db.store_tradingview_evidence(evidence.model_dump(mode="json")) is True
+    before = {
+        table: runtime.db.query_one(f"SELECT COUNT(*) AS n FROM {table}")["n"]
+        for table in ("orders", "signals")
+    }
+
+    email = f"lens-{role}-{uuid.uuid4().hex[:12]}@no7.ai"
+    password = "longenough1"
+    try:
+        created = client.post("/api/users", json={"email": email, "password": password,
+                                                  "role": role}, headers=auth)
+        assert created.status_code == 200, created.text
+        login = client.post("/api/auth/login", json={"email": email, "password": password})
+        assert login.status_code == 200, login.text
+        response = client.get(
+            "/api/integrations/tradingview/ai-agent-lens/latest",
+            params={"symbol": "XAUUSD", "timeframe": "M5"},
+            headers={"Authorization": f"Bearer {login.json()['token']}"},
+        )
+        assert response.status_code == 200, response.text
+        rows = response.json()["evidence"]
+        own_row = next((row for row in rows
+                        if row["payload_sha256"] == evidence.payload_sha256), None)
+        assert own_row is not None
+        assert own_row["comparison"]["scores_are_separate"] is True
+        after = {
+            table: runtime.db.query_one(f"SELECT COUNT(*) AS n FROM {table}")["n"]
+            for table in ("orders", "signals")
+        }
+        assert after == before
+    finally:
+        runtime.db.execute("DELETE FROM tradingview_evidence WHERE payload_sha256=?",
+                           (evidence.payload_sha256,))
+        client.delete(f"/api/users/{email}", headers=auth)
+
+
 @pytest.mark.parametrize("limit", [0, 101])
 def test_latest_shadow_view_rejects_out_of_range_limit(client, auth, limit):
     response = client.get("/api/integrations/tradingview/ai-agent-lens/latest",
@@ -255,6 +363,11 @@ def test_latest_shadow_view_orders_out_of_order_arrivals_by_bar_close(client, mo
     newer["time"] = (now - timedelta(seconds=60)).isoformat()
     older = _packet()
     older["time"] = (now - timedelta(seconds=120)).isoformat()
+    from integrations.tradingview.normalizer import normalize_lens_packet
+    expected_hashes = {
+        normalize_lens_packet(packet, mapped_symbol="XAUUSD").payload_sha256
+        for packet in (newer, older)
+    }
 
     for packet in (newer, older):
         response = client.post(url, json={"token": "test-tradingview-token-0123456789",
@@ -262,9 +375,12 @@ def test_latest_shadow_view_orders_out_of_order_arrivals_by_bar_close(client, mo
         assert response.status_code == 202
 
     result = client.get(url + "/latest", params={"symbol": "XAUUSD", "timeframe": "M5",
-                                                  "limit": 2}, headers=auth)
+                                                  "limit": 100}, headers=auth)
     assert result.status_code == 200
-    closes = [row["bar_close_utc"] for row in result.json()["evidence"]]
+    own_rows = [row for row in result.json()["evidence"]
+                if row["payload_sha256"] in expected_hashes]
+    assert len(own_rows) == 2
+    closes = [row["bar_close_utc"] for row in own_rows]
     assert closes == sorted(closes, reverse=True)
     assert len(set(closes)) == 2
 
