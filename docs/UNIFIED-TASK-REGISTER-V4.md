@@ -234,7 +234,11 @@ Status definitions: EXISTS_CODE = seen in repository but not live certified; NEE
 - `tests/test_tradingview_ingest.py`: **20 passed**. Combined TradingView contract/ingress/persistence/replay/rate-limit plus tenant tests: **67 passed**, one existing Starlette/httpx warning. Ruff F/E9 and `git diff --check` passed.
 - This is regression coverage of existing read access and fail-closed tenant guard; no runtime authorization or trading behavior changed. Tenant route isolation is locally tested, but authenticated visual/desktop/mobile U17 acceptance remains NOT TESTED.
 
-- GitHub Gate #242 passed on PR #79 head `369f0f5`, including Ruff, dashboard build, full test gate, real Redis acceptance, Redis operator self-check and bundle-size check. Gate #241 was cancelled when the newer fixture-cleanup commit superseded its head. PR #79 remains Draft and unmerged.
+- GitHub Gate #242 passed on code/test head `369f0f5`; Gate #243 passed on current docs head `03872fd`. Both completed Ruff, dashboard build, full test gate, real Redis acceptance, Redis operator self-check and bundle-size check. Gate #241 was cancelled when the newer fixture-cleanup commit superseded its head. PR #79 remains Draft and unmerged.
+
+### U18 post-c48eefa source rollback rehearsal — 2026-11-25
+
+- Created a disposable worktree at PR head `03872fd`, reverted the 8 subsequent commits in reverse order, and verified the clean tracked tree hash exactly matched baseline `c48eefa` tree `c1f8b2fcb87a2a4c8d2bee2d22a363ccacfade52`. Removed only the verified temporary worktree under `C:\workspace`. This extends source-only rollback evidence; deployment and database restore remain NOT TESTED.
 
 ## Anti-duplication ledger
 - Do NOT let TradingView/Lens/LLM/webhook create executable signals, alter MT5 canonical prices/specs, approve risk, toggle Auto, or call execution. Use U14?U18 as the only TradingView queue; do not add a parallel plan/backlog.
