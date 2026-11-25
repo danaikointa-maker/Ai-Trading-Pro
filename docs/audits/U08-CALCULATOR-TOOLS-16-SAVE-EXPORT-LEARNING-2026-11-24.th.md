@@ -10,7 +10,7 @@ PR: #71, Draft, targets `plan/unified-development-v4`
 |---|---|---|
 | Tool 16 — Trade Review / What-if | **PASS (local contract)** — reuses the active adapter trade list, existing `TradeRecord`, current account identity/owner record, `risk_reward_calculator`, and `profit_loss_calculator`. Recorded fills/costs/swap/net P&L are separate from hypothetical entry/SL/TP and the result is explicitly non-executable. Foreign broker ticket returns 404; mismatched active-account owner returns 409. | **NOT TESTED** with a connected MT5 account. It does not replay price bars or estimate which level would have hit first. |
 | Manual scenario save/load/delete | **PASS (local API)** — persists numeric `scenario` and `capital_growth` inputs in existing `kv`, namespaced by workspace, tenant and normalized user email. Rejects unsupported fields, non-numeric/non-finite inputs, unsupported tools, and names outside the allowed length. User-isolation and delete-boundary tests pass. | Multi-worker/production database deployment acceptance **NOT TESTED**. |
-| JSON / CSV result export | **PASS (frontend helper)** — retains nested evidence for JSON and quotes CSV fields; formula-like text is neutralized while numeric negative P&L remains numeric. | Browser download confirmation **NOT TESTED**. PDF export is not implemented. |
+| JSON / CSV result export | **PASS (frontend helper)** — retains nested evidence for JSON and quotes CSV fields; formula-like text is neutralized while numeric negative P&L remains numeric. | Browser download confirmation **NOT TESTED**. PDF export was added in the 2026-11-24 follow-up below. |
 | Beginner learning center | **PASS (local UI build)** — five short Thai lessons on risk, R:R, costs, drawdown and the limits of simulation, each with a one-question quiz. | Authenticated visual/usability review on desktop and mobile **NOT TESTED**. |
 
 ## Safety and account boundary
@@ -43,4 +43,14 @@ Results: exports **2 passed**; calculator analysis **2 passed**; chart viewport 
 
 ## Remaining U08 gates
 
-U08 stays **PARTIAL** until authenticated desktop/mobile visual review, connected Demo history review, and real MT5 margin comparison are recorded. PDF export is not implemented. PR #71 remains Draft and unmerged; rollback is a revert of the implementation commit, with no live profile or persisted trading state changed.
+U08 stays **PARTIAL** until authenticated desktop/mobile visual review, connected Demo history review, and real MT5 margin comparison are recorded. The earlier U08 slices were merged via PR #71 as `fd17eee`; this PDF follow-up is isolated from runtime configuration. Rollback is a revert of the implementation commit, with no live profile or persisted trading state changed.
+
+## Browser-native PDF export follow-up (2026-11-24)
+
+- Branch: `feature/u08-pdf-export-20261124`.
+- Added a compact **PDF** action beside JSON/CSV in the existing calculator toolbar. It opens a self-contained printable result page; the user can choose the browser's **Save as PDF** destination. It does not send the report to a server.
+- Escapes every payload field and value before embedding it in the printable HTML. The report preserves the selected tool, result, symbol and provenance and labels the content as calculation/review only—not an order, Risk Engine approval or guaranteed result.
+- Reuses the existing calculator export module and current `copyPayload`; no dependency, API, persistence, account read or trading path was added.
+- Verification: `npm run test:calculator-export` **3 passed**; `npm run test:calculator-analysis` **2 passed**; Vite 8.3.8 build **666 modules**; `npm ci` reported **0 vulnerabilities**; `git diff --check` passed.
+- Browser popup/print dialog and actual PDF save are **NOT TESTED**; authenticated desktop/mobile review, real Demo history, and MT5 margin comparison are still **NOT TESTED**. No broker command or account state changed.
+- Rollback: revert the follow-up commit. No schema/config migration or runtime deployment is involved.
