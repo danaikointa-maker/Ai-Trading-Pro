@@ -227,6 +227,12 @@ Status definitions: EXISTS_CODE = seen in repository but not live certified; NEE
 - Rechecked the browser session inventory; browser access host is unavailable. The native Chrome window is showing `127.0.0.1:8000`; the page reports that the server is not responding and marks the displayed feed as `SIMULATED`/stale. The running build cannot be tied to PR #79 head `a1cefea`/`5d0bf04`, so it is not U17 acceptance evidence. Authenticated screenshots, rendered role visibility, and desktop/mobile visual acceptance remain **NOT TESTED**. Existing API tests cover authenticated viewer/trader reads without order/signal side effects, but do not replace that visual acceptance.
 - U14 Pine compilation/Bar Replay, U15 perimeter and deployed service checks, U16 real historical corpus/cost analysis, and U18 external Paper/reconnect/database-restore receipts remain **NOT TESTED/BLOCKED**. No account, broker, order, Auto/Live, VM100 service, Cloudflare route or deployment state changed.
 
+### U17 Shadow tenant boundary regression — 2026-11-25
+
+- Source audit found the shared `signals` table has no `tenant_id`; however, `current_user` deliberately denies non-default tenants on trading-runtime routes while tenant runtime isolation is unconfigured. Added `test_latest_shadow_view_rejects_non_default_tenant` to exercise this actual TradingView read endpoint, seed shared Shadow evidence in the disposable test DB, assert HTTP 403 and no evidence response, and clean up both the test tenant and seeded evidence.
+- `tests/test_tradingview_ingest.py`: **19 passed**. Combined TradingView contract/ingress/persistence/replay/rate-limit plus tenant tests: **66 passed**, one existing Starlette/httpx warning. Lens refresh tests: **3 passed**; Ruff F/E9 and `git diff --check` passed.
+- This is regression coverage of the existing fail-closed tenant guard; no runtime authorization or trading behavior changed. Tenant route isolation is locally tested, but authenticated visual/desktop/mobile U17 acceptance remains NOT TESTED.
+
 ## Anti-duplication ledger
 - Do NOT let TradingView/Lens/LLM/webhook create executable signals, alter MT5 canonical prices/specs, approve risk, toggle Auto, or call execution. Use U14?U18 as the only TradingView queue; do not add a parallel plan/backlog.
 - Do NOT create a second RiskEngine or PositionManager. Existing: `services/risk_engine/engine.py`, `manager.py`.

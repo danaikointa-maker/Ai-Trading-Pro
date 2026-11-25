@@ -169,6 +169,36 @@ def test_latest_shadow_view_requires_authenticated_user(client):
     assert response.status_code == 401
 
 
+def test_latest_shadow_view_rejects_non_default_tenant(client, runtime, settings):
+    """A tenant without an isolated trading runtime cannot read shared shadow data."""
+    from integrations.tradingview.normalizer import normalize_lens_packet
+    from services.api_gateway.auth import create_token
+    from services.api_gateway.tenants import create_tenant
+
+    email = f"lens-tenant-{uuid.uuid4().hex[:12]}@no7.ai"
+    created = create_tenant(runtime.db, "Lens isolation test", email,
+                            "longenough1", "test")
+    payload_sha256 = None
+    try:
+        evidence = normalize_lens_packet(_packet(), mapped_symbol="XAUUSD")
+        payload_sha256 = evidence.payload_sha256
+        runtime.db.store_tradingview_evidence(evidence.model_dump(mode="json"))
+        token, _ = create_token(settings, email, "admin")
+        response = client.get(
+            "/api/integrations/tradingview/ai-agent-lens/latest",
+            params={"symbol": "XAUUSD", "timeframe": "M5"},
+            headers={"Authorization": f"Bearer {token}"},
+        )
+        assert response.status_code == 403
+        assert "evidence" not in response.json()
+    finally:
+        if payload_sha256:
+            runtime.db.execute("DELETE FROM tradingview_evidence WHERE payload_sha256=?",
+                               (payload_sha256,))
+        runtime.db.execute("DELETE FROM users WHERE email=?", (email,))
+        runtime.db.execute("DELETE FROM tenants WHERE id=?", (created["tenant"]["id"],))
+
+
 def test_latest_shadow_view_batches_no7_signal_lookup(client, runtime, auth, monkeypatch):
     """A full 100-row shadow view uses a bounded number of signal queries."""
     from integrations.tradingview.normalizer import normalize_lens_packet
