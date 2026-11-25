@@ -234,6 +234,8 @@ Status definitions: EXISTS_CODE = seen in repository but not live certified; NEE
 - `tests/test_tradingview_ingest.py`: **20 passed**. Combined TradingView contract/ingress/persistence/replay/rate-limit plus tenant tests: **67 passed**, one existing Starlette/httpx warning. Ruff F/E9 and `git diff --check` passed.
 - This is regression coverage of existing read access and fail-closed tenant guard; no runtime authorization or trading behavior changed. Tenant route isolation is locally tested, but authenticated visual/desktop/mobile U17 acceptance remains NOT TESTED.
 
+- GitHub Gate #242 passed on PR #79 head `369f0f5`, including Ruff, dashboard build, full test gate, real Redis acceptance, Redis operator self-check and bundle-size check. Gate #241 was cancelled when the newer fixture-cleanup commit superseded its head. PR #79 remains Draft and unmerged.
+
 ## Anti-duplication ledger
 - Do NOT let TradingView/Lens/LLM/webhook create executable signals, alter MT5 canonical prices/specs, approve risk, toggle Auto, or call execution. Use U14?U18 as the only TradingView queue; do not add a parallel plan/backlog.
 - Do NOT create a second RiskEngine or PositionManager. Existing: `services/risk_engine/engine.py`, `manager.py`.
