@@ -232,10 +232,10 @@ def test_latest_shadow_view_batches_no7_signal_lookup(client, runtime, auth, mon
     assert signal_reads == 1
 
 
-@pytest.mark.parametrize("role", ["viewer", "trader"])
-def test_latest_shadow_view_is_readable_for_viewer_and_trader_without_side_effects(
+@pytest.mark.parametrize("role", ["admin", "viewer", "trader"])
+def test_latest_shadow_view_is_readable_for_authenticated_tenant_roles_without_side_effects(
         client, runtime, auth, role):
-    """Tenant roles can inspect advisory evidence; the read itself never trades."""
+    """Authenticated tenant roles can read advisory evidence without trading side effects."""
     from integrations.tradingview.normalizer import normalize_lens_packet
 
     packet = _packet()

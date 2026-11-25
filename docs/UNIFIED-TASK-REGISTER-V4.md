@@ -230,8 +230,9 @@ Status definitions: EXISTS_CODE = seen in repository but not live certified; NEE
 ### U17 Shadow tenant boundary regression — 2026-11-25
 
 - Source audit found the shared `signals` table has no `tenant_id`; however, `current_user` deliberately denies non-default tenants on trading-runtime routes while tenant runtime isolation is unconfigured. Added `test_latest_shadow_view_rejects_non_default_tenant` to exercise this actual TradingView read endpoint, seed shared Shadow evidence in the disposable test DB, assert HTTP 403 and no evidence response, and clean up both the test tenant and seeded evidence.
-- `tests/test_tradingview_ingest.py`: **19 passed**. Combined TradingView contract/ingress/persistence/replay/rate-limit plus tenant tests: **66 passed**, one existing Starlette/httpx warning. Lens refresh tests: **3 passed**; Ruff F/E9 and `git diff --check` passed.
-- This is regression coverage of the existing fail-closed tenant guard; no runtime authorization or trading behavior changed. Tenant route isolation is locally tested, but authenticated visual/desktop/mobile U17 acceptance remains NOT TESTED.
+- Expanded `test_latest_shadow_view_is_readable_for_authenticated_tenant_roles_without_side_effects` to cover admin, viewer and trader roles; the existing non-default tenant regression still asserts 403 and no evidence response. These exercise persisted advisory reads and do not write order/signal state.
+- `tests/test_tradingview_ingest.py`: **20 passed**. Combined TradingView contract/ingress/persistence/replay/rate-limit plus tenant tests: **67 passed**, one existing Starlette/httpx warning. Ruff F/E9 and `git diff --check` passed.
+- This is regression coverage of existing read access and fail-closed tenant guard; no runtime authorization or trading behavior changed. Tenant route isolation is locally tested, but authenticated visual/desktop/mobile U17 acceptance remains NOT TESTED.
 
 ## Anti-duplication ledger
 - Do NOT let TradingView/Lens/LLM/webhook create executable signals, alter MT5 canonical prices/specs, approve risk, toggle Auto, or call execution. Use U14?U18 as the only TradingView queue; do not add a parallel plan/backlog.
