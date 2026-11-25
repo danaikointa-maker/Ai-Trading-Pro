@@ -248,10 +248,10 @@ def test_latest_shadow_view_is_readable_for_authenticated_tenant_roles_without_s
 
     email = f"lens-{role}-{uuid.uuid4().hex[:12]}@no7.ai"
     password = "longenough1"
-    created = client.post("/api/users", json={"email": email, "password": password,
-                                              "role": role}, headers=auth)
-    assert created.status_code == 200, created.text
     try:
+        created = client.post("/api/users", json={"email": email, "password": password,
+                                                  "role": role}, headers=auth)
+        assert created.status_code == 200, created.text
         login = client.post("/api/auth/login", json={"email": email, "password": password})
         assert login.status_code == 200, login.text
         response = client.get(
@@ -271,6 +271,8 @@ def test_latest_shadow_view_is_readable_for_authenticated_tenant_roles_without_s
         }
         assert after == before
     finally:
+        runtime.db.execute("DELETE FROM tradingview_evidence WHERE payload_sha256=?",
+                           (evidence.payload_sha256,))
         client.delete(f"/api/users/{email}", headers=auth)
 
 
