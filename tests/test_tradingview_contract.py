@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import json
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
 
 import pytest
@@ -17,7 +17,7 @@ def packet():
         "event": "LONG_SETUP",
         "symbol": "OANDA:XAUUSD",
         "timeframe": "5",
-        "time": datetime.now(timezone.utc).isoformat(),
+        "time": datetime.now(UTC).isoformat(),
         "state_code": "LENS|XAUUSD|5|TREND_UP|L80|S10|LONG:ACTIVE",
         "candle": {
             "open": 2600.0, "high": 2603.0, "low": 2599.0, "close": 2602.0,
@@ -73,6 +73,44 @@ def test_normalizes_pinned_upstream_sample_without_promoting_trade_map():
     assert evidence.executable is False
     assert "trade" not in evidence.features
     assert "stop" not in evidence.model_dump()
+
+
+@pytest.mark.parametrize("event", ["BAR_CLOSE", "LONG_SETUP", "SHORT_SETUP", "TRADE_UPDATE"])
+def test_accepts_each_documented_event_value_as_non_executable_evidence(event):
+    """Exercise documented enum values using transformations of the one pinned packet."""
+    sample_path = Path(__file__).parent / "fixtures" / "tradingview_ai_agent_lens_sample_packet.json"
+    packet = json.loads(sample_path.read_text(encoding="utf-8"))
+    packet["event"] = event
+
+    evidence = normalize_lens_packet(packet, mapped_symbol="HYPEUSDT.P", received_at=1795341900)
+
+    assert evidence.event == event
+    assert evidence.executable is False
+    assert "trade" not in evidence.features
+    assert "stop" not in evidence.model_dump()
+
+
+def test_accepts_documented_null_optional_values_without_inventing_features():
+    sample_path = Path(__file__).parent / "fixtures" / "tradingview_ai_agent_lens_sample_packet.json"
+    packet = json.loads(sample_path.read_text(encoding="utf-8"))
+    packet["candle"]["volume"] = None
+    packet["candle"]["range_atr"] = None
+    packet["recent_candles"][0]["v"] = None
+    packet["momentum"]["rsi"] = None
+    packet["strength"]["adx"] = None
+    packet["volatility"]["atr_percentile"] = None
+    packet["volume"]["relative"] = None
+    packet["structure"]["last_swing_high"] = None
+    packet["levels"]["vwap"] = None
+
+    evidence = normalize_lens_packet(packet, mapped_symbol="HYPEUSDT.P", received_at=1795341900)
+
+    assert evidence.candle.volume is None
+    assert "rsi" not in evidence.features["momentum"]
+    assert "adx" not in evidence.features["strength"]
+    assert "relative" not in evidence.features["volume"]
+    assert "last_swing_high" not in evidence.features["structure"]
+    assert "vwap" not in evidence.features["levels"]
 
 
 @pytest.mark.parametrize("patch", [

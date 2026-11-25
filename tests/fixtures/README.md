@@ -6,4 +6,6 @@
 - Upstream repository license: MIT (<https://github.com/roan-maverick/tradingview-indicator-for-ai-agents/blob/f1aa6ce185f943f1e825f638c10b1201ef0e1e0a/LICENSE>)
 - Pinned upstream revision: `f1aa6ce185f943f1e825f638c10b1201ef0e1e0a`
 
+The upstream packet schema documents four event values and links one full packet example. The additional event/null tests transform this pinned example according to the documented schema; they are contract cases, not additional TradingView-captured packets. A broader real packet corpus and Pine compiler/Bar Replay receipts remain outstanding.
+
 No Pine implementation or executable strategy code is copied into this project.
