@@ -199,6 +199,13 @@ Status definitions: EXISTS_CODE = seen in repository but not live certified; NEE
 - Read-only host check: Windows has no MT5 terminal process; `cloudflared` is active on VM100; public `agent.youridea168.com` responds HTTP **502** with TLS verification success; no listener exists on origin `:8080`. Existing Trading Pro app listeners remain loopback-only. No route, service, secret, account, Auto/Live or broker state changed.
 - U08 status correction: PR #71 merged as `fd17eee60eef97f8b2056131b8d6893583a5f854`; PDF print-to-save PR #82 merged as `fefe48c41f272818c7629da5c047d8ec9bd9dc59` after hosted Gate #251 passed. Browser print/save confirmation, authenticated visual acceptance and connected Demo margin/history remain NOT TESTED. U08 remains PARTIAL.
 
+### U01 / U12 / U15 host connectivity recheck (2026-11-26)
+
+- Read-only SSH/Windows/public-edge check recorded in `docs/audits/U01-U12-U15-CONNECTIVITY-RECHECK-2026-11-26.th.md`.
+- VM100 `cloudflared` is active. Its isolated market staging API at loopback `127.0.0.1:18082` returned HTTP 200 for health/OpenAPI and advertises `POST /api/market/publish/mt5`. Windows had no MT5 terminal process, no matching Trading Pro/publisher-forward listener on 8000/18000/18080/18081/18082/18182, and therefore supplied no fresh identity-matched Demo quote.
+- VM100 has no listener on configured tunnel origin `:8080`; `agent.youridea168.com` returned Cloudflare HTTP 502 while HTTPS certificate validation succeeded. Existing app ports remain loopback-only. Do not repoint the hostname to Trading Pro ports.
+- U01 remains PARTIAL/BLOCKED pending a fresh identity-matched Demo quote, rate/spec and stale/reconnect acceptance. U12 remains PARTIAL/BLOCKED pending a dedicated Office API plus Keycloak/Vault identity/workspace provisioning and review. U15 remains PARTIAL pending healthy origin, Access, proxy redaction, secret rotation and multi-worker limiter acceptance. No service/config/secret/account/order/Auto/Live state changed.
+
 ## Anti-duplication ledger
 - Do NOT let TradingView/Lens/LLM/webhook create executable signals, alter MT5 canonical prices/specs, approve risk, toggle Auto, or call execution. Use U14?U18 as the only TradingView queue; do not add a parallel plan/backlog.
 - Do NOT create a second RiskEngine or PositionManager. Existing: `services/risk_engine/engine.py`, `manager.py`.
