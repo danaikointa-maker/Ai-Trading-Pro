@@ -20,6 +20,10 @@ export function latestLogicalRange(count, visibleBars, rightGap = 0) {
   return { from: to - width, to }
 }
 
+export function shouldResetPriceScaleForView(previousViewKey, nextViewKey) {
+  return !previousViewKey || previousViewKey !== nextViewKey
+}
+
 export function nextBarCount(currentCount) {
   const count = Number(currentCount)
   return (Number.isFinite(count) ? Math.max(0, Math.trunc(count)) : 0) + 1

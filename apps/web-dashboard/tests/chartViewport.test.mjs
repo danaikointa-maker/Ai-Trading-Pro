@@ -7,6 +7,7 @@ import {
   matchesChartSymbol,
   nextBarCount,
   nextBarSpacing,
+  shouldResetPriceScaleForView,
   shortMarkerSpan,
   validPriceRange,
   validTimeRange,
@@ -32,6 +33,14 @@ test('appending a new candle advances the latest-bar count', () => {
   assert.equal(nextBarCount(240), 241)
   assert.equal(nextBarCount(0), 1)
   assert.equal(nextBarCount(Number.NaN), 1)
+})
+
+test('price scale resets only for a new feed, symbol or timeframe context', () => {
+  assert.equal(shouldResetPriceScaleForView(null, 'mt5:XAUUSD:M5'), true)
+  assert.equal(shouldResetPriceScaleForView('mt5:XAUUSD:M5', 'mt5:XAUUSD:M5'), false)
+  assert.equal(shouldResetPriceScaleForView('mt5:XAUUSD:M5', 'mt5:XAUUSD:M1'), true)
+  assert.equal(shouldResetPriceScaleForView('mt5:XAUUSD:M5', 'mt5:EURUSD:M5'), true)
+  assert.equal(shouldResetPriceScaleForView('mt5:XAUUSD:M5', 'simulate:XAUUSD:M5'), true)
 })
 
 test('saved time viewport restores only when the selected candle data covers it', () => {
