@@ -384,6 +384,8 @@ PC publisher อ่านค่า required และ optional เฉพาะ�
 
 หลังตรวจ tunnel, ตั้งค่า local `.env` และยืนยันว่า MT5 เปิดบัญชี Connext Demo ที่ตรงกับ expected login/server แล้ว ให้รันจาก root ของ checkout บน Windows ด้วย `& '.\.venv\Scripts\python.exe' scripts\mt5_market_publisher.py`. หยุดด้วย `Ctrl+C`. Publisher จะส่งเฉพาะ quote/rates/specs; ถ้า tick เก่ากว่า limit จะไม่ส่ง snapshot และจะแสดงเหตุผลราย symbol. ห้ามเพิ่ม freshness limit เพื่อให้ข้อมูลเก่าผ่าน.
 
+การเลือก executable ของ MT5 ใช้ `NO7_MT5_TERMINAL_PATH` เมื่อระบุไว้; หากไม่ระบุ publisher จะเลือกเฉพาะ `bridge/MetaTrader 5/terminal64.exe` ใน checkout นี้. ถ้าไม่พบ executable ตามที่กำหนด script จะหยุดก่อน `mt5.initialize()` โดยไม่ปล่อยให้ MetaTrader5 Python library เดา terminal จาก Windows. การตรวจ path เองไม่เปิด terminal และไม่สลับบัญชี; อย่างไรก็ตาม MetaTrader5 ระบุว่า `initialize()` อาจเปิด executable ที่เลือกเมื่อยังไม่ทำงาน ดังนั้นคำสั่งรัน publisher ด้านบนอาจเปิด terminal ใน bridge หากยังไม่เปิดอยู่. ยืนยันว่า path เป็น terminal ที่ตั้งใจและบัญชีเป็น Demo ก่อนรัน; publisher จะตรวจ expected login/server และปฏิเสธ identity ที่ไม่ตรง.
+
 ยังไม่เปิด publisher จนกว่าจะตั้ง token แยกและ symbol allowlist ให้ตรงกับ broker. Script ปฏิเสธ bearer token ผ่าน HTTP ไปยัง host เครือข่ายทั่วไป; ใช้ HTTPS หรือ SSH loopback tunnel เท่านั้น. การตั้งค่ารุ่นนี้ผูก publisher identity เดียวต่อ runtime จึงไม่ใช่การรองรับหลายบัญชี. Python publisher ส่งได้เฉพาะเวลา UTC; หากมีเพียง broker-server time จะหยุดส่งจนกว่าจะมี conversion ที่ตรวจสอบได้. ค่า `NO7_MT5_MARKET_MAX_TICK_AGE_SECONDS` รับ 1–15 วินาที (default 10) และ publisher จะไม่ส่ง tick เก่า. ค่าเปิดใช้งาน API เป็น false โดยปริยาย.
 
 ### TradingView AI Agent Lens adapter (read-only shadow path)
