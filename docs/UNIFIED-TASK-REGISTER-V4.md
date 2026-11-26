@@ -210,6 +210,12 @@ Status definitions: EXISTS_CODE = seen in repository but not live certified; NEE
 
 - Existing confirmation, risk preflight, durable modify/recovery, Paper PositionManager and account-mode/role regression suite passed **279 tests** on planning base `9ce4a18983cbb96d14f95a0ad4d0e5605d5eeffa`; one existing Starlette/httpx TestClient deprecation warning. Exact command and scope: `docs/audits/U02-U07-REGRESSION-RECHECK-2026-11-26.th.md`.
 - This is local unit/Paper/fake-terminal evidence only. Fresh MT5 Demo feed/order/modify/readback/restart evidence is NOT TESTED; no profile or runtime mode changed. U02/U04/U05/U06/U07 retain their existing PARTIAL/BLOCKED statuses.
+### U08 / U09 / U14–U18 regression recheck (2026-11-26)
+
+- U08: calculator Python suite **86 passed**; calculator analysis UI **2 passed**; export/PDF UI **5 passed**; Vite 8.3.8 build **666 modules**; `npm ci` audited 117 packages with **0 vulnerabilities**. Demo margin/history, authenticated visual and actual browser Print → Save-as-PDF remain NOT TESTED.
+- U09: chart viewport suite **8 passed**, including manual vertical zoom preservation during latest-candle follow. Authenticated screenshot and live-feed/reconnect acceptance remain NOT TESTED; see PR #85 and `docs/audits/U09-VERTICAL-SCALE-RECHECK-2026-11-26.th.md`.
+- U14–U18 focused contract/ingest/persistence/shadow/Paper suite **41 passed**. Evidence and limits are in `docs/audits/U08-U09-U14-U18-RECHECK-2026-11-26.th.md`. Pine/Bar Replay, real Lens corpus/cost data, authenticated role visuals, load, Paper runtime reconnect and rollback remain NOT TESTED.
+- Source tested at `9ce4a189`; intervening PR #89 (`a350561`) changed only documentation. No broker, webhook, account, Auto/Live or runtime state changed. U08/U09/U15/U16/U17 remain PARTIAL and U18 BLOCKED.
 ## Anti-duplication ledger
 - Do NOT let TradingView/Lens/LLM/webhook create executable signals, alter MT5 canonical prices/specs, approve risk, toggle Auto, or call execution. Use U14?U18 as the only TradingView queue; do not add a parallel plan/backlog.
 - Do NOT create a second RiskEngine or PositionManager. Existing: `services/risk_engine/engine.py`, `manager.py`.
