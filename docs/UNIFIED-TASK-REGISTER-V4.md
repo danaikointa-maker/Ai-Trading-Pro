@@ -206,6 +206,10 @@ Status definitions: EXISTS_CODE = seen in repository but not live certified; NEE
 - VM100 has no listener on configured tunnel origin `:8080`; `agent.youridea168.com` returned Cloudflare HTTP 502 while HTTPS certificate validation succeeded. Existing app ports remain loopback-only. Do not repoint the hostname to Trading Pro ports.
 - U01 remains PARTIAL/BLOCKED pending a fresh identity-matched Demo quote, rate/spec and stale/reconnect acceptance. U12 remains PARTIAL/BLOCKED pending a dedicated Office API plus Keycloak/Vault identity/workspace provisioning and review. U15 remains PARTIAL pending healthy origin, Access, proxy redaction, secret rotation and multi-worker limiter acceptance. No service/config/secret/account/order/Auto/Live state changed.
 
+### U02 / U04 / U05 / U06 / U07 regression recheck (2026-11-26)
+
+- Existing confirmation, risk preflight, durable modify/recovery, Paper PositionManager and account-mode/role regression suite passed **279 tests** on planning base `9ce4a18983cbb96d14f95a0ad4d0e5605d5eeffa`; one existing Starlette/httpx TestClient deprecation warning. Exact command and scope: `docs/audits/U02-U07-REGRESSION-RECHECK-2026-11-26.th.md`.
+- This is local unit/Paper/fake-terminal evidence only. Fresh MT5 Demo feed/order/modify/readback/restart evidence is NOT TESTED; no profile or runtime mode changed. U02/U04/U05/U06/U07 retain their existing PARTIAL/BLOCKED statuses.
 ## Anti-duplication ledger
 - Do NOT let TradingView/Lens/LLM/webhook create executable signals, alter MT5 canonical prices/specs, approve risk, toggle Auto, or call execution. Use U14?U18 as the only TradingView queue; do not add a parallel plan/backlog.
 - Do NOT create a second RiskEngine or PositionManager. Existing: `services/risk_engine/engine.py`, `manager.py`.
