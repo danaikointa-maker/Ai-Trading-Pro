@@ -39,6 +39,7 @@
         <button v-if="result && (tool !== 'size' || positionSize)" type="button" class="btn py-1.5" @click="copyResult">Copy result</button>
         <button v-if="result && (tool !== 'size' || positionSize)" type="button" class="btn py-1.5" @click="downloadResult('json')">JSON</button>
         <button v-if="result && (tool !== 'size' || positionSize)" type="button" class="btn py-1.5" @click="downloadResult('csv')">CSV</button>
+        <button v-if="result && (tool !== 'size' || positionSize)" type="button" class="btn py-1.5" title="เปิดหน้าพิมพ์ แล้วเลือกบันทึกเป็น PDF" aria-label="พิมพ์หรือบันทึกผลเครื่องคิดเลขเป็น PDF" @click="downloadResult('pdf')">PDF</button>
       </div>
     </div>
     <section v-if="learningVisible" class="border-b border-ink-700 bg-ink-900/50 px-4 py-3" aria-label="Calculator learning center">
@@ -421,7 +422,7 @@ import { computed, onBeforeUnmount, ref, watch } from 'vue'
 import { api } from '../lib/api'
 import { projectAtrVolatility, projectSupportResistance } from '../lib/calculatorAnalysis'
 import { fmt, money } from '../lib/format'
-import { calculatorCsv, calculatorJson } from '../lib/calculatorExport'
+import { calculatorCsv, calculatorJson, openCalculatorPdf } from '../lib/calculatorExport'
 import { lotPrecision } from '../lib/lotPrecision'
 import { state } from '../lib/store'
 
@@ -640,6 +641,12 @@ async function refreshTradeList() {
 function downloadResult(format) {
   const payload = copyPayload.value
   if (!payload) return
+  if (format === 'pdf') {
+    if (!openCalculatorPdf(payload, window)) {
+      error.value = 'เปิดหน้าต่างพิมพ์ไม่ได้ กรุณาอนุญาต pop-up แล้วลองอีกครั้ง'
+    }
+    return
+  }
   const body = format === 'csv' ? calculatorCsv(payload) : calculatorJson(payload)
   const type = format === 'csv' ? 'text/csv;charset=utf-8' : 'application/json;charset=utf-8'
   const blob = new Blob([body], { type })

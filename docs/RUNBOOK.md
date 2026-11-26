@@ -928,3 +928,11 @@ is only a calculation; the broker `order_check` is the final pre-send validator.
 Unit tests use a fake MT5 module and do not connect to or send orders to a terminal.
 Real broker receipt, Connext-Demo acceptance, profile activation, and Live trading
 remain NOT TESTED / DISABLED.
+
+## U08 — Save a calculator report as PDF
+
+In **Risk → Trading Calculators**, calculate the result first, then choose **PDF**.
+The app opens a local print view in a new browser tab. In the browser print dialog,
+select **Save as PDF** and review the destination before saving. If the tab does not
+open, allow pop-ups for the local app and retry. The report contains the current
+calculator payload and an advisory-only warning; it does not submit or change a trade.
