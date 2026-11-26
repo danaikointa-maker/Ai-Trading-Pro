@@ -185,6 +185,14 @@ Status definitions: EXISTS_CODE = seen in repository but not live certified; NEE
 - **U01:** PC SSH forwarding to isolated VM100 staging is verified: `127.0.0.1:18182 -> 192.168.1.10 / 127.0.0.1:18082`; health is `ok` in `simulate` mode, and OpenAPI lists the publisher route. No MT5 terminal, publisher token, identity-matched Demo quote, or trade command was present. U01 remains blocked on fresh Demo feed/identity evidence.
 - **U15:** `agent.youridea168.com` still responds `502` from Cloudflare with TLS verified; `cloudflared.service` is active, but VM100 has no listener on configured origin `:8080`. Do not repoint to Trading Pro ports; Access and dedicated Office API acceptance remain unverified.
 
+- **U01 terminal-selection guard (2026-11-26):** publisher now resolves configured `NO7_MT5_TERMINAL_PATH` or the checkout-isolated `bridge/MetaTrader 5/terminal64.exe`; absent executable fails before `mt5.initialize()` so the library cannot guess another terminal. Regression tests verify explicit path, bridge fallback, missing path rejection, and exact path passed to initialize. Publisher/API/preflight: **44 passed**; six-file market/MT5-read-only regression: **69 passed**, one existing Starlette/httpx deprecation warning. Scoped Ruff E9/F/I, compileall, and `git diff --check` passed. No terminal was started and no quote published in this audit. MetaTrader5 `initialize()` may launch the selected executable when stopped; the runbook documents this. U01 remains blocked pending live Demo freshness and identity/API acceptance.
+
+### 2026-11-26 read-only runtime recheck
+
+- PC: no MT5 terminal process; local ports 8000/18000/18080/18081/18082 are closed. No publisher-setting names were present in the current process environment; the checkout `.env` was not read.
+- VM100 isolated publisher staging at `127.0.0.1:18082`: health `status=ok`, `feed_mode=simulate`; listener remains loopback-only and OpenAPI still lists `POST /api/market/publish/mt5`. No POST or other VM service was touched.
+- PR #81 head `fec9a0f` has its `ruff + dashboard bundle + tests` GitHub check successful and remains Draft/mergeable. Fresh Demo identity, quote delivery, stale/reconnect and broker acceptance are still NOT TESTED; U01 remains PARTIAL/BLOCKED.
+
 ## Anti-duplication ledger
 - Do NOT let TradingView/Lens/LLM/webhook create executable signals, alter MT5 canonical prices/specs, approve risk, toggle Auto, or call execution. Use U14?U18 as the only TradingView queue; do not add a parallel plan/backlog.
 - Do NOT create a second RiskEngine or PositionManager. Existing: `services/risk_engine/engine.py`, `manager.py`.

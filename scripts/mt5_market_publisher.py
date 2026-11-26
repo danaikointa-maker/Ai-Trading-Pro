@@ -17,7 +17,6 @@ from urllib.parse import urlsplit
 
 import httpx
 
-
 TIMEFRAMES = {
     "M1": "TIMEFRAME_M1", "M3": "TIMEFRAME_M3", "M5": "TIMEFRAME_M5",
     "M15": "TIMEFRAME_M15", "M30": "TIMEFRAME_M30", "H1": "TIMEFRAME_H1",
@@ -167,6 +166,24 @@ def _quote_freshness(info: Any, tick: Any, now: float,
     return tick_time, None
 
 
+def _resolve_terminal_path(configured_path: str, *, project_root: Path | None = None) -> Path:
+    """Select an explicit MT5 executable; never let the library guess a terminal."""
+    root = project_root or Path(__file__).resolve().parents[1]
+    candidate = Path(configured_path).expanduser() if configured_path.strip() else (
+        root / "bridge" / "MetaTrader 5" / "terminal64.exe"
+    )
+    try:
+        resolved = candidate.resolve(strict=True)
+    except (OSError, RuntimeError):
+        resolved = None
+    if resolved is None or not resolved.is_file():
+        raise RuntimeError(
+            "isolated MT5 terminal executable not found; set NO7_MT5_TERMINAL_PATH "
+            "to the intended terminal64.exe or install it under bridge/MetaTrader 5"
+        )
+    return resolved
+
+
 def run() -> int:
     settings = publisher_settings()
     endpoint = _validate_endpoint(settings["NO7_MT5_MARKET_API_URL"])
@@ -184,10 +201,12 @@ def run() -> int:
     max_tick_age = float(os.environ.get("NO7_MT5_MARKET_MAX_TICK_AGE_SECONDS", "10"))
     if not 1 <= max_tick_age <= 15:
         raise RuntimeError("NO7_MT5_MARKET_MAX_TICK_AGE_SECONDS must be between 1 and 15")
-    terminal_path = os.environ.get("NO7_MT5_TERMINAL_PATH", "").strip()
+    terminal_path = _resolve_terminal_path(
+        os.environ.get("NO7_MT5_TERMINAL_PATH", "")
+    )
     import MetaTrader5 as mt5  # optional Windows-only dependency
 
-    initialized = mt5.initialize(path=terminal_path) if terminal_path else mt5.initialize()
+    initialized = mt5.initialize(path=str(terminal_path))
     if not initialized:
         raise RuntimeError(f"MT5 initialize failed: {mt5.last_error()}")
     try:

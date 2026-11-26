@@ -9,9 +9,18 @@ import pytest
 
 import scripts.mt5_market_publisher as publisher
 from scripts.mt5_market_publisher import (
-    PUBLISHER_ENV_SETTINGS, REQUIRED_SETTINGS, TIMEFRAMES, _expected_login,
-    _quote_freshness, _rates, _required_settings, _symbol_map,
-    _validate_endpoint, load_publisher_environment, publisher_settings,
+    PUBLISHER_ENV_SETTINGS,
+    REQUIRED_SETTINGS,
+    TIMEFRAMES,
+    _expected_login,
+    _quote_freshness,
+    _rates,
+    _required_settings,
+    _resolve_terminal_path,
+    _symbol_map,
+    _validate_endpoint,
+    load_publisher_environment,
+    publisher_settings,
 )
 
 
@@ -25,6 +34,33 @@ def test_symbol_map_supports_canonical_broker_suffix_mapping():
 def test_symbol_map_rejects_empty_or_duplicate_entries(raw):
     with pytest.raises(RuntimeError):
         _symbol_map(raw)
+
+
+def test_terminal_path_defaults_to_isolated_bridge_executable(tmp_path):
+    executable = tmp_path / "bridge" / "MetaTrader 5" / "terminal64.exe"
+    executable.parent.mkdir(parents=True)
+    executable.touch()
+
+    assert _resolve_terminal_path("", project_root=tmp_path) == executable.resolve()
+
+
+def test_terminal_path_prefers_explicit_executable(tmp_path):
+    bridge = tmp_path / "bridge" / "MetaTrader 5" / "terminal64.exe"
+    explicit = tmp_path / "custom" / "terminal64.exe"
+    bridge.parent.mkdir(parents=True)
+    explicit.parent.mkdir(parents=True)
+    bridge.touch()
+    explicit.touch()
+
+    assert _resolve_terminal_path(str(explicit), project_root=tmp_path) == explicit.resolve()
+
+
+def test_terminal_path_fails_closed_when_no_executable_exists(tmp_path):
+    with pytest.raises(RuntimeError, match="isolated MT5 terminal executable not found"):
+        _resolve_terminal_path("", project_root=tmp_path)
+
+    with pytest.raises(RuntimeError, match="isolated MT5 terminal executable not found"):
+        _resolve_terminal_path(str(tmp_path / "missing.exe"), project_root=tmp_path)
 
 
 def test_publisher_reports_all_missing_required_settings_without_values(monkeypatch):
@@ -156,14 +192,15 @@ def test_quote_freshness_explains_withheld_quotes(info, tick, now, max_age, reas
 
 @pytest.mark.parametrize(("tick_age_seconds", "expect_publish"), [(0, True), (60, False)])
 def test_readonly_publisher_only_emits_fresh_utc_demo_quotes(
-        monkeypatch, capsys, tick_age_seconds, expect_publish):
+        monkeypatch, capsys, tmp_path, tick_age_seconds, expect_publish):
     now = time.time()
     calls = []
+    initialize_paths = []
     mt5 = ModuleType("MetaTrader5")
     mt5.ACCOUNT_TRADE_MODE_DEMO = 0
     for index, name in enumerate(TIMEFRAMES):
         setattr(mt5, f"TIMEFRAME_{name}", index + 1)
-    mt5.initialize = lambda **_kwargs: True
+    mt5.initialize = lambda **kwargs: initialize_paths.append(kwargs["path"]) or True
     mt5.last_error = lambda: (0, "ok")
     mt5.account_info = lambda: SimpleNamespace(login=123456, server="Connext-Demo",
                                                 trade_mode=0, currency="USD")
@@ -191,6 +228,9 @@ def test_readonly_publisher_only_emits_fresh_utc_demo_quotes(
     monkeypatch.setenv("NO7_MT5_MARKET_BARS", "20")
     monkeypatch.setenv("NO7_MT5_MARKET_POLL_SECONDS", "0.25")
     monkeypatch.setenv("NO7_MT5_MARKET_RATES_SECONDS", "5")
+    terminal_executable = tmp_path / "publisher-test-terminal64.exe"
+    terminal_executable.touch()
+    monkeypatch.setenv("NO7_MT5_TERMINAL_PATH", str(terminal_executable))
 
     class Response:
         status_code = 200
@@ -218,6 +258,7 @@ def test_readonly_publisher_only_emits_fresh_utc_demo_quotes(
     with pytest.raises(KeyboardInterrupt):
         publisher.run()
 
+    assert initialize_paths == [str(terminal_executable)]
     if not expect_publish:
         assert calls == ["shutdown"]
         output = capsys.readouterr().out
