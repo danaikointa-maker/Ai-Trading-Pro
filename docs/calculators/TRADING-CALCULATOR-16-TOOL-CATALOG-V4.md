@@ -1,6 +1,6 @@
 # Trading Calculator & Learning Center — 16-tool catalog (V4)
 
-Status: **partial implementation**. Tools 1–16 now have local read-only/sandbox UI and shared backend math or existing service reads. Tool 8's live MT5 calculation has fake-terminal coverage only; no real connected-account comparison is verified. Tool 9 is a preview and does not read or persist the confirmation candidate. JSON/CSV export, manual scenario persistence and five beginner lessons/quizzes are implemented; PDF export and authenticated responsive visual acceptance remain unverified. No calculator may call an order, modify, or close endpoint.
+Status: **partial implementation**. Tools 1–16 now have local read-only/sandbox UI and shared backend math or existing service reads. Tool 8's live MT5 calculation has fake-terminal coverage only; no real connected-account comparison is verified. Tool 9 is a preview and does not read or persist the confirmation candidate. JSON/CSV export, browser print-to-PDF, manual scenario persistence and five beginner lessons/quizzes are implemented. The PDF button opens a UTF-8, escaped print view; the user chooses “Save as PDF” in the browser. Actual browser print/save and authenticated responsive visual acceptance remain unverified. No calculator may call an order, modify, or close endpoint.
 
 ## Shared rules
 

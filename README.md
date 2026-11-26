@@ -363,7 +363,7 @@ storage/                   db / datasets / models / backtests / logs (git-ignore
 | Forecast | 3 scenarios, P10–P90, P(TP ก่อน SL), ตาราง metric OOS |
 | Zones | บันไดแนวรับ/แนวต้านพร้อมหลักฐานอิสระและน้ำหนัก |
 | Trades | สถิติจริงหลังหักต้นทุน, equity curve, สาเหตุการปิดไม้ |
-| Risk | ตั้งเพดาน, kill switch, points calculator, ladder preview |
+| Risk | ตั้งเพดาน, kill switch, points calculator, ladder preview และส่งออกรายงาน JSON/CSV/PDF |
 | Backtest | ทดสอบย้อนหลังพร้อม spread/commission/slippage + walk-forward |
 | Journal | บันทึกทุกไม้อัตโนมัติ + บทเรียน + ถาม Explainer |
 | Brokers | สลับโบรกเกอร์, spec จริงต่อบัญชี, health/reconcile |
