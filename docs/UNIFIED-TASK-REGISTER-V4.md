@@ -185,6 +185,12 @@ Status definitions: EXISTS_CODE = seen in repository but not live certified; NEE
 - **U01:** PC SSH forwarding to isolated VM100 staging is verified: `127.0.0.1:18182 -> 192.168.1.10 / 127.0.0.1:18082`; health is `ok` in `simulate` mode, and OpenAPI lists the publisher route. No MT5 terminal, publisher token, identity-matched Demo quote, or trade command was present. U01 remains blocked on fresh Demo feed/identity evidence.
 - **U15:** `agent.youridea168.com` still responds `502` from Cloudflare with TLS verified; `cloudflared.service` is active, but VM100 has no listener on configured origin `:8080`. Do not repoint to Trading Pro ports; Access and dedicated Office API acceptance remain unverified.
 
+## Latest recheck evidence — 2026-11-26
+
+- U11–U18 statuses and exact local/host recheck evidence: `docs/audits/U11-U18-RECHECK-2026-11-26.th.md`. TradingView shadow/contract/ingest/persistence plus Paper reconnect regression: **40 passed**, one existing Starlette/httpx deprecation warning. This is offline evidence only; Demo acceptance, authenticated visual acceptance, historical corpus and release gates remain blocked/not tested as recorded.
+- Read-only host check: Windows has no MT5 terminal process; `cloudflared` is active on VM100; public `agent.youridea168.com` responds HTTP **502** with TLS verification success; no listener exists on origin `:8080`. Existing Trading Pro app listeners remain loopback-only. No route, service, secret, account, Auto/Live or broker state changed.
+- U08 status correction: PR #71 merged as `fd17eee60eef97f8b2056131b8d6893583a5f854`. PDF print-to-save work is in separate Draft PR #82, whose hosted Gate #249 passed; browser print/save and authenticated visual acceptance remain NOT TESTED. U08 remains PARTIAL.
+
 ## Anti-duplication ledger
 - Do NOT let TradingView/Lens/LLM/webhook create executable signals, alter MT5 canonical prices/specs, approve risk, toggle Auto, or call execution. Use U14?U18 as the only TradingView queue; do not add a parallel plan/backlog.
 - Do NOT create a second RiskEngine or PositionManager. Existing: `services/risk_engine/engine.py`, `manager.py`.
