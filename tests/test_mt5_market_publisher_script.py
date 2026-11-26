@@ -3,16 +3,24 @@ from __future__ import annotations
 import os
 import sys
 import time
-from pathlib import Path
 from types import ModuleType, SimpleNamespace
 
 import pytest
 
 import scripts.mt5_market_publisher as publisher
 from scripts.mt5_market_publisher import (
-    PUBLISHER_ENV_SETTINGS, REQUIRED_SETTINGS, TIMEFRAMES, _expected_login,
-    _quote_freshness, _rates, _required_settings, _resolve_terminal_path, _symbol_map,
-    _validate_endpoint, load_publisher_environment, publisher_settings,
+    PUBLISHER_ENV_SETTINGS,
+    REQUIRED_SETTINGS,
+    TIMEFRAMES,
+    _expected_login,
+    _quote_freshness,
+    _rates,
+    _required_settings,
+    _resolve_terminal_path,
+    _symbol_map,
+    _validate_endpoint,
+    load_publisher_environment,
+    publisher_settings,
 )
 
 
