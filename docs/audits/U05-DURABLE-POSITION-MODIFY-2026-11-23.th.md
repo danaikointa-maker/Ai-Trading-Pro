@@ -49,3 +49,12 @@ U05 remains **PARTIAL / BLOCKED**. The implementation, 234 focused regressions, 
 
 1. An isolated VM100 staging parity/restart/concurrency/reconciliation check, with a verified backup and rollback path, without touching port 8000.
 2. An authorized Connext-Demo position-modify response plus broker readback/reconciliation receipt. This depends on U01 providing a fresh, verified Demo quote and requires explicit Demo acceptance; Live remains disabled.
+
+## 2026-11-26 VM100 staging recheck (read-only)
+
+- SSH inspection reconfirmed staging checkout `/home/danai/no7-ai-trading-pro-v4-staging` at `feature/u02-100pt-confirmation` / `06642a0`. Its working tree still has modifications to `docs/API.md`, `docs/RUNBOOK.md`, `scripts/check_mt5_market_runtime.py`, and `tests/test_mt5_runtime_preflight.py`, plus untracked `.env.save`. Only status names were read; `.env.save` and environment files were not opened or changed.
+- Read-only SQLite `mode=ro` inspection of `storage/db/no7-v4-staging.sqlite3`: `PRAGMA quick_check=ok`, `position_modify_intents` has **0 rows**. `request_payload` exists, but `position_lifetime_fingerprint` is absent. The unresolved-intent partial unique index still covers `(broker_id, account_fingerprint, ticket)`; the V4 candidate expects the additional `position_lifetime_fingerprint`. No ticket, account fingerprint, payload, or row values were read.
+- VM100 `127.0.0.1:18082` health returned `status=ok`, `feed_mode=simulate`; OpenAPI lists `POST /api/market/publish/mt5`. `ss` shows the listener bound to `127.0.0.1`; its Python process was in a user-session cgroup, so systemd ownership is not established. No POST, DB migration, service restart, or process change was attempted.
+- The development PC had no MT5 terminal process and its application ports were closed. This does not provide a fresh Demo quote or broker receipt.
+
+This recheck confirms a schema/index parity gap; it does not prove the database can be safely migrated or that broker positions match the empty intent ledger. U05 remains **PARTIAL / BLOCKED** pending a verified backup/rollback path, reviewed staging migration/restart/reconciliation, and separately authorized Connext-Demo modify/readback after U01 freshness acceptance.
