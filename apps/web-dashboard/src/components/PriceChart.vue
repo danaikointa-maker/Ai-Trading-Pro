@@ -61,7 +61,17 @@ import { computed, onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue'
 import { createChart } from 'lightweight-charts'
 import { api } from '../lib/api'
 import { positions, state } from '../lib/store'
-import { clampBarSpacing, latestLogicalRange, matchesChartSymbol, nextBarCount, nextBarSpacing, shortMarkerSpan, validPriceRange, validTimeRange } from '../lib/chartViewport'
+import {
+  clampBarSpacing,
+  latestLogicalRange,
+  matchesChartSymbol,
+  nextBarCount,
+  nextBarSpacing,
+  shouldResetPriceScaleForView,
+  shortMarkerSpan,
+  validPriceRange,
+  validTimeRange,
+} from '../lib/chartViewport'
 
 const container = ref(null)
 const segmentCanvas = ref(null)
@@ -141,7 +151,8 @@ function goLatest() {
   const range = latestRange()
   if (!chart || !range) return
   autoScroll.value = true
-  chart.priceScale('right').applyOptions({ autoScale: true })
+  // Follow only the time axis. Re-enabling price autoscale on each new candle
+  // resets a manually chosen vertical zoom and makes candles shrink/grow.
   chart.timeScale().setVisibleLogicalRange(range)
   saveViewPrefs()
 }
@@ -325,6 +336,7 @@ async function load() {
     )
     const raw = Array.isArray(data.candles) ? data.candles : []
     const nextViewKey = `${data.feed || 'feed'}:${data.symbol || state.symbol}:${state.timeframe}`
+    const resetPriceScale = shouldResetPriceScaleForView(previousViewKey, nextViewKey)
     displayBasis.value = data.time?.display_basis || 'utc'
     displayOffsetSeconds.value = displayBasis.value === 'broker_server'
       ? Number(data.time?.server_utc_offset_seconds || 0) : 0
@@ -363,6 +375,7 @@ async function load() {
     try {
       storedRange = JSON.parse(localStorage.getItem(`${VIEW_PREFS_KEY}:${nextViewKey}`) || 'null')
     } catch { /* ignore invalid saved viewport */ }
+    if (resetPriceScale) chart.priceScale('right').applyOptions({ autoScale: true })
     if (autoScroll.value) {
       goLatest()
     } else if (previousViewKey === nextViewKey && validTimeRange(previousRange, firstTime, lastTime)) {
